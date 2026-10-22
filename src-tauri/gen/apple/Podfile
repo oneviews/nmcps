@@ -1,13 +1,13 @@
 # Uncomment the next line to define a global platform for your project
 
-target 'nuxtor_iOS' do
+target 'nmcps_iOS' do
 platform :ios, '15.0'
-  # Pods for nuxtor_iOS
+  # Pods for nmcps_iOS
 end
 
-target 'nuxtor_macOS' do
+target 'nmcps_macOS' do
 platform :osx, '11.0'
-  # Pods for nuxtor_macOS
+  # Pods for nmcps_macOS
 end
 
 # Delete the deployment target for iOS and macOS, causing it to be inherited from the Podfile

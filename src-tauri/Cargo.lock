@@ -2219,7 +2219,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuxtor"
+name = "nmcps"
 version = "1.7.0"
 dependencies = [
  "tauri",

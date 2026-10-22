@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "D8387EB83066CD38452993DE"
-               BuildableName = "nuxtor_iOS.app"
-               BlueprintName = "nuxtor_iOS"
-               ReferencedContainer = "container:nuxtor.xcodeproj">
+               BuildableName = "nmcps_iOS.app"
+               BlueprintName = "nmcps_iOS"
+               ReferencedContainer = "container:nmcps.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "D8387EB83066CD38452993DE"
-            BuildableName = "nuxtor_iOS.app"
-            BlueprintName = "nuxtor_iOS"
-            ReferencedContainer = "container:nuxtor.xcodeproj">
+            BuildableName = "nmcps_iOS.app"
+            BlueprintName = "nmcps_iOS"
+            ReferencedContainer = "container:nmcps.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -70,9 +70,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "D8387EB83066CD38452993DE"
-            BuildableName = "nuxtor_iOS.app"
-            BlueprintName = "nuxtor_iOS"
-            ReferencedContainer = "container:nuxtor.xcodeproj">
+            BuildableName = "nmcps_iOS.app"
+            BlueprintName = "nmcps_iOS"
+            ReferencedContainer = "container:nmcps.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -101,9 +101,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "D8387EB83066CD38452993DE"
-            BuildableName = "nuxtor_iOS.app"
-            BlueprintName = "nuxtor_iOS"
-            ReferencedContainer = "container:nuxtor.xcodeproj">
+            BuildableName = "nmcps_iOS.app"
+            BlueprintName = "nmcps_iOS"
+            ReferencedContainer = "container:nmcps.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>

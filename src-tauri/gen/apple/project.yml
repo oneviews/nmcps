@@ -1,6 +1,6 @@
-name: nuxtor
+name: nmcps
 options:
-  bundleIdPrefix: com.nicolaspadari.nuxtor
+  bundleIdPrefix: com.nicolaspadari.nmcps
   deploymentTarget:
     iOS: 15.0
 fileGroups: [../../src]
@@ -10,8 +10,8 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: Nuxtor
-      PRODUCT_BUNDLE_IDENTIFIER: com.nicolaspadari.nuxtor
+      PRODUCT_NAME: nmcps
+      PRODUCT_BUNDLE_IDENTIFIER: com.nicolaspadari.nmcps
 targetTemplates:
   app:
     type: application
@@ -24,7 +24,7 @@ targetTemplates:
     settings:
       groups: [app]
 targets:
-  nuxtor_iOS:
+  nmcps_iOS:
     type: application
     platform: iOS
     sources:
@@ -36,13 +36,13 @@ targets:
       # via LIBRARY_SEARCH_PATHS, never bundled as resources.
       - path: Externals
         excludes: ["**/*.a"]
-      - path: nuxtor_iOS
+      - path: nmcps_iOS
       - path: assets
         buildPhase: resources
         type: folder
       - path: LaunchScreen.storyboard
     info:
-      path: nuxtor_iOS/Info.plist
+      path: nmcps_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
@@ -59,7 +59,7 @@ targets:
         CFBundleShortVersionString: 1.7.0
         CFBundleVersion: "1.7.0"
     entitlements:
-      path: nuxtor_iOS/nuxtor_iOS.entitlements
+      path: nmcps_iOS/nmcps_iOS.entitlements
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full

@@ -27,12 +27,12 @@
 		20C4090987365470A3C1626A /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		57E0B530C4933FE42B7A8E2C /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		656C2665FC5F04A755AE6BB0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		7D19A3D084922CB7F1FC43C7 /* nuxtor_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = nuxtor_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D19A3D084922CB7F1FC43C7 /* nmcps_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = nmcps_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7D27CFB2DAB35F0FA43CBF4C /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		8E6BCE1357C084312B80A8A6 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		930F45E901BD48A4B4D7C25F /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		AD1482288C9FAF5771C99D8B /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
-		B3E2811559F99C854A2BAD1F /* nuxtor_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nuxtor_iOS.entitlements; sourceTree = "<group>"; };
+		B3E2811559F99C854A2BAD1F /* nmcps_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nmcps_iOS.entitlements; sourceTree = "<group>"; };
 		C7CC9F6B68ED79302FC49105 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		CC24C31EDC3DA4BBB60B4550 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		DAB9AADE728FB57BF8862835 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
@@ -64,7 +64,7 @@
 		24EB5FE4C9665CC727D78880 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				F94D9E3DE510B24EBF4C33D4 /* nuxtor */,
+				F94D9E3DE510B24EBF4C33D4 /* nmcps */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -98,7 +98,7 @@
 				EA6668A2D449EE7FA68AEB8E /* Assets.xcassets */,
 				F0A93B96EDA3F841C3C295E1 /* LaunchScreen.storyboard */,
 				4653DC4181D042F7E7772D84 /* Externals */,
-				8D31C5187C9939AEF03F74F1 /* nuxtor_iOS */,
+				8D31C5187C9939AEF03F74F1 /* nmcps_iOS */,
 				24EB5FE4C9665CC727D78880 /* Sources */,
 				F0835E13E11CD15F15084D45 /* src */,
 				563801E16686B81FC425B4F9 /* Frameworks */,
@@ -106,13 +106,13 @@
 			);
 			sourceTree = "<group>";
 		};
-		8D31C5187C9939AEF03F74F1 /* nuxtor_iOS */ = {
+		8D31C5187C9939AEF03F74F1 /* nmcps_iOS */ = {
 			isa = PBXGroup;
 			children = (
 				656C2665FC5F04A755AE6BB0 /* Info.plist */,
-				B3E2811559F99C854A2BAD1F /* nuxtor_iOS.entitlements */,
+				B3E2811559F99C854A2BAD1F /* nmcps_iOS.entitlements */,
 			);
-			path = nuxtor_iOS;
+			path = nmcps_iOS;
 			sourceTree = "<group>";
 		};
 		9ECDE95D0E567BB6ACB60B69 /* bindings */ = {
@@ -136,26 +136,26 @@
 		F441EF35FC28CF12E333F056 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				7D19A3D084922CB7F1FC43C7 /* nuxtor_iOS.app */,
+				7D19A3D084922CB7F1FC43C7 /* nmcps_iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		F94D9E3DE510B24EBF4C33D4 /* nuxtor */ = {
+		F94D9E3DE510B24EBF4C33D4 /* nmcps */ = {
 			isa = PBXGroup;
 			children = (
 				AD1482288C9FAF5771C99D8B /* main.mm */,
 				9ECDE95D0E567BB6ACB60B69 /* bindings */,
 			);
-			path = nuxtor;
+			path = nmcps;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		D8387EB83066CD38452993DE /* nuxtor_iOS */ = {
+		D8387EB83066CD38452993DE /* nmcps_iOS */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 18CC5F46D7C42F18C836A129 /* Build configuration list for PBXNativeTarget "nuxtor_iOS" */;
+			buildConfigurationList = 18CC5F46D7C42F18C836A129 /* Build configuration list for PBXNativeTarget "nmcps_iOS" */;
 			buildPhases = (
 				5557E1CF53A52EA24D0B7E95 /* Build Rust Code */,
 				A816C26A23D7AFF9E8884BBB /* Sources */,
@@ -166,11 +166,11 @@
 			);
 			dependencies = (
 			);
-			name = nuxtor_iOS;
+			name = nmcps_iOS;
 			packageProductDependencies = (
 			);
-			productName = nuxtor_iOS;
-			productReference = 7D19A3D084922CB7F1FC43C7 /* nuxtor_iOS.app */;
+			productName = nmcps_iOS;
+			productReference = 7D19A3D084922CB7F1FC43C7 /* nmcps_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -182,7 +182,7 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 			};
-			buildConfigurationList = 8DC27239E6537A904961DF01 /* Build configuration list for PBXProject "nuxtor" */;
+			buildConfigurationList = 8DC27239E6537A904961DF01 /* Build configuration list for PBXProject "nmcps" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -196,7 +196,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				D8387EB83066CD38452993DE /* nuxtor_iOS */,
+				D8387EB83066CD38452993DE /* nmcps_iOS */,
 			);
 		};
 /* End PBXProject section */
@@ -314,7 +314,7 @@
 					arm64,
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = nuxtor_iOS/nuxtor_iOS.entitlements;
+				CODE_SIGN_ENTITLEMENTS = nmcps_iOS/nmcps_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
@@ -322,15 +322,15 @@
 					"$(inherited)",
 					"\".\"",
 				);
-				INFOPLIST_FILE = nuxtor_iOS/Info.plist;
+				INFOPLIST_FILE = nmcps_iOS/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.nicolaspadari.nuxtor;
-				PRODUCT_NAME = "Nuxtor";
+				PRODUCT_BUNDLE_IDENTIFIER = com.nicolaspadari.nmcps;
+				PRODUCT_NAME = "nmcps";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -408,7 +408,7 @@
 					arm64,
 				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = nuxtor_iOS/nuxtor_iOS.entitlements;
+				CODE_SIGN_ENTITLEMENTS = nmcps_iOS/nmcps_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
@@ -416,15 +416,15 @@
 					"$(inherited)",
 					"\".\"",
 				);
-				INFOPLIST_FILE = nuxtor_iOS/Info.plist;
+				INFOPLIST_FILE = nmcps_iOS/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.nicolaspadari.nuxtor;
-				PRODUCT_NAME = "Nuxtor";
+				PRODUCT_BUNDLE_IDENTIFIER = com.nicolaspadari.nmcps;
+				PRODUCT_NAME = "nmcps";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -434,7 +434,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		18CC5F46D7C42F18C836A129 /* Build configuration list for PBXNativeTarget "nuxtor_iOS" */ = {
+		18CC5F46D7C42F18C836A129 /* Build configuration list for PBXNativeTarget "nmcps_iOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				7304C87908E416CE0439AFFB /* debug */,
@@ -443,7 +443,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = debug;
 		};
-		8DC27239E6537A904961DF01 /* Build configuration list for PBXProject "nuxtor" */ = {
+		8DC27239E6537A904961DF01 /* Build configuration list for PBXProject "nmcps" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				CC4F5E6925BA103BC60A0D8A /* debug */,
