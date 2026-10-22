@@ -27,7 +27,7 @@
 
 	const openWindow = async (id: string, page: string) => {
 		const webview = new useTauriWebviewWindowWebviewWindow(id, {
-			title: "Nuxtor webview",
+			title: "nmcps webview",
 			url: page,
 			width: 1280,
 			height: 720

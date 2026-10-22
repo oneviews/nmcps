@@ -1,8 +1,8 @@
 <p align="center">
-  <img width="150" src="./public/logo.png" alt="NUXTOR Logo">
+  <img width="150" src="./public/logo.png" alt="NMCPS Logo">
 </p>
 
-<h1 align="center">NUXTOR</h1>
+<h1 align="center">NMCPS</h1>
 
 <p align="center">
   <a href="https://github.com/NicolaSpadari/vitauri">ViTauri</a> 的精神续作，
@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/package-json/v/NicolaSpadari/nuxtor" />
-  <img src="https://img.shields.io/github/license/NicolaSpadari/nuxtor" />
+  <img src="https://img.shields.io/github/package-json/v/NicolaSpadari/nmcps" />
+  <img src="https://img.shields.io/github/license/NicolaSpadari/nmcps" />
 </p>
 
 <p align="center">
@@ -22,13 +22,13 @@
 </p>
 
 <p align="center">
-  <img src="./public/screenshot.png" alt="NUXTOR 截图">
+  <img src="./public/screenshot.png" alt="NMCPS 截图">
 </p>
 
 <p align="center"><strong>由 Nuxt 4 强力驱动</strong></p>
 
 📸 实时预览：  
-https://github.com/NicolaSpadari/nuxtor/blob/main/preview.md
+https://github.com/NicolaSpadari/nmcps/blob/main/preview.md
 
 技术栈
 
@@ -78,9 +78,9 @@ https://github.com/NicolaSpadari/nuxtor/blob/main/preview.md
 
 ```sh
 # 初始化新项目
-npx degit NicolaSpadari/nuxtor my-nuxtor-app
+npx degit NicolaSpadari/nmcps my-nmcps-app
 
-cd my-nuxtor-app
+cd my-nmcps-app
 
 # 安装依赖
 pnpm install

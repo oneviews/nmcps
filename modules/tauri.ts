@@ -39,6 +39,7 @@ export default defineNuxtModule<ModuleOptions>({
 		nuxt.options.vite.optimizeDeps ||= {};
 		nuxt.options.vite.optimizeDeps.include ||= [];
 		nuxt.options.vite.optimizeDeps.include.push(...tauriModules.map(({ importPath }) => importPath));
+		nuxt.options.vite.optimizeDeps.include.push("@tauri-apps/api/core");
 
 		tauriModules.forEach(({ module, prefix, importPath }) => {
 			Object.keys(module).filter((name) => name !== "default").forEach((name) => {

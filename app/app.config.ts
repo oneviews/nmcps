@@ -1,8 +1,8 @@
 export default defineAppConfig({
 	app: {
-		name: "Nuxtor",
+		name: "nmcps",
 		author: "Nicola Spadari",
-		repo: "https://github.com/NicolaSpadari/nuxtor",
+		repo: "https://github.com/NicolaSpadari/nmcps",
 		tauriSite: "https://tauri.app",
 		nuxtSite: "https://nuxt.com",
 		nuxtUiSite: "https://ui4.nuxt.dev"
@@ -23,6 +23,32 @@ export default defineAppConfig({
 		other: {
 			label: "Other",
 			icon: "lucide:folder"
+		}
+	},
+	downloads: {
+		version: "1.7.0",
+		basePath: "/downloads",
+		assets: {
+			windows: {
+				label: "Windows",
+				icon: "lucide:monitor",
+				file: "nmcps_1.7.0_x64-setup.exe"
+			},
+			macos: {
+				label: "macOS",
+				icon: "lucide:apple",
+				file: "nmcps_1.7.0_universal.dmg"
+			},
+			linux: {
+				label: "Linux",
+				icon: "lucide:terminal",
+				file: "nmcps_1.7.0_amd64.deb"
+			},
+			android: {
+				label: "Android",
+				icon: "lucide:smartphone",
+				file: "nmcps_1.7.0.apk"
+			}
 		}
 	},
 	ui: {

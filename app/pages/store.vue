@@ -24,6 +24,8 @@
 </template>
 
 <script lang="ts" setup>
+	import { isTauri } from "@tauri-apps/api/core";
+
 	definePageMeta({
 		name: "Store",
 		icon: "lucide:database",
@@ -47,12 +49,19 @@
 	});
 
 	const toast = useToast();
-	const store = await useTauriStoreLoad("store.bin", {
-		defaults: {},
-		autoSave: false
-	});
+	const store = isTauri()
+		? await useTauriStoreLoad("store.bin", {
+			defaults: {},
+			autoSave: false
+		})
+		: null;
 
 	const getStoreValue = async () => {
+		if (!store) {
+			outputState.value.content = "Unavailable in browser";
+			return;
+		}
+
 		try {
 			outputState.value.content = await store.get<string>("myData") || "";
 		} catch (error) {
@@ -68,6 +77,15 @@
 	await getStoreValue();
 
 	const setStoreValue = async () => {
+		if (!store) {
+			toast.add({
+				title: "Error",
+				description: "Store is unavailable in browser",
+				color: "error"
+			});
+			return;
+		}
+
 		try {
 			await store.set("myData", inputState.value!.value);
 			await getStoreValue();

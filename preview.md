@@ -1,6 +1,6 @@
 # Preview
 
-Since Nuxtor is a compiled application, there is no way of showing the look and feel of the released project.
+Since nmcps is a compiled application, there is no way of showing the look and feel of the released project.
 
 What follows are each page and its functionalities:
 

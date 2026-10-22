@@ -1,8 +1,8 @@
 <p align="center">
-  <img width="150" src="./public/logo.png" alt="NUXTOR Logo">
+  <img width="150" src="./public/logo.png" alt="NMCPS Logo">
 </p>
 
-<h1 align="center">NUXTOR</h1>
+<h1 align="center">NMCPS</h1>
 
 <p align="center">
   A spiritual successor of <a href="https://github.com/NicolaSpadari/vitauri">ViTauri</a>,
@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/package-json/v/NicolaSpadari/nuxtor" />
-  <img src="https://img.shields.io/github/license/NicolaSpadari/nuxtor" />
+  <img src="https://img.shields.io/github/package-json/v/NicolaSpadari/nmcps" />
+  <img src="https://img.shields.io/github/license/NicolaSpadari/nmcps" />
 </p>
 
 <p align="center">
@@ -22,13 +22,13 @@
 </p>
 
 <p align="center">
-  <img src="./public/screenshot.png" alt="NUXTOR Screenshot">
+  <img src="./public/screenshot.png" alt="NMCPS Screenshot">
 </p>
 
 <p align="center"><strong>Powered by Nuxt 4</strong></p>
 
 📸 **Live Previews**:  
-[iOS · Android · Commands · File System · Notifications · OS Info · Storage · Webview](https://github.com/NicolaSpadari/nuxtor/blob/main/preview.md)
+[iOS · Android · Commands · File System · Notifications · OS Info · Storage · Webview](https://github.com/NicolaSpadari/nmcps/blob/main/preview.md)
 
 ---
 
@@ -74,9 +74,9 @@
 
 ```sh
 # Scaffold a new project
-npx degit NicolaSpadari/nuxtor my-nuxtor-app
+npx degit NicolaSpadari/nmcps my-nmcps-app
 
-cd my-nuxtor-app
+cd my-nmcps-app
 
 # Install dependencies
 pnpm install

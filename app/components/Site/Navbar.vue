@@ -21,7 +21,7 @@
 			/>
 		</template>
 		<template #right>
-			<UBadge variant="subtle">
+			<UBadge v-if="tauriVersion" variant="subtle">
 				Tauri v{{ tauriVersion }}
 			</UBadge>
 			<SiteColorModeButton />
@@ -30,6 +30,8 @@
 </template>
 
 <script lang="ts" setup>
+	import { isTauri } from "@tauri-apps/api/core";
+
 	const { pages } = usePages();
-	const tauriVersion = await useTauriAppGetTauriVersion();
+	const tauriVersion = isTauri() ? await useTauriAppGetTauriVersion() : null;
 </script>

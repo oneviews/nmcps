@@ -9,7 +9,7 @@ export default defineNuxtConfig({
 	ignore: ["**/src-tauri/**"],
 	app: {
 		head: {
-			title: "Nuxtor",
+			title: "nmcps",
 			charset: "utf-8",
 			viewport: "width=device-width, initial-scale=1",
 			meta: [
