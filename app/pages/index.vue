@@ -64,16 +64,19 @@
 							当前系统暂未提供安装包，请在下方选择其他平台
 						</p>
 
-						<UButton
-							v-if="currentAsset"
-							:href="currentAsset.url"
-							external
-							size="xl"
-							block
-							:icon="currentAsset.icon"
-						>
-							下载 {{ currentAsset.label }} 版
-						</UButton>
+						<template v-if="currentAsset">
+							<UButton
+								v-for="file in currentAsset.files"
+								:key="file.file"
+								:href="file.url"
+								external
+								:size="currentAsset.files.length > 1 ? 'lg' : 'xl'"
+								block
+								:icon="currentAsset.icon"
+							>
+								下载 {{ currentAsset.label }} 版（{{ file.label }}）
+							</UButton>
+						</template>
 
 						<p class="text-sm text-(--ui-text-muted)">
 							版本 {{ downloads.version }}
@@ -129,10 +132,12 @@
 	const { os } = useOS();
 
 	const getAsset = (name: string) => {
-		const asset = (downloads.assets as Record<string, { label: string, icon: string, file: string } | undefined>)[name];
-		return asset
-			? { ...asset, url: `${downloads.basePath}/${asset.file}` }
-			: null;
+		const asset = (downloads.assets as Record<string, { label: string, icon: string, files: { label: string, file: string }[] } | undefined>)[name];
+		if (!asset) return null;
+		return {
+			...asset,
+			files: asset.files.map((file) => ({ ...file, url: `${downloads.basePath}/${file.file}` }))
+		};
 	};
 
 	const currentAsset = computed(() => getAsset(os));
@@ -140,7 +145,11 @@
 	const otherAssets = computed(() => {
 		return Object.entries(downloads.assets)
 			.filter(([key]) => key !== os)
-			.map(([, asset]) => ({ ...asset, url: `${downloads.basePath}/${asset.file}` }));
+			.map(([, asset]) => ({
+				label: asset.label,
+				icon: asset.icon,
+				url: `${downloads.basePath}/${asset.files[0]?.file ?? ""}`
+			}));
 	});
 
 	definePageMeta({

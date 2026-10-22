@@ -109,6 +109,22 @@ pnpm tauri:build:debug
 
 启用后可在打包后的应用中访问控制台。
 
+macOS 分发
+
+在配置 Apple Developer 证书之前，macOS 构建产物是未签名的。测试者首次打开应用时会看到 Gatekeeper 警告。
+
+### 安装未签名构建（测试者）
+
+将应用复制到 /Applications 后，在终端运行一次以下命令移除隔离标记：
+
+```sh
+xattr -c /Applications/nmcps.app
+```
+
+或者，在 Finder 中右键点击应用 → 打开，然后在确认对话框中再次点击打开。
+
+配置好 Apple Developer 证书后，在 .github/workflows/release-v2.yml 中设置 APPLE_* 密钥，即可生成签名并公证的构建产物，打开时不再出现任何警告。
+
 iOS 开发
 
 需 macOS + Xcode + CocoaPods 环境。Xcode 项目已生成在 src-tauri/gen/apple。

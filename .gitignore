@@ -18,3 +18,11 @@ src-tauri/target
 .eslintcache
 tsx-*
 .idea
+
+# Binary installers (build artifacts — served from public/downloads/ but not committed)
+*.deb
+*.rpm
+*.AppImage
+*.dmg
+*.msi
+*.exe

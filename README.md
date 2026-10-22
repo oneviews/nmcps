@@ -108,6 +108,24 @@ Enables console access inside the bundled app.
 
 ---
 
+## macOS Distribution
+
+The macOS build is **unsigned** until an Apple Developer certificate is configured. Testers will see a Gatekeeper warning when opening the app for the first time.
+
+### Installing an unsigned build (for testers)
+
+After copying the app to `/Applications`, run once in Terminal to remove the quarantine flag:
+
+```sh
+xattr -c /Applications/nmcps.app
+```
+
+Alternatively, right-click the app in Finder → **Open**, then click **Open** again in the confirmation dialog.
+
+Once an Apple Developer certificate is available, configure the `APPLE_*` secrets in `.github/workflows/release-v2.yml` to produce a signed and notarized build that opens without any warning.
+
+---
+
 ## iOS Development
 
 Requires **macOS + Xcode + CocoaPods**. The Xcode project is already generated in `src-tauri/gen/apple`.

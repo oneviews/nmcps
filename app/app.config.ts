@@ -32,22 +32,31 @@ export default defineAppConfig({
 			windows: {
 				label: "Windows",
 				icon: "lucide:monitor",
-				file: "nmcps_1.7.0_x64-setup.exe"
+				files: [
+					{ label: ".exe (x64)", file: "nmcps_1.7.0_x64-setup.exe" }
+				]
 			},
 			macos: {
 				label: "macOS",
 				icon: "lucide:apple",
-				file: "nmcps_1.7.0_universal.dmg"
+				files: [
+					{ label: ".dmg (Universal)", file: "nmcps_1.7.0_universal.dmg" }
+				]
 			},
 			linux: {
 				label: "Linux",
 				icon: "lucide:terminal",
-				file: "nmcps_1.7.0_amd64.deb"
+				files: [
+					{ label: ".deb", file: "nmcps_1.7.0_amd64.deb" },
+					{ label: ".rpm", file: "nmcps-1.7.0-1.x86_64.rpm" }
+				]
 			},
 			android: {
 				label: "Android",
 				icon: "lucide:smartphone",
-				file: "nmcps_1.7.0.apk"
+				files: [
+					{ label: ".apk", file: "nmcps_1.7.0.apk" }
+				]
 			}
 		}
 	},
