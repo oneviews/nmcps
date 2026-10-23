@@ -33,7 +33,8 @@ export default defineAppConfig({
 				label: "Windows",
 				icon: "lucide:monitor",
 				files: [
-					{ label: ".exe (x64)", file: "nmcps_1.7.0_x64-setup.exe" }
+					{ label: ".exe (x64)", file: "nmcps_1.7.0_x64-setup.exe" },
+					{ label: ".msi (x64)", file: "nmcps_1.7.0_x64_en-US.msi" }
 				]
 			},
 			macos: {
@@ -55,7 +56,7 @@ export default defineAppConfig({
 				label: "Android",
 				icon: "lucide:smartphone",
 				files: [
-					{ label: ".apk", file: "nmcps_1.7.0.apk" }
+					{ label: ".apk (Universal)", file: "nmcps_1.7.0_universal.apk" }
 				]
 			}
 		}
