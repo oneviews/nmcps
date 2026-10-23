@@ -66,16 +66,29 @@
 
 						<template v-if="currentAsset">
 							<UButton
-								v-for="file in currentAsset.files"
-								:key="file.file"
-								:href="file.url"
+								:href="currentAsset.files[0]?.url"
 								external
-								:size="currentAsset.files.length > 1 ? 'lg' : 'xl'"
+								size="xl"
 								block
 								:icon="currentAsset.icon"
 							>
-								下载 {{ currentAsset.label }} 版（{{ file.label }}）
+								下载 {{ currentAsset.label }} 版
 							</UButton>
+
+							<UDropdownMenu
+								v-if="currentAsset.files.length > 1"
+								:items="formatItems"
+							>
+								<UButton
+									variant="soft"
+									block
+									size="sm"
+									color="neutral"
+									trailing-icon="lucide:chevron-down"
+								>
+									其他格式（{{ currentAsset.files.length - 1 }}）
+								</UButton>
+							</UDropdownMenu>
 						</template>
 
 						<p class="text-sm text-(--ui-text-muted)">
@@ -141,6 +154,16 @@
 	};
 
 	const currentAsset = computed(() => getAsset(os));
+
+	const formatItems = computed(() => {
+		if (!currentAsset.value) return [];
+		return currentAsset.value.files.map((file) => ({
+			label: file.label,
+			icon: "lucide:download",
+			href: file.url,
+			external: true
+		}));
+	});
 
 	const otherAssets = computed(() => {
 		return Object.entries(downloads.assets)
