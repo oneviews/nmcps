@@ -1,21 +1,21 @@
 <template>
 	<LayoutTile
-		title="Commands"
-		description="Access the system shell. Allows you to spawn child processes and manage files and URLs using their default application."
+		:title="$t('pages.commands.title')"
+		:description="$t('pages.commands.description')"
 	>
 		<div class="space-y-6 md:space-y-8">
 			<UForm :state="inputState" :schema="schema" class="flex flex-col gap-y-4 items-end" @submit="sendCommand">
-				<UFormField label="Command input" name="input">
+				<UFormField :label="$t('pages.commands.commandInput')" name="input">
 					<UInput v-model="inputState.input" variant="subtle" size="lg" />
 				</UFormField>
 
 				<UButton type="submit" size="lg">
-					Send command
+					{{ $t("pages.commands.send") }}
 				</UButton>
 			</UForm>
 
 			<UForm :state="outputState" class="flex flex-col gap-y-4 items-end">
-				<UFormField label="Command output" name="command-output">
+				<UFormField :label="$t('pages.commands.commandOutput')" name="command-output">
 					<UTextarea v-model="outputState.output" variant="subtle" size="lg" :rows="8" readonly />
 				</UFormField>
 			</UForm>
@@ -25,15 +25,17 @@
 
 <script lang="ts" setup>
 	definePageMeta({
-		name: "Shell commands",
-		icon: "lucide:terminal",
-		description: "Execute shell commands",
+		name: "pages.commands.title",
+		icon: "carbon:terminal",
+		description: "pages.commands.description",
 		category: "system"
 	});
 
+	const { t } = useI18n();
+
 	const schema = z.object({
 		input: z.string({
-			error: "Input is required"
+			error: t("pages.commands.inputRequired")
 		}).nonempty()
 	});
 

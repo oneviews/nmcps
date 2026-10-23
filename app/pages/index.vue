@@ -8,7 +8,7 @@
 					{{ app.name.toUpperCase() }}
 				</h1>
 				<p class="leading-7 text-pretty">
-					Powered by
+					{{ $t("pages.index.poweredBy") }}
 				</p>
 
 				<div class="flex flex-wrap justify-center gap-1 md:gap-3">
@@ -46,22 +46,22 @@
 				<UCard>
 					<template #header>
 						<div class="flex items-center gap-2">
-							<UIcon name="lucide:download" class="size-5 text-(--ui-primary)" />
+							<UIcon name="carbon:download" class="size-5 text-(--ui-primary)" />
 							<h2 class="text-lg font-semibold">
-								下载 {{ app.name }}
+								{{ $t("pages.index.download") }} {{ app.name }}
 							</h2>
 						</div>
 					</template>
 
 					<div class="flex flex-col gap-y-4">
 						<p v-if="currentAsset" class="text-sm text-(--ui-text-muted)">
-							检测到您正在使用
+							{{ $t("pages.index.detectedUsing") }}
 							<span class="font-semibold text-(--ui-text)">
 								{{ currentAsset.label }}
 							</span>
 						</p>
 						<p v-else class="text-sm text-(--ui-text-muted)">
-							当前系统暂未提供安装包，请在下方选择其他平台
+							{{ $t("pages.index.noPackage") }}
 						</p>
 
 						<template v-if="currentAsset">
@@ -72,7 +72,7 @@
 								block
 								:icon="currentAsset.icon"
 							>
-								下载 {{ currentAsset.label }} 版
+								{{ $t("pages.index.downloadVersion", { label: currentAsset.label }) }}
 							</UButton>
 
 							<UDropdownMenu
@@ -84,20 +84,20 @@
 									block
 									size="sm"
 									color="neutral"
-									trailing-icon="lucide:chevron-down"
+									trailing-icon="carbon:chevron-down"
 								>
-									其他格式（{{ currentAsset.files.length - 1 }}）
+									{{ $t("pages.index.otherFormats", { count: currentAsset.files.length - 1 }) }}
 								</UButton>
 							</UDropdownMenu>
 						</template>
 
 						<p class="text-sm text-(--ui-text-muted)">
-							版本 {{ downloads.version }}
+							{{ $t("pages.index.version", { version: downloads.version }) }}
 						</p>
 
 						<div class="border-t border-(--ui-border) pt-4">
 							<p class="text-sm text-(--ui-text-muted) mb-2">
-								其他平台
+								{{ $t("pages.index.otherPlatforms") }}
 							</p>
 							<div class="flex flex-wrap gap-2">
 								<UButton
@@ -122,7 +122,7 @@
 					:to="app.repo"
 					external
 				>
-					Star on GitHub
+					{{ $t("pages.index.starOnGithub") }}
 				</UButton>
 			</div>
 		</div>
@@ -130,7 +130,7 @@
 		<div class="fixed bottom-6 text-sm absolute-center-h">
 			<div class="flex items-center gap-1 text-(--ui-text-muted)">
 				<p class="text-sm">
-					Made by
+					{{ $t("pages.index.madeBy") }}
 				</p>
 				<ULink :to="app.repo" external target="_blank">
 					{{ app.author }}
@@ -159,7 +159,7 @@
 		if (!currentAsset.value) return [];
 		return currentAsset.value.files.map((file) => ({
 			label: file.label,
-			icon: "lucide:download",
+			icon: "carbon:download",
 			href: file.url,
 			external: true
 		}));

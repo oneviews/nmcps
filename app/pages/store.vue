@@ -1,21 +1,21 @@
 <template>
 	<LayoutTile
-		title="Store"
-		description="Persistent key-value store. Allows you to handle state to a file which can be saved and loaded on demand including between app restarts."
+		:title="$t('pages.store.title')"
+		:description="$t('pages.store.description')"
 	>
 		<div class="space-y-6 md:space-y-8">
 			<UForm :state="inputState" :schema="schema" class="flex flex-col gap-y-4 items-end" @submit="setStoreValue">
-				<UFormField label="Store value" name="value">
+				<UFormField :label="$t('pages.store.storeValue')" name="value">
 					<UInput v-model="inputState.value" variant="subtle" size="lg" />
 				</UFormField>
 
 				<UButton type="submit" size="lg">
-					Set value
+					{{ $t("pages.store.setValue") }}
 				</UButton>
 			</UForm>
 
 			<UForm :state="outputState" class="flex flex-col gap-y-4 items-end">
-				<UFormField label="Store content" name="content">
+				<UFormField :label="$t('pages.store.storeContent')" name="content">
 					<UTextarea v-model="outputState.content" variant="subtle" size="lg" :rows="8" readonly />
 				</UFormField>
 			</UForm>
@@ -27,15 +27,17 @@
 	import { isTauri } from "@tauri-apps/api/core";
 
 	definePageMeta({
-		name: "Store",
-		icon: "lucide:database",
+		name: "pages.store.title",
+		icon: "carbon:data-base",
 		category: "storage",
-		description: "Handle file creation in the file system"
+		description: "pages.store.description"
 	});
+
+	const { t } = useI18n();
 
 	const schema = z.object({
 		value: z.string({
-			error: "Store key is required"
+			error: t("pages.store.keyRequired")
 		}).nonempty()
 	});
 
@@ -58,7 +60,7 @@
 
 	const getStoreValue = async () => {
 		if (!store) {
-			outputState.value.content = "Unavailable in browser";
+			outputState.value.content = t("common.unavailableInBrowser");
 			return;
 		}
 
@@ -66,7 +68,7 @@
 			outputState.value.content = await store.get<string>("myData") || "";
 		} catch (error) {
 			toast.add({
-				title: "Error",
+				title: t("common.error"),
 				description: String(error),
 				color: "error"
 			});
@@ -79,8 +81,8 @@
 	const setStoreValue = async () => {
 		if (!store) {
 			toast.add({
-				title: "Error",
-				description: "Store is unavailable in browser",
+				title: t("common.error"),
+				description: t("pages.store.storeUnavailable"),
 				color: "error"
 			});
 			return;
@@ -90,13 +92,13 @@
 			await store.set("myData", inputState.value!.value);
 			await getStoreValue();
 			toast.add({
-				title: "Success",
-				description: "Store value retieved",
+				title: t("common.success"),
+				description: t("pages.store.valueRetrieved"),
 				color: "success"
 			});
 		} catch (error) {
 			toast.add({
-				title: "Error",
+				title: t("common.error"),
 				description: String(error),
 				color: "error"
 			});

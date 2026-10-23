@@ -1,19 +1,19 @@
 <template>
 	<LayoutTile
-		title="File System"
-		description="Access the file system. For this demo the only allowed permission is read/write to the Documents folder (no sub directories)."
+		:title="$t('pages.file.title')"
+		:description="$t('pages.file.description')"
 	>
 		<UForm :state="inputState" :schema="schema" class="flex flex-col gap-y-4 items-end" @submit="createFile">
-			<UFormField label="Text file name (with extension)" name="fileName">
+			<UFormField :label="$t('pages.file.fileName')" name="fileName">
 				<UInput v-model="inputState.fileName" variant="subtle" size="lg" />
 			</UFormField>
 
-			<UFormField label="File content" name="fileContent">
+			<UFormField :label="$t('pages.file.fileContent')" name="fileContent">
 				<UTextarea v-model="inputState.fileContent" variant="subtle" size="lg" :rows="10" />
 			</UFormField>
 
 			<UButton type="submit" size="lg">
-				Create file
+				{{ $t("pages.file.create") }}
 			</UButton>
 		</UForm>
 	</LayoutTile>
@@ -21,20 +21,22 @@
 
 <script lang="ts" setup>
 	definePageMeta({
-		name: "Files",
-		icon: "lucide:file-text",
+		name: "pages.file.title",
+		icon: "carbon:document",
 		category: "storage",
-		description: "Create and manage files"
+		description: "pages.file.description"
 	});
+
+	const { t } = useI18n();
 
 	const schema = z.object({
 		fileName: z.string({
-			error: "File name is required"
+			error: t("pages.file.fileNameRequired")
 		}).nonempty().regex(/^[\w,\s-]+\.[A-Z0-9]+$/i, {
-			message: "Invalid filename format"
+			message: t("pages.file.invalidFilename")
 		}),
 		fileContent: z.string({
-			error: "File content is required"
+			error: t("pages.file.fileContentRequired")
 		}).nonempty()
 	});
 
@@ -55,8 +57,8 @@
 
 			if (fileExists) {
 				toast.add({
-					title: "Error",
-					description: "The file already exists",
+					title: t("common.error"),
+					description: t("pages.file.alreadyExists"),
 					color: "error"
 				});
 
@@ -67,14 +69,14 @@
 				baseDir: useTauriFsBaseDirectory.Document
 			});
 			toast.add({
-				title: "Success",
-				description: "The file has been created",
+				title: t("common.success"),
+				description: t("pages.file.created"),
 				color: "success"
 			});
 			inputState.value.fileName = inputState.value.fileContent = undefined;
 		} catch (err) {
 			toast.add({
-				title: "Error",
+				title: t("common.error"),
 				description: String(err),
 				color: "error"
 			});

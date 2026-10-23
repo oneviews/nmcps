@@ -1,6 +1,6 @@
 <template>
 	<UButton
-		:icon="`lucide:${nextTheme === 'dark' ? 'sun' : 'moon'}`"
+		:icon="`carbon:${nextTheme === 'dark' ? 'sun' : 'moon'}`"
 		color="neutral"
 		variant="ghost"
 		class="rounded-full"

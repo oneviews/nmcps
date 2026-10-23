@@ -1,0 +1,158 @@
+{
+	"language": {
+		"label": "语言",
+		"cn": "简体中文",
+		"en": "English"
+	},
+	"nav": {
+		"checkUpdates": "检查更新",
+		"categories": {
+			"system": "系统",
+			"storage": "存储",
+			"interface": "界面",
+			"other": "其他"
+		}
+	},
+	"common": {
+		"error": "错误",
+		"success": "成功",
+		"unavailableInBrowser": "浏览器中不可用"
+	},
+	"pages": {
+		"index": {
+			"poweredBy": "Powered by",
+			"download": "下载",
+			"detectedUsing": "检测到您正在使用",
+			"noPackage": "当前系统暂未提供安装包，请在下方选择其他平台",
+			"downloadVersion": "下载 {label} 版",
+			"otherFormats": "其他格式（{count}）",
+			"version": "版本 {version}",
+			"otherPlatforms": "其他平台",
+			"starOnGithub": "Star on GitHub",
+			"madeBy": "Made by"
+		},
+		"os": {
+			"title": "操作系统信息",
+			"description": "使用 OS 信息插件读取操作系统信息。",
+			"system": "系统",
+			"arch": "架构",
+			"locale": "区域",
+			"notDetectable": "无法检测"
+		},
+		"notifications": {
+			"title": "通知",
+			"description": "使用通知插件向客户端发送原生通知。",
+			"notificationTitle": "通知标题",
+			"notificationBody": "通知内容（可选）",
+			"send": "发送通知",
+			"titleRequired": "标题为必填项",
+			"missingPermission": "缺少通知权限"
+		},
+		"commands": {
+			"title": "命令",
+			"description": "访问系统 shell，创建子进程并使用默认应用管理文件和 URL。",
+			"commandInput": "命令输入",
+			"send": "发送命令",
+			"commandOutput": "命令输出",
+			"inputRequired": "输入为必填项"
+		},
+		"file": {
+			"title": "文件系统",
+			"description": "访问文件系统。本示例仅允许读写 Documents 文件夹（不含子目录）。",
+			"fileName": "文本文件名（含扩展名）",
+			"fileContent": "文件内容",
+			"create": "创建文件",
+			"fileNameRequired": "文件名为必填项",
+			"invalidFilename": "无效的文件名格式",
+			"fileContentRequired": "文件内容为必填项",
+			"alreadyExists": "文件已存在",
+			"created": "文件已创建"
+		},
+		"webview": {
+			"title": "Webview 窗口",
+			"description": "在独立窗口中创建新 webview。",
+			"createExternal": "创建外部 Webview",
+			"createInternal": "创建内部 Webview",
+			"created": "Webview 已创建"
+		},
+		"store": {
+			"title": "存储",
+			"description": "持久化键值存储，可在应用重启后按需保存与加载。",
+			"storeValue": "存储值",
+			"setValue": "设置值",
+			"storeContent": "存储内容",
+			"keyRequired": "存储键为必填项",
+			"storeUnavailable": "存储功能在浏览器中不可用",
+			"valueRetrieved": "存储值已获取"
+		},
+		"notFound": {
+			"title": "页面未找到",
+			"description": "抱歉，我们找不到您要访问的页面。",
+			"goHome": "返回首页"
+		}
+	},
+	"preferences": {
+		"title": "用户偏好设置",
+		"description": "自定义系统配色、外观和样式。",
+		"theme": {
+			"label": "主题设置",
+			"description": "自定义系统配色、外观和样式。",
+			"appearance": {
+				"label": "外观模式",
+				"light": "浅色",
+				"dark": "暗黑",
+				"system": "跟随系统"
+			},
+			"primary": {
+				"label": "主题色"
+			},
+			"neutral": {
+				"label": "中性色"
+			},
+			"visual": {
+				"radiusLabel": "圆角",
+				"fontScaleLabel": "系统字体大小",
+				"fontScale": {
+					"sm": "小",
+					"md": "标准",
+					"lg": "大",
+					"xl": "特大"
+				},
+				"radius": {
+					"none": "无圆角",
+					"sm": "小圆角",
+					"md": "中圆角",
+					"lg": "大圆角",
+					"xl": "半圆"
+				}
+			},
+			"colors": {
+				"red": "赤红",
+				"orange": "活力橙",
+				"amber": "暖调黄",
+				"yellow": "明黄",
+				"lime": "青柠",
+				"green": "极客绿",
+				"emerald": "翡翠绿",
+				"teal": "碧青",
+				"cyan": "天青",
+				"sky": "天蓝",
+				"blue": "商务蓝",
+				"indigo": "深邃蓝",
+				"violet": "紫罗兰",
+				"purple": "优雅紫",
+				"fuchsia": "品红",
+				"pink": "粉红",
+				"rose": "冷艳红",
+				"slate": "板岩灰",
+				"gray": "标准灰",
+				"zinc": "极客灰",
+				"stone": "岩石灰",
+				"mauve": "紫藤灰",
+				"olive": "橄榄灰",
+				"mist": "雾蓝灰",
+				"taupe": "灰褐色"
+			}
+		}
+	}
+}

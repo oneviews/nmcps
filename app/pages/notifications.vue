@@ -1,19 +1,19 @@
 <template>
 	<LayoutTile
-		title="Notifications"
-		description="Send native notifications to the client using the notification plugin."
+		:title="$t('pages.notifications.title')"
+		:description="$t('pages.notifications.description')"
 	>
 		<UForm :state="inputState" :schema="schema" class="flex flex-col gap-y-4 items-end" @submit="createNotification">
-			<UFormField label="Notification title" name="notificationTitle">
+			<UFormField :label="$t('pages.notifications.notificationTitle')" name="notificationTitle">
 				<UInput v-model="inputState.notificationTitle" variant="subtle" size="lg" />
 			</UFormField>
 
-			<UFormField label="Notification body (optional)" name="notificationBody">
+			<UFormField :label="$t('pages.notifications.notificationBody')" name="notificationBody">
 				<UInput v-model="inputState.notificationBody" variant="subtle" size="lg" />
 			</UFormField>
 
 			<UButton type="submit" size="lg">
-				Send notification
+				{{ $t("pages.notifications.send") }}
 			</UButton>
 		</UForm>
 	</LayoutTile>
@@ -21,15 +21,17 @@
 
 <script lang="ts" setup>
 	definePageMeta({
-		name: "Notifications",
-		icon: "lucide:message-square-more",
+		name: "pages.notifications.title",
+		icon: "carbon:chat",
 		category: "interface",
-		description: "Send native notifications"
+		description: "pages.notifications.description"
 	});
+
+	const { t } = useI18n();
 
 	const schema = z.object({
 		notificationTitle: z.string({
-			error: "Title is required"
+			error: t("pages.notifications.titleRequired")
 		}).nonempty(),
 		notificationBody: z.string().optional()
 	});
@@ -61,8 +63,8 @@
 			inputState.value.notificationTitle = inputState.value.notificationBody = undefined;
 		} else {
 			toast.add({
-				title: "Error",
-				description: "Missing notifications permission",
+				title: t("common.error"),
+				description: t("pages.notifications.missingPermission"),
 				color: "error"
 			});
 		}

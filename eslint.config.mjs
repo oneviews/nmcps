@@ -15,7 +15,8 @@ export default withNuxt(
 				".github/**",
 				"src-tauri/**",
 				"**/*.md",
-				"pnpm-workspace.yaml"
+				"pnpm-workspace.yaml",
+				"_reference/**"
 			],
 			rules: {
 				curly: "off",

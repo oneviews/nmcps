@@ -9,20 +9,20 @@ export default defineAppConfig({
 	},
 	pageCategories: {
 		system: {
-			label: "System",
-			icon: "lucide:square-terminal"
+			label: "nav.categories.system",
+			icon: "carbon:terminal"
 		},
 		storage: {
-			label: "Storage",
-			icon: "lucide:archive"
+			label: "nav.categories.storage",
+			icon: "carbon:archive"
 		},
 		interface: {
-			label: "Interface",
-			icon: "lucide:app-window-mac"
+			label: "nav.categories.interface",
+			icon: "carbon:application"
 		},
 		other: {
-			label: "Other",
-			icon: "lucide:folder"
+			label: "nav.categories.other",
+			icon: "carbon:folder"
 		}
 	},
 	downloads: {
@@ -31,7 +31,7 @@ export default defineAppConfig({
 		assets: {
 			windows: {
 				label: "Windows",
-				icon: "lucide:monitor",
+				icon: "carbon:screen",
 				files: [
 					{ label: ".exe (x64)", file: "nmcps_1.7.1_x64-setup.exe" },
 					{ label: ".msi (x64)", file: "nmcps_1.7.1_x64_en-US.msi" },
@@ -41,14 +41,14 @@ export default defineAppConfig({
 			},
 			macos: {
 				label: "macOS",
-				icon: "lucide:apple",
+				icon: "carbon:apple",
 				files: [
 					{ label: ".dmg (Universal)", file: "nmcps_1.7.1_universal.dmg" }
 				]
 			},
 			linux: {
 				label: "Linux",
-				icon: "lucide:terminal",
+				icon: "carbon:terminal",
 				files: [
 					{ label: ".deb (x64)", file: "nmcps_1.7.1_amd64.deb" },
 					{ label: ".rpm (x64)", file: "nmcps-1.7.1-1.x86_64.rpm" },
@@ -60,7 +60,7 @@ export default defineAppConfig({
 			},
 			android: {
 				label: "Android",
-				icon: "lucide:smartphone",
+				icon: "carbon:mobile",
 				files: [
 					{ label: ".apk (Universal)", file: "nmcps_1.7.1_universal.apk" },
 					{ label: ".aab (Universal)", file: "nmcps_1.7.1_universal.aab" }

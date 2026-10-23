@@ -3,10 +3,24 @@ export default defineNuxtConfig({
 		"@nuxt/eslint",
 		"@nuxt/ui",
 		"@vueuse/nuxt",
-		"nuxt-svgo"
+		"nuxt-svgo",
+		"@nuxtjs/i18n"
 	],
+	extends: ["./layers/user"],
 	ssr: false,
 	ignore: ["**/src-tauri/**"],
+	i18n: {
+		defaultLocale: "cn",
+		detectBrowserLanguage: false,
+		strategy: "no_prefix",
+		locales: [
+			{ code: "en", name: "English", iso: "en-US", file: "en.json" },
+			{ code: "cn", name: "简体中文", iso: "zh-CN", file: "cn.json" }
+		],
+		experimental: {
+			typedOptionsAndMessages: "default"
+		}
+	},
 	app: {
 		head: {
 			title: "nmcps",

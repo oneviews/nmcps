@@ -1,0 +1,158 @@
+{
+	"language": {
+		"label": "Language",
+		"cn": "简体中文",
+		"en": "English"
+	},
+	"nav": {
+		"checkUpdates": "Check for updates",
+		"categories": {
+			"system": "System",
+			"storage": "Storage",
+			"interface": "Interface",
+			"other": "Other"
+		}
+	},
+	"common": {
+		"error": "Error",
+		"success": "Success",
+		"unavailableInBrowser": "Unavailable in browser"
+	},
+	"pages": {
+		"index": {
+			"poweredBy": "Powered by",
+			"download": "Download",
+			"detectedUsing": "Detected you are using",
+			"noPackage": "No installer is available for your system, please select another platform below",
+			"downloadVersion": "Download {label} version",
+			"otherFormats": "Other formats ({count})",
+			"version": "Version {version}",
+			"otherPlatforms": "Other platforms",
+			"starOnGithub": "Star on GitHub",
+			"madeBy": "Made by"
+		},
+		"os": {
+			"title": "OS Information",
+			"description": "Read information about the operating system using the OS Information plugin.",
+			"system": "System",
+			"arch": "Arch",
+			"locale": "Locale",
+			"notDetectable": "Not detectable"
+		},
+		"notifications": {
+			"title": "Notifications",
+			"description": "Send native notifications to the client using the notification plugin.",
+			"notificationTitle": "Notification title",
+			"notificationBody": "Notification body (optional)",
+			"send": "Send notification",
+			"titleRequired": "Title is required",
+			"missingPermission": "Missing notifications permission"
+		},
+		"commands": {
+			"title": "Commands",
+			"description": "Access the system shell. Allows you to spawn child processes and manage files and URLs using their default application.",
+			"commandInput": "Command input",
+			"send": "Send command",
+			"commandOutput": "Command output",
+			"inputRequired": "Input is required"
+		},
+		"file": {
+			"title": "File System",
+			"description": "Access the file system. For this demo the only allowed permission is read/write to the Documents folder (no sub directories).",
+			"fileName": "Text file name (with extension)",
+			"fileContent": "File content",
+			"create": "Create file",
+			"fileNameRequired": "File name is required",
+			"invalidFilename": "Invalid filename format",
+			"fileContentRequired": "File content is required",
+			"alreadyExists": "The file already exists",
+			"created": "The file has been created"
+		},
+		"webview": {
+			"title": "Webview window",
+			"description": "Create new webview in a detached window.",
+			"createExternal": "Create external Webview",
+			"createInternal": "Create internal Webview",
+			"created": "Webview created"
+		},
+		"store": {
+			"title": "Store",
+			"description": "Persistent key-value store. Allows you to handle state to a file which can be saved and loaded on demand including between app restarts.",
+			"storeValue": "Store value",
+			"setValue": "Set value",
+			"storeContent": "Store content",
+			"keyRequired": "Store key is required",
+			"storeUnavailable": "Store is unavailable in browser",
+			"valueRetrieved": "Store value retrieved"
+		},
+		"notFound": {
+			"title": "Page not found",
+			"description": "Sorry, we couldn't find the page you're looking for.",
+			"goHome": "Go home"
+		}
+	},
+	"preferences": {
+		"title": "User Preferences",
+		"description": "Customize color scheme, appearance and styles.",
+		"theme": {
+			"label": "Theme",
+			"description": "Customize color scheme, appearance and styles.",
+			"appearance": {
+				"label": "Appearance",
+				"light": "Light",
+				"dark": "Dark",
+				"system": "System"
+			},
+			"primary": {
+				"label": "Primary color"
+			},
+			"neutral": {
+				"label": "Neutral color"
+			},
+			"visual": {
+				"radiusLabel": "Corner radius",
+				"fontScaleLabel": "System font size",
+				"fontScale": {
+					"sm": "Small",
+					"md": "Standard",
+					"lg": "Large",
+					"xl": "Extra large"
+				},
+				"radius": {
+					"none": "None",
+					"sm": "Small",
+					"md": "Medium",
+					"lg": "Large",
+					"xl": "Semicircle"
+				}
+			},
+			"colors": {
+				"red": "Red",
+				"orange": "Orange",
+				"amber": "Warm amber",
+				"yellow": "Yellow",
+				"lime": "Lime",
+				"green": "Geek green",
+				"emerald": "Emerald",
+				"teal": "Teal",
+				"cyan": "Cyan",
+				"sky": "Sky blue",
+				"blue": "Business blue",
+				"indigo": "Deep indigo",
+				"violet": "Violet",
+				"purple": "Elegant purple",
+				"fuchsia": "Fuchsia",
+				"pink": "Pink",
+				"rose": "Cool rose",
+				"slate": "Slate gray",
+				"gray": "Neutral gray",
+				"zinc": "Geek zinc",
+				"stone": "Stone gray",
+				"mauve": "Mauve gray",
+				"olive": "Olive gray",
+				"mist": "Mist gray",
+				"taupe": "Taupe"
+			}
+		}
+	}
+}

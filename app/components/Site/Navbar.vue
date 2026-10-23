@@ -25,13 +25,22 @@
 				Tauri v{{ tauriVersion }}
 			</UBadge>
 			<UButton
-				icon="lucide:refresh-cw"
+				icon="carbon:renew"
 				color="neutral"
 				variant="ghost"
 				class="rounded-full"
 				:loading="checking"
-				aria-label="检查更新"
+				:aria-label="$t('nav.checkUpdates')"
 				@click="checkForUpdates"
+			/>
+			<SiteLanguageSwitch />
+			<UButton
+				icon="carbon:settings"
+				color="neutral"
+				variant="ghost"
+				class="rounded-full"
+				:aria-label="$t('preferences.title')"
+				@click="isPreferencesOpen = true"
 			/>
 			<SiteColorModeButton />
 		</template>
@@ -43,5 +52,6 @@
 
 	const { pages } = usePages();
 	const { checking, checkForUpdates } = useUpdater();
+	const { isPreferencesOpen } = useUserPreferences();
 	const tauriVersion = isTauri() ? await useTauriAppGetTauriVersion() : null;
 </script>

@@ -1,14 +1,14 @@
 <template>
 	<LayoutTile
-		title="Webview window"
-		description="Create new webview in a detached window. This will create a new window flagged 'secondary' that has the same permissions as the main one. If you need more windows, update the permissions under capabilities > main or create a new capabilities file for the new window only."
+		:title="$t('pages.webview.title')"
+		:description="$t('pages.webview.description')"
 	>
 		<div class="flex flex-col items-center gap-6">
 			<UButton variant="subtle" @click="openWindow((new Date).valueOf().toString(), app.repo)">
-				Create external Webview
+				{{ $t("pages.webview.createExternal") }}
 			</UButton>
 			<UButton variant="subtle" @click="openWindow('secondary', '/os')">
-				Create internal Webview
+				{{ $t("pages.webview.createInternal") }}
 			</UButton>
 		</div>
 	</LayoutTile>
@@ -16,14 +16,15 @@
 
 <script lang="ts" setup>
 	definePageMeta({
-		name: "Webview",
-		icon: "lucide:app-window",
+		name: "pages.webview.title",
+		icon: "carbon:application",
 		category: "interface",
-		description: "Create new webview in a detached window"
+		description: "pages.webview.description"
 	});
 
 	const { app } = useAppConfig();
 	const toast = useToast();
+	const { t } = useI18n();
 
 	const openWindow = async (id: string, page: string) => {
 		const webview = new useTauriWebviewWindowWebviewWindow(id, {
@@ -35,14 +36,14 @@
 
 		webview.once("tauri://created", () => {
 			toast.add({
-				title: "Success",
-				description: "Webview created",
+				title: t("common.success"),
+				description: t("pages.webview.created"),
 				color: "success"
 			});
 		});
 		webview.once("tauri://error", (error) => {
 			toast.add({
-				title: "Error",
+				title: t("common.error"),
 				description: (error as any).payload,
 				color: "error"
 			});
