@@ -1,4 +1,16 @@
 {
+	// 1️⃣ 编辑器配置
+	"editor.fontFamily": "Maple Mono NF CN, Menlo, Consolas, Maple UI, PingFang, 'Microsoft YaHei', monospace",
+	"editor.fontLigatures": "'calt', 'cv01', 'ss01', 'zero'",
+	"editor.fontSize": 16,
+	"editor.minimap.enabled": false,
+	"editor.renderWhitespace": "boundary",
+	"editor.tabSize": 2,
+	"editor.wordWrapColumn": 96,
+	"editor.wordWrap": "bounded",
+	"terminal.integrated.fontSize": 16,
+	"workbench.sideBar.location": "right",
+
 	// Use eslint as default formatter
 	"editor.formatOnSave": false,
 
