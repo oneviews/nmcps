@@ -27,7 +27,7 @@ export default defineAppConfig({
 	},
 	downloads: {
 		version: "1.7.1",
-		basePath: "/downloads",
+		basePath: "https://github.com/oneviews/nmcps/releases/download/nmcps-v1.7.1",
 		assets: {
 			windows: {
 				label: "Windows",
