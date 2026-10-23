@@ -26,44 +26,44 @@ export default defineAppConfig({
 		}
 	},
 	downloads: {
-		version: "1.7.0",
+		version: "1.7.1",
 		basePath: "/downloads",
 		assets: {
 			windows: {
 				label: "Windows",
 				icon: "lucide:monitor",
 				files: [
-					{ label: ".exe (x64)", file: "nmcps_1.7.0_x64-setup.exe" },
-					{ label: ".msi (x64)", file: "nmcps_1.7.0_x64_en-US.msi" },
-					{ label: ".exe (arm64)", file: "nmcps_1.7.0_arm64-setup.exe" },
-					{ label: ".msi (arm64)", file: "nmcps_1.7.0_arm64_en-US.msi" }
+					{ label: ".exe (x64)", file: "nmcps_1.7.1_x64-setup.exe" },
+					{ label: ".msi (x64)", file: "nmcps_1.7.1_x64_en-US.msi" },
+					{ label: ".exe (arm64)", file: "nmcps_1.7.1_arm64-setup.exe" },
+					{ label: ".msi (arm64)", file: "nmcps_1.7.1_arm64_en-US.msi" }
 				]
 			},
 			macos: {
 				label: "macOS",
 				icon: "lucide:apple",
 				files: [
-					{ label: ".dmg (Universal)", file: "nmcps_1.7.0_universal.dmg" }
+					{ label: ".dmg (Universal)", file: "nmcps_1.7.1_universal.dmg" }
 				]
 			},
 			linux: {
 				label: "Linux",
 				icon: "lucide:terminal",
 				files: [
-					{ label: ".deb (x64)", file: "nmcps_1.7.0_amd64.deb" },
-					{ label: ".rpm (x64)", file: "nmcps-1.7.0-1.x86_64.rpm" },
-					{ label: ".AppImage (x64)", file: "nmcps_1.7.0_amd64.AppImage" },
-					{ label: ".deb (arm64)", file: "nmcps_1.7.0_arm64.deb" },
-					{ label: ".rpm (arm64)", file: "nmcps-1.7.0-1.aarch64.rpm" },
-					{ label: ".AppImage (arm64)", file: "nmcps_1.7.0_aarch64.AppImage" }
+					{ label: ".deb (x64)", file: "nmcps_1.7.1_amd64.deb" },
+					{ label: ".rpm (x64)", file: "nmcps-1.7.1-1.x86_64.rpm" },
+					{ label: ".AppImage (x64)", file: "nmcps_1.7.1_amd64.AppImage" },
+					{ label: ".deb (arm64)", file: "nmcps_1.7.1_arm64.deb" },
+					{ label: ".rpm (arm64)", file: "nmcps-1.7.1-1.aarch64.rpm" },
+					{ label: ".AppImage (arm64)", file: "nmcps_1.7.1_aarch64.AppImage" }
 				]
 			},
 			android: {
 				label: "Android",
 				icon: "lucide:smartphone",
 				files: [
-					{ label: ".apk (Universal)", file: "nmcps_1.7.0_universal.apk" },
-					{ label: ".aab (Universal)", file: "nmcps_1.7.0_universal.aab" }
+					{ label: ".apk (Universal)", file: "nmcps_1.7.1_universal.apk" },
+					{ label: ".aab (Universal)", file: "nmcps_1.7.1_universal.aab" }
 				]
 			}
 		}
