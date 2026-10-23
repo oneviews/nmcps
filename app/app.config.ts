@@ -52,8 +52,10 @@ export default defineAppConfig({
 				files: [
 					{ label: ".deb (x64)", file: "nmcps_1.7.0_amd64.deb" },
 					{ label: ".rpm (x64)", file: "nmcps-1.7.0-1.x86_64.rpm" },
+					{ label: ".AppImage (x64)", file: "nmcps_1.7.0_amd64.AppImage" },
 					{ label: ".deb (arm64)", file: "nmcps_1.7.0_arm64.deb" },
-					{ label: ".rpm (arm64)", file: "nmcps-1.7.0-1.aarch64.rpm" }
+					{ label: ".rpm (arm64)", file: "nmcps-1.7.0-1.aarch64.rpm" },
+					{ label: ".AppImage (arm64)", file: "nmcps_1.7.0_aarch64.AppImage" }
 				]
 			},
 			android: {
