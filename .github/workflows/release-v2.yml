@@ -105,6 +105,7 @@ jobs:
           # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          appVersion: 1.7.1
           tagName: nmcps-v__VERSION__
           releaseName: nmcps v__VERSION__
           releaseBody: After installing the Apple app you have to run "xattr -c /Applications/nmcps.app" once before launching
