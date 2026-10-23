@@ -34,7 +34,9 @@ export default defineAppConfig({
 				icon: "lucide:monitor",
 				files: [
 					{ label: ".exe (x64)", file: "nmcps_1.7.0_x64-setup.exe" },
-					{ label: ".msi (x64)", file: "nmcps_1.7.0_x64_en-US.msi" }
+					{ label: ".msi (x64)", file: "nmcps_1.7.0_x64_en-US.msi" },
+					{ label: ".exe (arm64)", file: "nmcps_1.7.0_arm64-setup.exe" },
+					{ label: ".msi (arm64)", file: "nmcps_1.7.0_arm64_en-US.msi" }
 				]
 			},
 			macos: {
@@ -48,15 +50,18 @@ export default defineAppConfig({
 				label: "Linux",
 				icon: "lucide:terminal",
 				files: [
-					{ label: ".deb", file: "nmcps_1.7.0_amd64.deb" },
-					{ label: ".rpm", file: "nmcps-1.7.0-1.x86_64.rpm" }
+					{ label: ".deb (x64)", file: "nmcps_1.7.0_amd64.deb" },
+					{ label: ".rpm (x64)", file: "nmcps-1.7.0-1.x86_64.rpm" },
+					{ label: ".deb (arm64)", file: "nmcps_1.7.0_arm64.deb" },
+					{ label: ".rpm (arm64)", file: "nmcps-1.7.0-1.aarch64.rpm" }
 				]
 			},
 			android: {
 				label: "Android",
 				icon: "lucide:smartphone",
 				files: [
-					{ label: ".apk (Universal)", file: "nmcps_1.7.0_universal.apk" }
+					{ label: ".apk (Universal)", file: "nmcps_1.7.0_universal.apk" },
+					{ label: ".aab (Universal)", file: "nmcps_1.7.0_universal.aab" }
 				]
 			}
 		}
