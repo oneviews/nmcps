@@ -39,6 +39,9 @@ android {
             }
         }
         getByName("release") {
+            // Use the debug keystore to sign the release build so it can be installed
+            // for internal testing. Replace with a proper release keystore before public distribution.
+            signingConfig = signingConfigs.getByName("debug")
             optimization {
                enable = true
             }
