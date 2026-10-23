@@ -6,6 +6,7 @@ import * as tauriOpener from "@tauri-apps/plugin-opener";
 import * as tauriOs from "@tauri-apps/plugin-os";
 import * as tauriShell from "@tauri-apps/plugin-shell";
 import * as tauriStore from "@tauri-apps/plugin-store";
+import * as tauriUpdater from "@tauri-apps/plugin-updater";
 import { addImports, defineNuxtModule } from "nuxt/kit";
 
 interface ModuleOptions {
@@ -24,7 +25,8 @@ const tauriModules = [
 	{ module: tauriNotification, prefix: "Notification", importPath: "@tauri-apps/plugin-notification" },
 	{ module: tauriOpener, prefix: "Opener", importPath: "@tauri-apps/plugin-opener" },
 	{ module: tauriFs, prefix: "Fs", importPath: "@tauri-apps/plugin-fs" },
-	{ module: tauriStore, prefix: "Store", importPath: "@tauri-apps/plugin-store" }
+	{ module: tauriStore, prefix: "Store", importPath: "@tauri-apps/plugin-store" },
+	{ module: tauriUpdater, prefix: "Updater", importPath: "@tauri-apps/plugin-updater" }
 ];
 
 export default defineNuxtModule<ModuleOptions>({

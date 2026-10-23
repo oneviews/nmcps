@@ -24,6 +24,15 @@
 			<UBadge v-if="tauriVersion" variant="subtle">
 				Tauri v{{ tauriVersion }}
 			</UBadge>
+			<UButton
+				icon="lucide:refresh-cw"
+				color="neutral"
+				variant="ghost"
+				class="rounded-full"
+				:loading="checking"
+				aria-label="检查更新"
+				@click="checkForUpdates"
+			/>
 			<SiteColorModeButton />
 		</template>
 	</UHeader>
@@ -33,5 +42,6 @@
 	import { isTauri } from "@tauri-apps/api/core";
 
 	const { pages } = usePages();
+	const { checking, checkForUpdates } = useUpdater();
 	const tauriVersion = isTauri() ? await useTauriAppGetTauriVersion() : null;
 </script>

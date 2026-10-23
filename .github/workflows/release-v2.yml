@@ -94,6 +94,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           # To enable macOS code signing & notarization (after obtaining an Apple
           # Developer certificate), uncomment the following and configure the
           # corresponding GitHub secrets. Leaving them commented produces an
