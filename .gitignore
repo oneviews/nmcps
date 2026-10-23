@@ -26,3 +26,5 @@ tsx-*
 *.dmg
 *.msi
 *.exe
+*.apk
+*.aab
