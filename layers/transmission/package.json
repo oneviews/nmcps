@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-transmission",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS transmission layer: information transmission control",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}

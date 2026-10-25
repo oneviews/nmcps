@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-topology",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS topology layer: network topology and monitoring",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}

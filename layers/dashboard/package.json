@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-dashboard",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS dashboard layer: overview and big-screen cockpit",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}

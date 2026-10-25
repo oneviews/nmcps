@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-spectrum",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS spectrum layer: spectrum monitoring and resource management",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}

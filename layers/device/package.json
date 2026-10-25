@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-device",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS device layer: device access and networking management",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}

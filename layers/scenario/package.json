@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-scenario",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS scenario layer: scenario dispatch and task planning",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}
