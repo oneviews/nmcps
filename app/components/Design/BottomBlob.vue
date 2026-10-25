@@ -1,5 +1,5 @@
 <template>
-	<div class="top=1/5 pointer-events-none absolute inset-x-0 blur-3xl -z-10" aria-hidden="true">
+	<div class="pointer-events-none absolute inset-x-0 bottom-0 blur-3xl -z-10" aria-hidden="true">
 		<div class="blob relative left-[calc(50%+36rem)] aspect-[1155/678] w-[72.1875rem] from-(--color-warning) to-(--color-success) bg-gradient-to-br opacity-30 -translate-x-1/2" />
 	</div>
 </template>

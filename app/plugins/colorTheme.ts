@@ -2,7 +2,7 @@
 // 系统配色引导：将 Cookie 中持久化的主色/中性色写入 appConfig.ui.colors，
 // 驱动 @nuxt/ui colors 插件生成 --ui-color-{key}-{shade} CSS 变量；
 // 同时向 :root 注入全局圆角 --ui-radius 与系统字体缩放因子 --app-font-scale。
-import { isNeutralColor, isPrimaryColor } from "~~/layers/user/app/composables/useColorTheme";
+import { isNeutralColor, isPrimaryColor } from "~~/layers/user/app/composables/colorPalette";
 import { FONT_SCALE_VALUES, isFontScalePreset } from "~~/layers/user/app/composables/useFontScale";
 import { isRadiusPreset, RADIUS_CSS_VALUES } from "~~/layers/user/app/composables/useVisualStyle";
 

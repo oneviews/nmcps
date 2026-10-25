@@ -5,7 +5,7 @@
 				<NuxtLayout>
 					<NuxtPage />
 				</NuxtLayout>
-				<UserUserPreferencesSlideover />
+				<UserPreferencesSlideover />
 			</UApp>
 		</Body>
 	</Html>

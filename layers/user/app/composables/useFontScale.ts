@@ -16,8 +16,8 @@ export const FONT_SCALE_VALUES: Record<FontScalePreset, number> = {
 	xl: 1.25
 };
 
-export function isFontScalePreset(value: string): value is FontScalePreset {
-	return (FONT_SCALE_PRESETS as readonly string[]).includes(value);
+export function isFontScalePreset(value: unknown): value is FontScalePreset {
+	return typeof value === "string" && (FONT_SCALE_PRESETS as readonly string[]).includes(value);
 }
 
 export interface FontScale {
@@ -26,19 +26,14 @@ export interface FontScale {
 }
 
 export function useFontScale(): FontScale {
-	const fontScaleCookie = useCookie<FontScalePreset>("theme-font-scale", {
-		default: () => "md",
-		maxAge: 60 * 60 * 24 * 365,
-		sameSite: "lax"
-	});
+	const fontScaleVar = useCssVar("--app-font-scale");
 
-	const fontScale = computed<FontScalePreset>({
-		get: () => (isFontScalePreset(fontScaleCookie.value) ? fontScaleCookie.value : "md"),
-		set: (value) => {
-			fontScaleCookie.value = value;
-			if (import.meta.client) {
-				document.documentElement.style.setProperty("--app-font-scale", String(FONT_SCALE_VALUES[value]));
-			}
+	const fontScale = usePersistedSetting<FontScalePreset>({
+		key: "theme-font-scale",
+		default: "md",
+		validate: isFontScalePreset,
+		onSet: (value) => {
+			fontScaleVar.value = String(FONT_SCALE_VALUES[value]);
 		}
 	});
 

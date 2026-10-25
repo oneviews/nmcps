@@ -17,8 +17,8 @@ export const RADIUS_CSS_VALUES: Record<RadiusPreset, string> = {
 	xl: "0.75rem"
 };
 
-export function isRadiusPreset(value: string): value is RadiusPreset {
-	return (RADIUS_PRESETS as readonly string[]).includes(value);
+export function isRadiusPreset(value: unknown): value is RadiusPreset {
+	return typeof value === "string" && (RADIUS_PRESETS as readonly string[]).includes(value);
 }
 
 export interface VisualStyle {
@@ -26,19 +26,14 @@ export interface VisualStyle {
 }
 
 export function useVisualStyle(): VisualStyle {
-	const radiusCookie = useCookie<RadiusPreset>("theme-radius", {
-		default: () => "md",
-		maxAge: 60 * 60 * 24 * 365,
-		sameSite: "lax"
-	});
+	const radiusVar = useCssVar("--ui-radius");
 
-	const radius = computed<RadiusPreset>({
-		get: () => (isRadiusPreset(radiusCookie.value) ? radiusCookie.value : "md"),
-		set: (value) => {
-			radiusCookie.value = value;
-			if (import.meta.client) {
-				document.documentElement.style.setProperty("--ui-radius", RADIUS_CSS_VALUES[value]);
-			}
+	const radius = usePersistedSetting<RadiusPreset>({
+		key: "theme-radius",
+		default: "md",
+		validate: isRadiusPreset,
+		onSet: (value) => {
+			radiusVar.value = RADIUS_CSS_VALUES[value];
 		}
 	});
 

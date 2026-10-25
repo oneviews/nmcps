@@ -4,8 +4,11 @@
 		:title="$t('preferences.title')"
 		:description="$t('preferences.description')"
 		side="right"
+		:ui="{ content: 'max-w-xl' }"
 	>
-		<UserUserPreferencesPanel />
+		<template #body>
+			<UserPreferencesPanel />
+		</template>
 	</USlideover>
 </template>
 

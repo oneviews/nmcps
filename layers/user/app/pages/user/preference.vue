@@ -3,16 +3,14 @@
 		<UPageHeader :title="$t('preferences.title')" :description="$t('preferences.description')" />
 
 		<UPageBody>
-			<UserUserPreferencesPanel />
+			<UserPreferencesPanel />
 		</UPageBody>
 	</UPage>
 </template>
 
 <script setup lang="ts">
 	definePageMeta({
-		name: "preferences.title",
-		icon: "carbon:favorite",
-		category: "other",
-		description: "preferences.description"
+		sort: 2,
+		icon: "carbon:favorite"
 	});
 </script>

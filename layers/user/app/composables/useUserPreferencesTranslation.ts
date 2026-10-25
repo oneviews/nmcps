@@ -5,6 +5,21 @@ export function useUserPreferencesTranslation() {
 	const { t } = useI18n();
 
 	return computed(() => ({
+		layout: {
+			label: t("preferences.layout.label"),
+			mode: {
+				topbar: t("preferences.layout.mode.topbar"),
+				sidebar: t("preferences.layout.mode.sidebar"),
+				bigscreen: t("preferences.layout.mode.bigscreen"),
+				mobile: t("preferences.layout.mode.mobile")
+			},
+			maxWidth: {
+				label: t("preferences.layout.maxWidth.label"),
+				narrow: t("preferences.layout.maxWidth.narrow"),
+				wide: t("preferences.layout.maxWidth.wide"),
+				full: t("preferences.layout.maxWidth.full")
+			}
+		},
 		theme: {
 			label: t("preferences.theme.label"),
 			description: t("preferences.theme.description"),

@@ -54,10 +54,10 @@
 
 <script setup lang="ts">
 // 系统配色主题面板：外观模式 / 主题色 / 中性色 / 圆角 / 字体大小。
-	import type { NeutralColor, PrimaryColor } from "../../composables/useColorTheme";
+	import type { NeutralColor, PrimaryColor } from "../../composables/colorPalette";
 	import type { PreferenceOption } from "../../composables/useUserPreferenceOptions";
 	import type { RadiusPreset } from "../../composables/useVisualStyle";
-	import { NEUTRAL_COLORS, PRIMARY_COLORS } from "../../composables/useColorTheme";
+	import { NEUTRAL_COLORS, PRIMARY_COLORS } from "../../composables/colorPalette";
 	import { useUserPreferenceOptions } from "../../composables/useUserPreferenceOptions";
 	import { RADIUS_PRESETS } from "../../composables/useVisualStyle";
 

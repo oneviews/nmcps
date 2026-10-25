@@ -16,7 +16,12 @@
 	"common": {
 		"error": "错误",
 		"success": "成功",
-		"unavailableInBrowser": "浏览器中不可用"
+		"unavailableInBrowser": "浏览器中不可用",
+		"underConstruction": "功能开发中",
+		"userMenu": "用户菜单",
+		"switchAccount": "切换账号",
+		"logout": "退出登录",
+		"settings": "设置"
 	},
 	"pages": {
 		"index": {
@@ -85,6 +90,191 @@
 			"storeUnavailable": "存储功能在浏览器中不可用",
 			"valueRetrieved": "存储值已获取"
 		},
+		"dashboard": {
+			"description": "系统指标总览。",
+			"title": "系统全景"
+		},
+		"dashboard-overview": {
+			"description": "系统整体状态概览。",
+			"title": "系统概览"
+		},
+		"dashboard-agent": {
+			"title": "智能体助手"
+		},
+		"dashboard-kubernetes": {
+			"description": "以嵌入式界面查看云原生集群运行概览。",
+			"title": "云原生概览"
+		},
+		"dashboard-screen": {
+			"title": "态势大屏"
+		},
+		"topology": {
+			"description": "监控网络拓扑与状态。",
+			"title": "拓扑监控"
+		},
+		"topology-monitor": {
+			"description": "显示网络连接拓扑关系。",
+			"title": "拓扑监测"
+		},
+		"topology-device-metrics": {
+			"description": "设备 CPU/内存/流量等实时遥测指标",
+			"title": "设备遥测指标"
+		},
+		"topology-link-metrics": {
+			"description": "链路状态、端口与带宽利用率",
+			"title": "链路遥测指标"
+		},
+		"spectrum": {
+			"description": "管制电磁频谱：监测频谱占用、消解用频冲突，保障频谱资源有序。",
+			"title": "频谱管控"
+		},
+		"spectrum-monitor": {
+			"description": "实时扫描并监测 AP、信道占用与信号历史。",
+			"title": "频谱监测"
+		},
+		"spectrum-view": {
+			"description": "浏览器内本地合成谱（非 FFT 实测）：WebGL2 瀑布 / 3D 曲面 + 2D 谱线 + 信道检查器。",
+			"title": "频谱视图"
+		},
+		"spectrum-waterfall": {
+			"description": "以 AP 布局为输入的信道占用推演瀑布（仿真数据源，非硬件实测）。",
+			"title": "频谱瀑布"
+		},
+		"spectrum-pool": {
+			"description": "标准化频点资源池：可用 / 在用 / 保护 / 锁定 四类管控，支持锁定、释放、保护与回收",
+			"title": "频点池管理"
+		},
+		"spectrum-recommend": {
+			"description": "禁用频点推算与最优频段、收发频点、带宽推荐",
+			"title": "频率推荐"
+		},
+		"spectrum-resolution": {
+			"description": "消解邻道/同信道/DFS 等用频冲突与风险消息。",
+			"title": "冲突消解"
+		},
+		"spectrum-rrm": {
+			"description": "思科集中式模型：RF Group Leader 选举与 DCA / TPC / CHD 运行机制",
+			"title": "RRM 架构"
+		},
+		"scenario": {
+			"description": "设备清单与工程参数驱动的组网推理，输出拓扑分层、地址规划与配置骨架。",
+			"title": "场景建模"
+		},
+		"scenario-dispatch": {
+			"description": "以工程参数与设备清单为唯一输入，生成可派发的工程组网实施方案与三张标准化工单（设备配置单 / 开通施工单 / 验收标准清单），支持打印 PDF 与一键派单。",
+			"title": "工程组网派单"
+		},
+		"scenario-plan-generation": {
+			"title": "组网方案生成"
+		},
+		"scenario-task-planning": {
+			"description": "五步拓扑定义向导：定义层级与设备、规划终端 IP，生成并保存 Mininet 场景 YAML（供仿真网络验证选用）。",
+			"title": "任务网络筹划"
+		},
+		"scenario-sim-generation": {
+			"description": "最小化运控台：场景选择、会话启停、拓扑三态与 Mininet CLI 排查。",
+			"title": "仿真网络验证"
+		},
+		"device": {
+			"description": "管理通信设备链路。",
+			"title": "设备组网"
+		},
+		"device-device": {
+			"description": "录入与管理通信设备信息。",
+			"title": "设备纳管"
+		},
+		"device-mesh": {
+			"description": "配置通信节点组网。",
+			"title": "通信节点组网"
+		},
+		"device-policy": {
+			"description": "生成多约束路由策略并查看候选路径。",
+			"title": "多约束策略生成"
+		},
+		"device-route": {
+			"description": "模拟路由策略与路径。",
+			"title": "路由策略引擎"
+		},
+		"device-type": {
+			"description": "管理通信设备类型。",
+			"title": "设备类型管理"
+		},
+		"transmission": {
+			"description": "管理信息传输协议。",
+			"title": "传输管控"
+		},
+		"transmission-transmit": {
+			"description": "上下双控制台嵌入：上半部分与下半部分并置的两个传输控制台界面。",
+			"title": "手动传输"
+		},
+		"transmission-auto-transmit": {
+			"description": "上下双控制台嵌入：上半部分为快速发端控制台（page=quick）、下半部分为收端控制台。",
+			"title": "自动传输管控"
+		},
+		"content": {
+			"title": "内容中心"
+		},
+		"content-article": {
+			"description": "技术博客与工程实践分享",
+			"empty": "暂无文章",
+			"title": "技术博客"
+		},
+		"content-document": {
+			"backToList": "返回列表",
+			"description": "开发架构文档、决策记录与系统文档",
+			"empty": "暂无文档",
+			"notFound": "文档未找到",
+			"onThisPage": "本页目录",
+			"sectionArchitecture": "开发架构文档",
+			"sectionDocuments": "系统文档",
+			"sectionRecords": "决策记录",
+			"title": "系统文档"
+		},
+		"content-metadata": {
+			"title": "文件管理"
+		},
+		"content-release": {
+			"description": "版本发布日志与变更记录",
+			"empty": "暂无发布日志",
+			"title": "发布日志"
+		},
+		"system": {
+			"description": "管理系统设置与资源。",
+			"title": "系统管理"
+		},
+		"system-user": {
+			"description": "管理系统用户。",
+			"title": "用户管理"
+		},
+		"system-log": {
+			"title": "日志记录"
+		},
+		"system-permission": {
+			"description": "管理用户权限。",
+			"title": "权限管理"
+		},
+		"system-policy": {
+			"description": "配置系统策略。",
+			"title": "策略配置"
+		},
+		"user": {
+			"title": "用户中心"
+		},
+		"user-profile": {
+			"title": "个人资料"
+		},
+		"user-notification": {
+			"title": "通知设置"
+		},
+		"user-security": {
+			"title": "安全设置"
+		},
+		"user-preference": {
+			"title": "偏好设置"
+		},
+		"user-inbox": {
+			"title": "收件箱"
+		},
 		"notFound": {
 			"title": "页面未找到",
 			"description": "抱歉，我们找不到您要访问的页面。",
@@ -113,9 +303,9 @@
 				"radiusLabel": "圆角",
 				"fontScaleLabel": "系统字体大小",
 				"fontScale": {
-					"sm": "小",
+					"sm": "较小",
 					"md": "标准",
-					"lg": "大",
+					"lg": "较大",
 					"xl": "特大"
 				},
 				"radius": {
@@ -153,6 +343,28 @@
 				"mist": "雾蓝灰",
 				"taupe": "灰褐色"
 			}
+		},
+		"layout": {
+			"label": "布局模式",
+			"mode": {
+				"topbar": "顶栏",
+				"sidebar": "侧边栏",
+				"bigscreen": "大屏",
+				"mobile": "手机"
+			},
+			"maxWidth": {
+				"label": "最大宽度",
+				"narrow": "窄",
+				"wide": "宽",
+				"full": "全宽"
+			}
 		}
+	},
+	"layout": {
+		"toggleSidebar": "展开/收起侧边栏",
+		"searchPlaceholder": "搜索路由...",
+		"toggleMenu": "展开/收起菜单",
+		"search": "搜索",
+		"searchDocs": "文档"
 	}
 }

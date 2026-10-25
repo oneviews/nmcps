@@ -4,6 +4,18 @@
 			<template #header>
 				<div class="flex flex-col gap-1">
 					<p class="font-medium">
+						{{ prefT.layout.label }}
+					</p>
+				</div>
+			</template>
+
+			<UserLayoutModePicker />
+		</UCard>
+
+		<UCard>
+			<template #header>
+				<div class="flex flex-col gap-1">
+					<p class="font-medium">
 						{{ prefT.theme.label }}
 					</p>
 					<p class="text-sm text-muted">

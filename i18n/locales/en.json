@@ -16,7 +16,12 @@
 	"common": {
 		"error": "Error",
 		"success": "Success",
-		"unavailableInBrowser": "Unavailable in browser"
+		"unavailableInBrowser": "Unavailable in browser",
+		"underConstruction": "Under construction",
+		"userMenu": "User menu",
+		"switchAccount": "Switch account",
+		"logout": "Log out",
+		"settings": "Settings"
 	},
 	"pages": {
 		"index": {
@@ -85,6 +90,191 @@
 			"storeUnavailable": "Store is unavailable in browser",
 			"valueRetrieved": "Store value retrieved"
 		},
+		"dashboard": {
+			"description": "Overview of system metrics.",
+			"title": "System Panorama"
+		},
+		"dashboard-overview": {
+			"description": "Overall system status overview.",
+			"title": "Overview"
+		},
+		"dashboard-agent": {
+			"title": "Agent Assistant"
+		},
+		"dashboard-kubernetes": {
+			"description": "View the cloud-native cluster overview in an embedded console.",
+			"title": "Cloud Native"
+		},
+		"dashboard-screen": {
+			"title": "Situation Screen"
+		},
+		"topology": {
+			"description": "Monitor network topology and status.",
+			"title": "Topology"
+		},
+		"topology-monitor": {
+			"description": "Display network connection topology.",
+			"title": "Topology Monitor"
+		},
+		"topology-device-metrics": {
+			"description": "Real-time device telemetry: CPU / memory / traffic",
+			"title": "Device Metrics"
+		},
+		"topology-link-metrics": {
+			"description": "Link status, ports and bandwidth utilization",
+			"title": "Link Metrics"
+		},
+		"spectrum": {
+			"description": "Govern the electromagnetic spectrum: monitor usage and resolve RF conflicts.",
+			"title": "Spectrum"
+		},
+		"spectrum-monitor": {
+			"description": "Continuously scan APs, channel occupancy and signal history.",
+			"title": "Spectrum Monitor"
+		},
+		"spectrum-view": {
+			"description": "In-browser synthesized spectrum (not FFT-measured): WebGL2 waterfall / 3D surface + 2D trace + channel inspector.",
+			"title": "Spectrum View"
+		},
+		"spectrum-waterfall": {
+			"description": "Channel-occupancy waterfall projected from the AP layout (simulated source, not hardware-measured).",
+			"title": "Waterfall"
+		},
+		"spectrum-pool": {
+			"description": "Standard frequency resource pool: Available / In Use / Protected / Locked",
+			"title": "Frequency Pool"
+		},
+		"spectrum-recommend": {
+			"description": "Forbidden frequency derivation and optimal band / bandwidth recommendation",
+			"title": "Recommendation"
+		},
+		"spectrum-resolution": {
+			"description": "Resolve co-channel / overlap / DFS conflicts and risk messages.",
+			"title": "Resolution"
+		},
+		"spectrum-rrm": {
+			"description": "Cisco centralized model: RF Group Leader election and DCA / TPC / CHD",
+			"title": "RRM Architecture"
+		},
+		"scenario": {
+			"description": "Device-inventory driven planning engine that outputs layered topology, addressing and config skeletons.",
+			"title": "Scenario"
+		},
+		"scenario-dispatch": {
+			"description": "Dispatch the engineering parameters and device inventory as a deliverable engineering network implementation plan plus three standard work orders (device config sheet / commissioning sheet / acceptance checklist), with PDF print and one-click dispatch.",
+			"title": "Dispatch"
+		},
+		"scenario-plan-generation": {
+			"title": "Plan generation"
+		},
+		"scenario-task-planning": {
+			"description": "Five-step topology wizard: define layers and devices, plan terminal IPs, generate and save a Mininet scenario YAML (consumed by Simulation validation).",
+			"title": "Task planning"
+		},
+		"scenario-sim-generation": {
+			"description": "Minimal console: scene picking, session start/stop, three topology modes and Mininet CLI triage.",
+			"title": "Simulation"
+		},
+		"device": {
+			"description": "Manage communication device links.",
+			"title": "Device"
+		},
+		"device-device": {
+			"description": "Register and manage communication devices.",
+			"title": "Device Management"
+		},
+		"device-mesh": {
+			"description": "Configure communication node networking.",
+			"title": "Mesh Network"
+		},
+		"device-policy": {
+			"description": "Generate multi-constraint routing policies and inspect candidates.",
+			"title": "Routing Policy"
+		},
+		"device-route": {
+			"description": "Simulate routing policies and paths.",
+			"title": "Route Engine"
+		},
+		"device-type": {
+			"description": "Manage communication device types.",
+			"title": "Device Type"
+		},
+		"transmission": {
+			"description": "Manage information transmission protocols.",
+			"title": "Transmission"
+		},
+		"transmission-transmit": {
+			"description": "Embedded dual consoles: two transmit console panes stacked top and bottom.",
+			"title": "Manual transmit"
+		},
+		"transmission-auto-transmit": {
+			"description": "Embedded dual consoles: quick sender console (page=quick) on top, receiver console below.",
+			"title": "Auto transmit"
+		},
+		"content": {
+			"title": "Content"
+		},
+		"content-article": {
+			"description": "Technical blog and engineering practices",
+			"empty": "No articles",
+			"title": "Articles"
+		},
+		"content-document": {
+			"backToList": "Back to list",
+			"description": "Architecture docs, decision records and system docs",
+			"empty": "No documents",
+			"notFound": "Document not found",
+			"onThisPage": "On this page",
+			"sectionArchitecture": "Architecture Docs",
+			"sectionDocuments": "System Docs",
+			"sectionRecords": "Decision Records",
+			"title": "Documentation"
+		},
+		"content-metadata": {
+			"title": "File Management"
+		},
+		"content-release": {
+			"description": "Release notes and changelog",
+			"empty": "No release notes",
+			"title": "Release Notes"
+		},
+		"system": {
+			"description": "Manage system settings and resources.",
+			"title": "System"
+		},
+		"system-user": {
+			"description": "Manage system users.",
+			"title": "Users"
+		},
+		"system-log": {
+			"title": "Logs"
+		},
+		"system-permission": {
+			"description": "Manage user permissions.",
+			"title": "Permissions"
+		},
+		"system-policy": {
+			"description": "Configure system policies.",
+			"title": "Policies"
+		},
+		"user": {
+			"title": "User center"
+		},
+		"user-profile": {
+			"title": "Profile"
+		},
+		"user-notification": {
+			"title": "Notification"
+		},
+		"user-security": {
+			"title": "Security"
+		},
+		"user-preference": {
+			"title": "Preference"
+		},
+		"user-inbox": {
+			"title": "Inbox"
+		},
 		"notFound": {
 			"title": "Page not found",
 			"description": "Sorry, we couldn't find the page you're looking for.",
@@ -113,9 +303,9 @@
 				"radiusLabel": "Corner radius",
 				"fontScaleLabel": "System font size",
 				"fontScale": {
-					"sm": "Small",
+					"sm": "Smaller",
 					"md": "Standard",
-					"lg": "Large",
+					"lg": "Larger",
 					"xl": "Extra large"
 				},
 				"radius": {
@@ -153,6 +343,28 @@
 				"mist": "Mist gray",
 				"taupe": "Taupe"
 			}
+		},
+		"layout": {
+			"label": "Layout mode",
+			"mode": {
+				"topbar": "Topbar",
+				"sidebar": "Sidebar",
+				"bigscreen": "Bigscreen",
+				"mobile": "Mobile"
+			},
+			"maxWidth": {
+				"label": "Max width",
+				"narrow": "Narrow",
+				"wide": "Wide",
+				"full": "Full width"
+			}
 		}
+	},
+	"layout": {
+		"toggleSidebar": "Toggle sidebar",
+		"searchPlaceholder": "Search routes...",
+		"toggleMenu": "Expand/collapse menu",
+		"search": "Search",
+		"searchDocs": "Docs"
 	}
 }

@@ -1,6 +1,9 @@
+import { NEUTRAL_COLORS, PRIMARY_COLORS } from "~~/layers/user/app/composables/colorPalette";
+
 export default defineAppConfig({
 	app: {
 		name: "nmcps",
+		version: "2.0.0",
 		author: "Nicola Spadari",
 		repo: "https://github.com/NicolaSpadari/nmcps",
 		tauriSite: "https://tauri.app",
@@ -70,8 +73,56 @@ export default defineAppConfig({
 	},
 	ui: {
 		colors: {
-			primary: "green",
-			neutral: "zinc"
+			primary: "sky",
+			warning: "amber",
+			neutral: "slate",
+			// 主题色 / 中性色候选：单一事实源见 layers/user/app/composables/colorPalette.ts
+			...Object.fromEntries([...PRIMARY_COLORS, ...NEUTRAL_COLORS].map((color) => [color, color] as const))
+		},
+		icons: {
+			arrowDown: "carbon:arrow-down",
+			arrowLeft: "carbon:arrow-left",
+			arrowRight: "carbon:arrow-right",
+			arrowUp: "carbon:arrow-up",
+			caution: "carbon:warning",
+			check: "carbon:checkmark",
+			chevronDoubleLeft: "carbon:double-chevron-left",
+			chevronDoubleRight: "carbon:double-chevron-right",
+			chevronDown: "carbon:chevron-down",
+			chevronLeft: "carbon:chevron-left",
+			chevronRight: "carbon:chevron-right",
+			chevronUp: "carbon:chevron-up",
+			close: "carbon:close",
+			copy: "carbon:copy",
+			copyCheck: "carbon:copy",
+			dark: "carbon:moon",
+			drag: "carbon:draggable",
+			ellipsis: "carbon:overflow-menu-horizontal",
+			error: "carbon:error",
+			external: "carbon:arrow-up-right",
+			eye: "carbon:view",
+			eyeOff: "carbon:view-off",
+			file: "carbon:document-blank",
+			folder: "carbon:folder",
+			folderOpen: "carbon:folder-open",
+			hash: "carbon:hashtag",
+			info: "carbon:information",
+			light: "carbon:sun",
+			loading: "carbon:renew",
+			menu: "carbon:menu",
+			minus: "carbon:subtract",
+			panelClose: "carbon:side-panel-close",
+			panelOpen: "carbon:side-panel-open",
+			plus: "carbon:add",
+			reload: "carbon:rotate-360",
+			search: "carbon:search",
+			stop: "carbon:square-outline",
+			star: "carbon:star",
+			success: "carbon:checkmark-outline",
+			system: "carbon:laptop",
+			tip: "carbon:idea",
+			upload: "carbon:cloud-upload",
+			warning: "carbon:warning"
 		},
 		button: {
 			slots: {
