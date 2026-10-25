@@ -16,6 +16,41 @@
 @layer base {
 	html {
 		-webkit-tap-highlight-color: transparent;
+		/* 系统字体缩放：缩放根字号，rem 单位整体等比缩放（联动 --app-font-scale） */
+		font-size: calc(1rem * var(--app-font-scale, 1));
+	}
+
+	/* 细滚动条：跨平台统一视觉，减小桌面端占用（Tauri WebView 为 Chromium） */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--ui-border-accented) transparent;
+	}
+
+	::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background-color: var(--ui-border-accented);
+		border-radius: 999px;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background-color: var(--ui-text-muted);
+	}
+
+	/* 侧栏导航滚动条：hover 才显示，避免与主滚动条并列抢眼 */
+	[data-layout-metrics="sidebar"] nav::-webkit-scrollbar-thumb {
+		background-color: transparent;
+	}
+
+	[data-layout-metrics="sidebar"] nav:hover::-webkit-scrollbar-thumb {
+		background-color: var(--ui-border-accented);
 	}
 }
 
@@ -48,4 +83,24 @@
 .layout-enter-from,
 .layout-leave-to {
 	@apply opacity-0;
+}
+
+/* 侧栏纵向让位：USidebar 的固定容器从视口顶开始，下移到 header 下沿
+   （--layout-top 由布局根节点注入，对齐 v1 layout-mode-plan §三·3.8 R17） */
+[data-layout-metrics="sidebar"] [data-slot="container"] {
+	top: var(--layout-top, 0px);
+	bottom: auto;
+	height: calc(100svh - var(--layout-top, 0px));
+}
+
+/* 修复 UModal 弹窗未居中：UDashboardSearch 未给 UModal 传 scrollable，
+   @nuxt/ui 的 scrollable:false 居中变体（content: fixed + top/left + translate）
+   未命中，弹窗内容（reka-ui 渲染为 role="dialog" + data-slot="content"）落到视口左上角。
+   用独立的 translate 属性（而非 transform）还原居中，避免与 scale-in/out
+   动画（transform: scale()）冲突，缩放动画期间仍保持居中。 */
+[data-slot="content"][role="dialog"] {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	translate: -50% -50%;
 }
