@@ -4,9 +4,20 @@ export default defineNuxtConfig({
 		"@nuxt/ui",
 		"@vueuse/nuxt",
 		"nuxt-svgo",
-		"@nuxtjs/i18n"
+		"@nuxtjs/i18n",
+		"@nuxt/content"
 	],
-	extends: ["./layers/user"],
+	extends: [
+		"./layers/device",
+		"./layers/scenario",
+		"./layers/spectrum",
+		"./layers/dashboard",
+		"./layers/topology",
+		"./layers/transmission",
+		"./layers/content",
+		"./layers/system",
+		"./layers/user"
+	],
 	ssr: false,
 	ignore: ["**/src-tauri/**"],
 	i18n: {
@@ -30,14 +41,6 @@ export default defineNuxtConfig({
 				{ name: "format-detection", content: "no" },
 				{ name: "viewport", content: "width=device-width, initial-scale=1, maximum-scale=1" }
 			]
-		},
-		pageTransition: {
-			name: "page",
-			mode: "out-in"
-		},
-		layoutTransition: {
-			name: "layout",
-			mode: "out-in"
 		}
 	},
 	css: ["@/assets/css/main.css"],
@@ -67,7 +70,9 @@ export default defineNuxtConfig({
 	icon: {
 		clientBundle: {
 			scan: {
-				globInclude: ["**/*.{vue,ts}"]
+				globInclude: ["**/*.{vue,ts}"],
+				// 排除 legacy 参考代码（_reference）与生成产物，避免其 lucide 图标被打进客户端 bundle
+				globExclude: ["node_modules", "dist", "build", "coverage", "test", "tests", ".*", "_reference"]
 			}
 		}
 	},
