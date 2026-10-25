@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-content",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS content layer: content center",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}
