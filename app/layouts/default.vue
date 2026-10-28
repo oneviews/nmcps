@@ -75,6 +75,13 @@
 	const { mobileSidebarOpen, preferences } = useUserPreferences();
 	const { mode, isBigscreenMode, isTopbarMode, hasSidebar, isMobile, topbarMaxWidthClass } = useLayoutMode();
 
+	// 桌面端启动静默检查更新（浏览器预览由 useUpdater 内部 isTauri 守卫跳过）：
+	// 仅发现新版本时提示一次，由用户点击「立即更新」触发下载安装，避免冷启动打扰。
+	const { silentCheckForUpdates } = useUpdater();
+	onMounted(() => {
+		void silentCheckForUpdates();
+	});
+
 	// 文档内容区（左文件树 / 右目录）sticky 偏移：对齐 toolbar 下沿。
 	// - bigscreen 模式：滚动容器顶部已在 toolbar 下沿 → 0；
 	// - 其余模式（sidebar/topbar）：滚动容器顶部在 header 下沿、toolbar 在其中 sticky，

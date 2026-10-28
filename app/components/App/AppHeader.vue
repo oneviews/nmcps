@@ -46,6 +46,17 @@
 
 		<!-- 右侧：控制按钮 -->
 		<template #right>
+			<!-- 桌面端检查更新（浏览器预览无更新器，故按 isTauri 显隐） -->
+			<UButton
+				v-if="isDesktop"
+				icon="carbon:renew"
+				color="neutral"
+				variant="ghost"
+				class="rounded-full"
+				:loading="checking"
+				:aria-label="$t('nav.checkUpdates')"
+				@click="checkForUpdates"
+			/>
 			<SiteColorModeButton />
 			<UButton
 				icon="carbon:favorite"
@@ -81,6 +92,7 @@
 
 <script setup lang="ts">
 	import type { DropdownMenuItem } from "@nuxt/ui";
+	import { isTauri } from "@tauri-apps/api/core";
 
 	const { navigation, breadcrumb } = useNavigation();
 	const { preferences, isPreferencesOpen, toggleSidebar, toggleMobileSidebar } = useUserPreferences();
@@ -91,6 +103,10 @@
 	const { t, locale, setLocale } = useI18n();
 	const router = useRouter();
 	const { fontScale, setFontScale } = useFontScale();
+
+	// 自动更新：仅桌面端可用（浏览器预览隐藏入口，避免出现无效按钮）
+	const isDesktop = isTauri();
+	const { checking, checkForUpdates } = useUpdater();
 
 	// 语言选择持久化（与 app.vue 的 localeCookie 恢复逻辑单一事实源同步）
 	const localeCookie = useCookie<string>("locale", {

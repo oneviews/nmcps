@@ -13,6 +13,18 @@
 			"other": "Other"
 		}
 	},
+	"updater": {
+		"desktopOnly": "Auto-update is only available in the desktop app",
+		"found": "Update available",
+		"downloading": "Version {version} is available, downloading...",
+		"upToDate": "You are on the latest version",
+		"failed": "Failed to check for updates",
+		"available": {
+			"title": "Version {version} is available",
+			"description": "A new version is ready. Click install to upgrade now.",
+			"action": "Install now"
+		}
+	},
 	"common": {
 		"error": "Error",
 		"success": "Success",
