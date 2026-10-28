@@ -14,13 +14,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.8.0
+version: 0.9.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-10-25"
+updatedAt: "2026-10-28"
 icon: "carbon:list"
 tags:
   - "Governance"
@@ -105,6 +105,7 @@ tags:
 | NMCPS-ADR-0003 | Route Ordering Conventions | 5 | informative | rec.adr.0003 | baseline | records/adr/adr-0003.md |
 | NMCPS-ADR-0004 | Authority Pyramid Rollout | 5 | informative | rec.adr.0004 | baseline | records/adr/adr-0004.md |
 | NMCPS-ADR-0005 | English Mirror & Bilingual Integration | 5 | informative | rec.adr.0005 | baseline | records/adr/adr-0005.md |
+| NMCPS-ADR-0006 | Desktop Update Entry & Startup Silent Check | 5 | informative | rec.adr.0006 | baseline | records/adr/adr-0006.md |
 
 > Paths are relative to `layers/content/collections/cn/`; `en/` is the mirror collection with the same docId.
 
@@ -122,3 +123,4 @@ tags:
 | 2026-10-25 | 0.6.0 | Registered CONTRACT-001~002 (Tier 3, normative). |
 | 2026-10-25 | 0.7.0 | Registered ADR-0004 authority pyramid rollout / ADR-0005 English mirror (Tier 5, informative). |
 | 2026-10-25 | 0.8.0 | Tier 0~3 promoted to baseline (approved, authority in effect). |
+| 2026-10-28 | 0.9.0 | Registered ADR-0006 desktop update entry (Tier 5, informative). |

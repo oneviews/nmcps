@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.8.0
+version: 0.9.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-10-25"
+updatedAt: "2026-10-28"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -99,6 +99,7 @@ tags:
 | NMCPS-ADR-0003 | 路由排序规范 | 5 | informative | rec.adr.0003 | baseline | records/adr/adr-0003.md |
 | NMCPS-ADR-0004 | 权威金字塔落地 | 5 | informative | rec.adr.0004 | baseline | records/adr/adr-0004.md |
 | NMCPS-ADR-0005 | 双语镜像与接入 | 5 | informative | rec.adr.0005 | baseline | records/adr/adr-0005.md |
+| NMCPS-ADR-0006 | 桌面端自动更新入口 | 5 | informative | rec.adr.0006 | baseline | records/adr/adr-0006.md |
 | NMCPS-ARCH-001 | 通信面架构 | 1 | normative | arch.transport | baseline | architecture/1.architecture/transport-architecture.md |
 | NMCPS-ARCH-002 | 数据源架构 | 1 | normative | arch.datasource | baseline | architecture/1.architecture/datasource-architecture.md |
 | NMCPS-ARCH-003 | IAM 架构 | 1 | normative | arch.iam | baseline | architecture/1.architecture/iam-architecture.md |
@@ -129,3 +130,4 @@ tags:
 | 2026-10-25 | 0.6.0 | 登记 S3 契约层：CONTRACT-001 共享类型 / CONTRACT-002 指标契约（Tier 3，normative）。 |
 | 2026-10-25 | 0.7.0 | 登记记录层 ADR：0004 权威金字塔落地 / 0005 en 双语镜像与接入（Tier 5，informative）。 |
 | 2026-10-25 | 0.8.0 | Tier 0~3 全部推进为 baseline（评审通过，authority 正式生效）。 |
+| 2026-10-28 | 0.9.0 | 登记记录层 ADR：0006 桌面端自动更新入口（Tier 5，informative）。 |
