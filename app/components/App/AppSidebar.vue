@@ -47,6 +47,8 @@
 </template>
 
 <script setup lang="ts">
+	import type { NavigationMenuItem } from "@nuxt/ui";
+
 	withDefaults(defineProps<{
 		/** 收起态（icon 模式）：隐藏搜索/版本，导航菜单变纯图标 + tooltip/popover */
 		collapsed?: boolean
@@ -63,20 +65,17 @@
 
 	const route = useRoute();
 
-	// 当前页面根路由（一级导航组）的 to：折叠时保留该组展开
-	const activeRootTo = computed(() => {
-		const root = navigation.value.find((item) =>
-			item.to && (route.path === item.to || route.path.startsWith(`${item.to}/`))
+	// 分组根路由无 to（点击只负责展开/收起），故按子路由前缀判定当前页面所属分组
+	const isActiveGroup = (item: NavigationMenuItem): boolean =>
+		!!item.children?.some((child) =>
+			typeof child.to === "string" && (route.path === child.to || route.path.startsWith(`${child.to}/`))
 		);
-		return root?.to ?? null;
-	});
 
 	const navItems = computed(() =>
 		navigation.value.map((item) => {
 			if (item.children?.length) {
-				// true = 全部展开；否则（含初始态）仅展开当前页面根路由
-				const defaultOpen = expandOverride.value === true || item.to === activeRootTo.value;
-				return { ...item, defaultOpen };
+				// true = 全部展开；否则（含初始态）仅展开当前页面所属分组
+				return { ...item, defaultOpen: expandOverride.value === true || isActiveGroup(item) };
 			}
 			return item;
 		})
@@ -88,7 +87,7 @@
 	}
 
 	// 路由切换时强制重挂载导航菜单，让 defaultOpen 重新生效（UNavigationMenu 仅首次 mount 读取 defaultOpen）
-	watch(activeRootTo, () => {
+	watch(() => route.path, () => {
 		navKey.value++;
 	});
 </script>
