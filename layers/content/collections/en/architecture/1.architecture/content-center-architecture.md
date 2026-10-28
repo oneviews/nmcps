@@ -84,11 +84,14 @@ layers/content/collections/{cn,en}/
 
 | Route | Name | Collection | Status |
 | :--- | :--- | :--- | :--- |
-| `/content` | Content center | — | Redirect to `/content/document` |
-| `/content/document` | System docs | documents/ | Placeholder (pending) |
-| `/content/article` | Blog | articles/ | Placeholder (pending) |
-| `/content/release` | Release notes | releases/ | Placeholder (pending) |
+| `/content` | Content center | — | Redirect to `/content/architecture` |
+| `/content/architecture` | Architecture | architecture/ | Architecture docs (cards grouped by sub-directory) |
+| `/content/records` | Change Log | records/ | Decision records and version updates |
+| `/content/documents` | Technical Manual | documents/ | Technical manual |
+| `/content/articles` | Technical Blog | articles/ | Technical blog |
 | `/content/metadata` | File management | filesystem | Placeholder (pending) |
+
+> Sub-routes map one-to-one to the directory tree: `architecture/` → `/content/architecture`, `records/` (with `adr/` + `releases/`) → `/content/records`, `documents/` → `/content/documents`, `articles/` → `/content/articles`.
 
 ---
 

@@ -34,8 +34,24 @@ export interface LayoutPreferences {
 	maxWidth: TopbarMaxWidth
 }
 
+/** 背景强度：subtle 克制（默认，避免干扰阅读）/ normal 标准 */
+export type BackgroundIntensity = "subtle" | "normal";
+
+/** 外观偏好分区（科技感背景三层：总开关 / 静态网格 / 粒子动效 / 强度） */
+export interface AppearancePreferences {
+	/** 总开关（关闭则背景三层全部隐藏） */
+	enabled: boolean
+	/** L0 静态网格 + 扫描线（纯 CSS，零开销） */
+	grid: boolean
+	/** L2 粒子层（canvas 持续开销，默认开；可经偏好面板关闭） */
+	particles: boolean
+	/** 强度：控制粒子/网格的不透明度档位 */
+	intensity: BackgroundIntensity
+}
+
 export interface UserPreferences {
 	layout: LayoutPreferences
+	appearance: AppearancePreferences
 }
 
 /**
@@ -45,7 +61,7 @@ export interface UserPreferences {
  * - bigscreen：浮动卡片 + 展开
  */
 export const LAYOUT_MODE_PRESETS: Record<LayoutMode, SidebarPreferences> = {
-	sidebar: { variant: "sidebar", collapsible: "offcanvas", open: true },
+	sidebar: { variant: "sidebar", collapsible: "icon", open: true },
 	topbar: { variant: "sidebar", collapsible: "offcanvas", open: true },
 	bigscreen: { variant: "floating", collapsible: "icon", open: true },
 	mobile: { variant: "sidebar", collapsible: "offcanvas", open: true }
@@ -72,8 +88,15 @@ export function useUserPreferences(): UserPreferencesState {
 			mode: "bigscreen",
 			// 侧栏形态由预设派生（单源，避免与 LAYOUT_MODE_PRESETS 漂移）
 			sidebar: { ...LAYOUT_MODE_PRESETS.bigscreen },
-			// 顶栏模式内容最大宽度（默认全宽）
-			maxWidth: "full"
+			// 顶栏模式内容最大宽度（默认较宽）
+			maxWidth: "wide"
+		},
+		// 科技感背景：网格与粒子均默认开（粒子已具备可视性门控 + 降密度，见 Background.vue）
+		appearance: {
+			enabled: true,
+			grid: true,
+			particles: true,
+			intensity: "subtle"
 		}
 	}));
 

@@ -214,29 +214,76 @@
 		"content": {
 			"title": "Content"
 		},
-		"content-article": {
+		"content-architecture": {
+			"description": "Architecture, domain baselines and contracts",
+			"empty": "No documents",
+			"title": "Architecture"
+		},
+		"content-articles": {
 			"description": "Technical blog and engineering practices",
 			"empty": "No articles",
-			"title": "Articles"
+			"title": "Technical Blog"
 		},
 		"content-document": {
 			"backToList": "Back to list",
-			"description": "Architecture docs, decision records and system docs",
-			"empty": "No documents",
+			"metadata": {
+				"author": "Author",
+				"authority": "Authority",
+				"createdAt": "Created",
+				"dependsOn": "Depends on",
+				"description": "Summary",
+				"docId": "Doc ID",
+				"excerpt": "Excerpt",
+				"governance": "Governance",
+				"keywords": "Keywords",
+				"owner": "Owner",
+				"reviewBy": "Review by",
+				"scope": "Scope",
+				"status": "Status",
+				"supersededBy": "Superseded by",
+				"supersedes": "Supersedes",
+				"tags": "Tags",
+				"tier": "Tier",
+				"title": "Document Metadata",
+				"updatedAt": "Updated",
+				"values": {
+					"authority": {
+						"informative": "Informative",
+						"normative": "Normative"
+					},
+					"status": {
+						"baseline": "Baseline",
+						"deprecated": "Deprecated",
+						"draft": "Draft",
+						"review": "Review",
+						"superseded": "Superseded"
+					},
+					"tier": {
+						"0": "Governance/Charter",
+						"1": "Architecture",
+						"2": "Domain Baseline",
+						"3": "Contract/Reference",
+						"4": "Operations",
+						"5": "Record"
+					}
+				},
+				"version": "Version"
+			},
 			"notFound": "Document not found",
-			"onThisPage": "On this page",
-			"sectionArchitecture": "Architecture Docs",
-			"sectionDocuments": "System Docs",
-			"sectionRecords": "Decision Records",
-			"title": "Documentation"
+			"onThisPage": "On this page"
+		},
+		"content-documents": {
+			"description": "Getting started and operations runbooks",
+			"empty": "No documents",
+			"title": "Technical Manual"
 		},
 		"content-metadata": {
 			"title": "File Management"
 		},
-		"content-release": {
-			"description": "Release notes and changelog",
-			"empty": "No release notes",
-			"title": "Release Notes"
+		"content-records": {
+			"description": "Decision records and version updates",
+			"empty": "No records",
+			"title": "Change Log"
 		},
 		"system": {
 			"description": "Manage system settings and resources.",
@@ -284,6 +331,20 @@
 	"preferences": {
 		"title": "User Preferences",
 		"description": "Customize color scheme, appearance and styles.",
+		"appearance": {
+			"title": "Background & Visual",
+			"description": "The tech background is built from three progressive layers: a static grid (negligible cost) and particle animation (continuous GPU usage, enabled by default, can be turned off).",
+			"enabled": "Enable tech background",
+			"grid": "Static grid texture",
+			"gridHint": "Pure CSS grid and scanlines, virtually no performance cost",
+			"particles": "Particle animation",
+			"particlesHint": "Canvas particle network, visually richer but continuously uses resources; offscreen pause and density reduction are applied",
+			"intensity": {
+				"label": "Visual intensity",
+				"subtle": "Subtle",
+				"normal": "Normal"
+			}
+		},
 		"theme": {
 			"label": "Theme",
 			"description": "Customize color scheme, appearance and styles.",

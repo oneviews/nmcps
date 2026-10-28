@@ -4,6 +4,7 @@ description: "内容中心开发环境的快速启动指南：环境准备、安
 excerpt: "环境准备、安装依赖、启动 dev server 与运行校验。"
 createdAt: "2026-10-25"
 updatedAt: "2026-10-25"
+icon: "carbon:book"
 ---
 
 # 快速开始

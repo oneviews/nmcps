@@ -1,6 +1,6 @@
 [package]
 name = "nmcps"
-version = "1.7.1"
+version = "2.0.0"
 description = "Starter template for Nuxt 4 and Tauri 2"
 authors = ["NicolaSpadari"]
 license = "MIT"

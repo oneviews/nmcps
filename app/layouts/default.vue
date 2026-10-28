@@ -10,6 +10,9 @@
 			<DesignTopBlob />
 			<DesignBottomBlob />
 
+			<!-- 科技感背景（底雾 + 网格 + 扫描线 + 粒子网络，由偏好 appearance.* 开关驱动） -->
+			<AppBackground />
+
 			<AppHeader class="relative z-50 shrink-0" />
 
 			<div class="relative flex min-h-0 flex-1">
@@ -32,20 +35,21 @@
 					class="relative min-w-0 flex-1"
 					:class="isBigscreenMode ? '' : 'overflow-y-auto overflow-x-clip'"
 				>
-					<!-- 大屏模式：页面内容为固定边框盒（absolute 定位不随滚动，圆角 + 边框），滚动发生在内容页内部（滚动条在边框内）；左侧 0（由浮动 sidebar 16px 内缩提供间距），上/右/下 16px 间距一致；其余模式由 main 整体滚动 -->
+					<!-- 大屏模式：页面内容为固定边框盒（absolute 定位不随滚动，圆角 + 边框），滚动发生在内容页内部（滚动条在边框内，toolbar 在滚动容器内 sticky 使磨砂玻璃生效）；左侧 0，上/右/下 16px 间距一致；其余模式由 main 整体滚动 -->
 					<div
 						data-layout-metrics="content"
 						:class="isBigscreenMode
 							? 'absolute inset-y-4 left-0 right-4 flex flex-col overflow-hidden rounded-lg border border-(--ui-border)'
 							: 'min-h-full'"
 					>
-						<AppToolbar />
+						<AppToolbar v-if="!isBigscreenMode" />
 						<div
 							:class="[
 								isBigscreenMode ? 'min-h-0 flex-1 overflow-y-auto overflow-x-clip' : '',
 								isTopbarMode ? `${topbarMaxWidthClass} mx-auto` : '',
 							]"
 						>
+							<AppToolbar v-if="isBigscreenMode" />
 							<slot />
 						</div>
 					</div>

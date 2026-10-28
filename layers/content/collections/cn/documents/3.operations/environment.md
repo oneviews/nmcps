@@ -4,6 +4,7 @@ description: "内容中心开发环境调优：dev server 配置、@nuxt/content
 excerpt: "dev server 配置、content 缓存与 HMR 调优。"
 createdAt: "2026-10-25"
 updatedAt: "2026-10-25"
+icon: "carbon:book"
 ---
 
 # 开发环境调优

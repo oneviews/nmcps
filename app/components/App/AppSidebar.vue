@@ -1,13 +1,16 @@
 <template>
 	<div class="flex h-full w-full flex-col overflow-hidden">
-		<!-- 第一层：路由搜索 + 菜单展开/收起（收起态隐藏） -->
-		<div v-if="!collapsed" class="flex items-center gap-2 border-b border-(--ui-border) p-2">
+		<!-- 第一层：路由搜索（收起态：连同外边距总高 49px 对齐工具栏）+ 菜单展开/收起（仅展开态显示） -->
+		<div class="flex items-center border-b border-(--ui-border)" :class="collapsed ? 'h-[49px] justify-center' : 'gap-2 p-2'">
 			<UDashboardSearchButton
-				class="min-w-0 flex-1"
+				:collapsed="collapsed"
+				:tooltip="collapsed"
+				:class="collapsed ? '' : 'min-w-0 flex-1'"
 				size="sm"
 				:label="$t('layout.search')"
 			/>
 			<UButton
+				v-if="!collapsed"
 				:icon="expandOverride === true ? 'carbon:collapse-all' : 'carbon:expand-all'"
 				color="neutral"
 				variant="ghost"
@@ -36,7 +39,7 @@
 			<UBadge variant="subtle" color="neutral">
 				{{ app.name.toUpperCase() }}
 			</UBadge>
-			<UBadge variant="subtle" color="neutral">
+			<UBadge variant="subtle" color="success">
 				v{{ app.version }}
 			</UBadge>
 		</div>
@@ -70,8 +73,8 @@
 
 	const navItems = computed(() =>
 		navigation.value.map((item) => {
-			if (item.children?.length && expandOverride.value !== null) {
-				// true = 全部展开；false = 折叠所有，但保留当前页面根路由展开
+			if (item.children?.length) {
+				// true = 全部展开；否则（含初始态）仅展开当前页面根路由
 				const defaultOpen = expandOverride.value === true || item.to === activeRootTo.value;
 				return { ...item, defaultOpen };
 			}
@@ -83,4 +86,9 @@
 		expandOverride.value = expandOverride.value !== true;
 		navKey.value++;
 	}
+
+	// 路由切换时强制重挂载导航菜单，让 defaultOpen 重新生效（UNavigationMenu 仅首次 mount 读取 defaultOpen）
+	watch(activeRootTo, () => {
+		navKey.value++;
+	});
 </script>

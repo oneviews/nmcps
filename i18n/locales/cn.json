@@ -214,29 +214,76 @@
 		"content": {
 			"title": "内容中心"
 		},
-		"content-article": {
+		"content-architecture": {
+			"description": "开发架构、领域基准与契约文档",
+			"empty": "暂无文档",
+			"title": "开发架构"
+		},
+		"content-articles": {
 			"description": "技术博客与工程实践分享",
 			"empty": "暂无文章",
 			"title": "技术博客"
 		},
 		"content-document": {
 			"backToList": "返回列表",
-			"description": "开发架构文档、决策记录与系统文档",
-			"empty": "暂无文档",
+			"metadata": {
+				"author": "作者",
+				"authority": "权威性",
+				"createdAt": "创建时间",
+				"dependsOn": "依赖",
+				"description": "摘要",
+				"docId": "文档标识",
+				"excerpt": "摘录",
+				"governance": "治理信息",
+				"keywords": "关键词",
+				"owner": "负责人",
+				"reviewBy": "复审日期",
+				"scope": "作用域",
+				"status": "状态",
+				"supersededBy": "被替代",
+				"supersedes": "替代",
+				"tags": "标签",
+				"tier": "层级",
+				"title": "文档元数据",
+				"updatedAt": "更新时间",
+				"values": {
+					"authority": {
+						"informative": "参考",
+						"normative": "规范"
+					},
+					"status": {
+						"baseline": "已批准",
+						"deprecated": "已弃用",
+						"draft": "草稿",
+						"review": "评审中",
+						"superseded": "已取代"
+					},
+					"tier": {
+						"0": "治理/宪章层",
+						"1": "架构层",
+						"2": "领域基准层",
+						"3": "契约/参考层",
+						"4": "作业层",
+						"5": "记录层"
+					}
+				},
+				"version": "版本"
+			},
 			"notFound": "文档未找到",
-			"onThisPage": "本页目录",
-			"sectionArchitecture": "开发架构文档",
-			"sectionDocuments": "系统文档",
-			"sectionRecords": "决策记录",
-			"title": "系统文档"
+			"onThisPage": "本页目录"
+		},
+		"content-documents": {
+			"description": "快速开始与操作运维手册",
+			"empty": "暂无文档",
+			"title": "技术手册"
 		},
 		"content-metadata": {
 			"title": "文件管理"
 		},
-		"content-release": {
-			"description": "版本发布日志与变更记录",
-			"empty": "暂无发布日志",
-			"title": "发布日志"
+		"content-records": {
+			"description": "决策记录与版本更新",
+			"empty": "暂无记录",
+			"title": "变更记录"
 		},
 		"system": {
 			"description": "管理系统设置与资源。",
@@ -284,6 +331,20 @@
 	"preferences": {
 		"title": "用户偏好设置",
 		"description": "自定义系统配色、外观和样式。",
+		"appearance": {
+			"title": "背景与视觉",
+			"description": "科技感背景由三层递进构成：静态网格（开销极低）与粒子动效（持续占用 GPU，默认开启，可按需关闭）。",
+			"enabled": "启用科技感背景",
+			"grid": "静态网格底纹",
+			"gridHint": "纯 CSS 网格与扫描线，几乎不占用性能",
+			"particles": "粒子动效",
+			"particlesHint": "canvas 粒子网络，视觉更强但持续占用性能；已做离屏暂停与降密度优化",
+			"intensity": {
+				"label": "视觉强度",
+				"subtle": "克制",
+				"normal": "标准"
+			}
+		},
 		"theme": {
 			"label": "主题设置",
 			"description": "自定义系统配色、外观和样式。",
@@ -348,14 +409,14 @@
 			"label": "布局模式",
 			"mode": {
 				"topbar": "顶栏",
-				"sidebar": "侧边栏",
+				"sidebar": "侧栏",
 				"bigscreen": "大屏",
 				"mobile": "手机"
 			},
 			"maxWidth": {
 				"label": "最大宽度",
-				"narrow": "窄",
-				"wide": "宽",
+				"narrow": "较窄",
+				"wide": "较宽",
 				"full": "全宽"
 			}
 		}

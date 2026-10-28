@@ -29,44 +29,44 @@ export default defineAppConfig({
 		}
 	},
 	downloads: {
-		version: "1.7.1",
-		basePath: "https://github.com/oneviews/nmcps/releases/download/nmcps-v1.7.1",
+		version: "2.0.0",
+		basePath: "https://github.com/oneviews/nmcps/releases/download/nmcps-v2.0.0",
 		assets: {
 			windows: {
 				label: "Windows",
 				icon: "carbon:screen",
 				files: [
-					{ label: ".exe (x64)", file: "nmcps_1.7.1_x64-setup.exe" },
-					{ label: ".msi (x64)", file: "nmcps_1.7.1_x64_en-US.msi" },
-					{ label: ".exe (arm64)", file: "nmcps_1.7.1_arm64-setup.exe" },
-					{ label: ".msi (arm64)", file: "nmcps_1.7.1_arm64_en-US.msi" }
+					{ label: ".exe (x64)", file: "nmcps_2.0.0_x64-setup.exe" },
+					{ label: ".msi (x64)", file: "nmcps_2.0.0_x64_en-US.msi" },
+					{ label: ".exe (arm64)", file: "nmcps_2.0.0_arm64-setup.exe" },
+					{ label: ".msi (arm64)", file: "nmcps_2.0.0_arm64_en-US.msi" }
 				]
 			},
 			macos: {
 				label: "macOS",
 				icon: "carbon:apple",
 				files: [
-					{ label: ".dmg (Universal)", file: "nmcps_1.7.1_universal.dmg" }
+					{ label: ".dmg (Universal)", file: "nmcps_2.0.0_universal.dmg" }
 				]
 			},
 			linux: {
 				label: "Linux",
 				icon: "carbon:terminal",
 				files: [
-					{ label: ".deb (x64)", file: "nmcps_1.7.1_amd64.deb" },
-					{ label: ".rpm (x64)", file: "nmcps-1.7.1-1.x86_64.rpm" },
-					{ label: ".AppImage (x64)", file: "nmcps_1.7.1_amd64.AppImage" },
-					{ label: ".deb (arm64)", file: "nmcps_1.7.1_arm64.deb" },
-					{ label: ".rpm (arm64)", file: "nmcps-1.7.1-1.aarch64.rpm" },
-					{ label: ".AppImage (arm64)", file: "nmcps_1.7.1_aarch64.AppImage" }
+					{ label: ".deb (x64)", file: "nmcps_2.0.0_amd64.deb" },
+					{ label: ".rpm (x64)", file: "nmcps-2.0.0-1.x86_64.rpm" },
+					{ label: ".AppImage (x64)", file: "nmcps_2.0.0_amd64.AppImage" },
+					{ label: ".deb (arm64)", file: "nmcps_2.0.0_arm64.deb" },
+					{ label: ".rpm (arm64)", file: "nmcps-2.0.0-1.aarch64.rpm" },
+					{ label: ".AppImage (arm64)", file: "nmcps_2.0.0_aarch64.AppImage" }
 				]
 			},
 			android: {
 				label: "Android",
 				icon: "carbon:mobile",
 				files: [
-					{ label: ".apk (Universal)", file: "nmcps_1.7.1_universal.apk" },
-					{ label: ".aab (Universal)", file: "nmcps_1.7.1_universal.aab" }
+					{ label: ".apk (Universal)", file: "nmcps_2.0.0_universal.apk" },
+					{ label: ".aab (Universal)", file: "nmcps_2.0.0_universal.aab" }
 				]
 			}
 		}
@@ -127,6 +127,14 @@ export default defineAppConfig({
 		button: {
 			slots: {
 				base: "cursor-pointer"
+			}
+		},
+		card: {
+			slots: {
+				root: "backdrop-blur-sm"
+			},
+			defaultVariants: {
+				variant: "subtle"
 			}
 		},
 		formField: {

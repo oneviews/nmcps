@@ -4,6 +4,7 @@ description: "Quick start for the content center dev environment: prerequisites,
 excerpt: "Prerequisites, install, start dev server, run validation."
 createdAt: "2026-10-25"
 updatedAt: "2026-10-25"
+icon: "carbon:book"
 ---
 
 # Quick Start

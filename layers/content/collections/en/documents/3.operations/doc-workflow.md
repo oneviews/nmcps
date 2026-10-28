@@ -4,6 +4,7 @@ description: "Runbook for the content center docs-before-code workflow: adding g
 excerpt: "Add docs, register docId, pass guard, bilingual mirror, promote status."
 createdAt: "2026-10-25"
 updatedAt: "2026-10-25"
+icon: "carbon:book"
 ---
 
 # Doc System Runbook
@@ -14,7 +15,7 @@ Runbook for the docs-before-code workflow. Governance: `NMCPS-GOV-001`; authorit
 
 Governed directories: `architecture/` (Tier 0~3), `records/` (Tier 5).
 
-1. Write the doc with `docId` / `tier` / `authority` / `scope` / `status` / `owner` / `reviewBy` in frontmatter.
+1. Write the doc with `docId` / `tier` / `authority` / `scope` / `status` / `owner` / `reviewBy` / `icon` in frontmatter.
 2. Register the `docId ↔ path` mapping in `shared/constants/docIds.ts`.
 3. Register the domain map and document table in `doc-map.md` (NMCPS-GOV-003), and append a changelog entry.
 4. Run `pnpm check:doc-system`; all six assertions must pass.
@@ -23,7 +24,7 @@ Governed directories: `architecture/` (Tier 0~3), `records/` (Tier 5).
 
 Plain directories: `documents/`, `articles/`, `releases/`.
 
-Only basic fields (`title` / `createdAt`) are required; no governance fields, no docId registration, no doc-map update.
+Basic fields (`title` / `createdAt` / `icon`) are required; no governance fields, no docId registration, no doc-map update. Assign a directory-appropriate icon (`architecture/` = `carbon:catalog`, `records/` = `carbon:decision-tree`, `documents/` = `carbon:book`, `releases/` = `carbon:launch`, `articles/` = `carbon:blog`); it must not be empty.
 
 ## Bilingual Mirror
 

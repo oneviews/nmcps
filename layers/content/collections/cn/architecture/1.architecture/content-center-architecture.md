@@ -86,13 +86,14 @@ layers/content/collections/{cn,en}/
 
 | 路由 | 名称 | 集合 | 现状 |
 | :--- | :--- | :--- | :--- |
-| `/content` | 内容中心 | — | 重定向到 `/content/document` |
-| `/content/document` | 系统文档 | documents/ | 占位页（待实现） |
-| `/content/article` | 技术博客 | articles/ | 占位页（待实现） |
-| `/content/release` | 发布日志 | releases/ | 占位页（待实现） |
+| `/content` | 内容中心 | — | 重定向到 `/content/architecture` |
+| `/content/architecture` | 开发架构 | architecture/ | 架构文档列表（按子目录分类卡片） |
+| `/content/records` | 变更记录 | records/ | 决策记录与版本更新列表 |
+| `/content/documents` | 技术手册 | documents/ | 技术手册列表 |
+| `/content/articles` | 技术博客 | articles/ | 技术博客列表 |
 | `/content/metadata` | 文件管理 | 文件系统 | 占位页（待实现） |
 
-> 开发架构文档（`architecture/`、`records/`）当前通过 `/content/document` 承载展示；若后续需要独立入口，再评估新增路由。
+> 子路由与目录树一一对应：`architecture/` → `/content/architecture`、`records/`（含 `adr/` + `releases/`）→ `/content/records`、`documents/` → `/content/documents`、`articles/` → `/content/articles`。
 
 ---
 

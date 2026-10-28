@@ -97,8 +97,13 @@
    @nuxt/ui 的 scrollable:false 居中变体（content: fixed + top/left + translate）
    未命中，弹窗内容（reka-ui 渲染为 role="dialog" + data-slot="content"）落到视口左上角。
    用独立的 translate 属性（而非 transform）还原居中，避免与 scale-in/out
-   动画（transform: scale()）冲突，缩放动画期间仍保持居中。 */
-[data-slot="content"][role="dialog"] {
+   动画（transform: scale()）冲突，缩放动画期间仍保持居中。
+
+   ⚠️ 仅对 UModal 生效：USlideover 同样渲染 role="dialog" + data-slot="content"，
+   但携带 data-side（left/right/top/bottom）定位锚点。若不加 :not([data-side])，
+   该居中规则会覆盖 slideover 的 right-0/inset-y-0，把「右侧划入」的偏好设置
+   抽屉强行拽到页面中央。 */
+[data-slot="content"][role="dialog"]:not([data-side]) {
 	position: fixed;
 	top: 50%;
 	left: 50%;

@@ -5,6 +5,20 @@ export function useUserPreferencesTranslation() {
 	const { t } = useI18n();
 
 	return computed(() => ({
+		appearance: {
+			title: t("preferences.appearance.title"),
+			description: t("preferences.appearance.description"),
+			enabled: t("preferences.appearance.enabled"),
+			grid: t("preferences.appearance.grid"),
+			gridHint: t("preferences.appearance.gridHint"),
+			particles: t("preferences.appearance.particles"),
+			particlesHint: t("preferences.appearance.particlesHint"),
+			intensity: {
+				label: t("preferences.appearance.intensity.label"),
+				subtle: t("preferences.appearance.intensity.subtle"),
+				normal: t("preferences.appearance.intensity.normal")
+			}
+		},
 		layout: {
 			label: t("preferences.layout.label"),
 			mode: {

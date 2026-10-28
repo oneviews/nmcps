@@ -6,7 +6,7 @@
 		</UFormField>
 
 		<!-- 主题色 -->
-		<UFormField :label="prefT.theme.primary.label">
+		<UFormField :label="prefT.theme.primary.label" size="sm">
 			<div class="flex flex-wrap gap-2">
 				<UTooltip v-for="option in primaryOptions" :key="option.key" :text="option.label">
 					<UButton
@@ -23,7 +23,7 @@
 		</UFormField>
 
 		<!-- 中性色 -->
-		<UFormField :label="prefT.theme.neutral.label">
+		<UFormField :label="prefT.theme.neutral.label" size="sm">
 			<div class="flex flex-wrap gap-2">
 				<UTooltip v-for="option in neutralOptions" :key="option.key" :text="option.label">
 					<UButton

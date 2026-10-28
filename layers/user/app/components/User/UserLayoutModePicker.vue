@@ -1,12 +1,14 @@
 <template>
-	<UFormField :label="prefT.layout.label">
-		<UserPreferenceRadioGroup v-model="mode" :items="modeItems" />
-	</UFormField>
+	<div class="flex w-full flex-col gap-4">
+		<UFormField :label="prefT.layout.label" size="sm">
+			<UserPreferenceRadioGroup v-model="mode" :items="modeItems" />
+		</UFormField>
 
-	<!-- 顶栏模式：内容最大宽度（窄 / 宽 / 全宽） -->
-	<UFormField v-if="mode === 'topbar'" :label="prefT.layout.maxWidth.label">
-		<UserPreferenceRadioGroup v-model="maxWidth" :items="maxWidthItems" />
-	</UFormField>
+		<!-- 顶栏模式：内容最大宽度（窄 / 宽 / 全宽） -->
+		<UFormField v-if="mode === 'topbar'" :label="prefT.layout.maxWidth.label" size="sm">
+			<UserPreferenceRadioGroup v-model="maxWidth" :items="maxWidthItems" />
+		</UFormField>
+	</div>
 </template>
 
 <script setup lang="ts">

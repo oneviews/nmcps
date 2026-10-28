@@ -4,6 +4,7 @@ description: "Content center dev environment tuning: dev server config, @nuxt/co
 excerpt: "Dev server config, content cache, HMR tuning."
 createdAt: "2026-10-25"
 updatedAt: "2026-10-25"
+icon: "carbon:book"
 ---
 
 # Environment Tuning

@@ -37,7 +37,7 @@
 		"devUrl": "http://localhost:3000"
 	},
 	"productName": "nmcps",
-	"version": "1.7.1",
+	"version": "2.0.0",
 	"identifier": "com.nicolaspadari.nmcps",
 	"plugins": {
 		"updater": {

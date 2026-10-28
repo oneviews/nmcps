@@ -3,5 +3,5 @@
 </template>
 
 <script setup lang="ts">
-	definePageMeta({ sort: 4, icon: "carbon:data-connected" });
+	definePageMeta({ sort: 5, icon: "carbon:data-connected" });
 </script>

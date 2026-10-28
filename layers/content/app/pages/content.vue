@@ -8,7 +8,7 @@
 	const route = useRoute();
 	onMounted(() => {
 		if (route.path === "/content") {
-			navigateTo("/content/document", { replace: true });
+			navigateTo("/content/architecture", { replace: true });
 		}
 	});
 </script>

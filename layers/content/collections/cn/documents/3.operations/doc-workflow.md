@@ -4,6 +4,7 @@ description: "内容中心「先文档、再落码」的操作 runbook：新增�
 excerpt: "新增文档、注册 docId、过守卫、双语镜像与推进 status 的 runbook。"
 createdAt: "2026-10-25"
 updatedAt: "2026-10-25"
+icon: "carbon:book"
 ---
 
 # 文档体系操作手册
@@ -14,7 +15,7 @@ updatedAt: "2026-10-25"
 
 受治理目录：`architecture/`（Tier 0~3）、`records/`（Tier 5）。
 
-1. 写文档，frontmatter 携带 `docId` / `tier` / `authority` / `scope` / `status` / `owner` / `reviewBy`。
+1. 写文档，frontmatter 携带 `docId` / `tier` / `authority` / `scope` / `status` / `owner` / `reviewBy` / `icon`。
 2. 在 `shared/constants/docIds.ts` 登记 `docId ↔ 路径` 唯一映射。
 3. 在 `doc-map.md`（NMCPS-GOV-003）登记域级地图与文档总表，并追加变更记录。
 4. 运行 `pnpm check:doc-system`，六组断言全部通过。
@@ -23,7 +24,7 @@ updatedAt: "2026-10-25"
 
 普通目录：`documents/`、`articles/`、`releases/`。
 
-frontmatter 只需 `title` / `createdAt` 等基础字段，无需治理字段，不注册 docId、不更新 doc-map。
+frontmatter 需携带 `title` / `createdAt` / `icon` 等基础字段，无需治理字段，不注册 docId、不更新 doc-map。`icon` 按目录分配合适图标（`architecture/` = `carbon:catalog`、`records/` = `carbon:decision-tree`、`documents/` = `carbon:book`、`releases/` = `carbon:launch`、`articles/` = `carbon:blog`），不可为空。
 
 ## 双语镜像
 
