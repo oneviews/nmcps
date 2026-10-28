@@ -34,19 +34,19 @@ await page.waitForURL("**/dashboard/overview", { timeout: 15000 }).catch(() => {
 const layoutMode = await page.evaluate(() => document.querySelector("[data-layout-mode]")?.getAttribute("data-layout-mode"));
 log("默认布局模式 = bigscreen", layoutMode === "bigscreen", layoutMode);
 
-// 2. header：磨砂玻璃 + 阴影 + 底框
+// 2. header：磨砂玻璃 + 阴影 + 底框（UHeader 根元素 header[data-slot='root']）
 const headerStyle = await page.evaluate(() => {
-	const el = document.querySelector(".side-head");
+	const el = document.querySelector("header[data-slot='root']");
 	if (!el) return null;
 	const s = getComputedStyle(el);
-	return { backdropFilter: s.backdropFilter, boxShadow: s.boxShadow, backgroundImage: s.backgroundImage, backgroundColor: s.backgroundColor };
+	return { backdropFilter: s.backdropFilter, boxShadow: s.boxShadow, borderBottomWidth: s.borderBottomWidth };
 });
 if (!headerStyle) {
-	log("header(.side-head) 存在", false, "未找到 .side-head");
+	log("header(UHeader) 存在", false, "未找到 header[data-slot='root']");
 } else {
 	log("header 磨砂玻璃(backdrop-filter)", headerStyle.backdropFilter !== "none", headerStyle.backdropFilter);
 	log("header 阴影(box-shadow)", headerStyle.boxShadow !== "none", headerStyle.boxShadow);
-	log("header 底框(background-image)", headerStyle.backgroundImage !== "none", headerStyle.backgroundImage.slice(0, 60));
+	log("header 底框(border-bottom)", headerStyle.borderBottomWidth !== "0px", headerStyle.borderBottomWidth);
 }
 
 // 2.5 toolbar：磨砂玻璃
@@ -68,7 +68,7 @@ const contentCard = await page.evaluate(() => {
 	if (!el) return null;
 	const s = getComputedStyle(el);
 	const toolbar = document.querySelector(".app-toolbar");
-	const header = document.querySelector(".side-head");
+	const header = document.querySelector("header[data-slot='root']");
 	const tr = toolbar?.getBoundingClientRect();
 	const er = el.getBoundingClientRect();
 	const hr = header?.getBoundingClientRect();
