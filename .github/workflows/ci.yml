@@ -22,6 +22,7 @@ jobs:
   quality:
     name: lint / typecheck / doc guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -49,6 +50,7 @@ jobs:
   runtime:
     name: BFF contract / page UI
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
 
