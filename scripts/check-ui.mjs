@@ -1,13 +1,18 @@
 // scripts/check-ui.mjs
 // 无头浏览器自查：跑在服务器上，用 Playwright 打开页面并断言关键视觉/布局点。
-// ⚠️ 基准地址：服务器端开发，不能用 localhost，须指向 http://192.168.1.90:3000
+// 基准地址：默认指向内网 dev server（服务器端开发不能用 localhost，须是 http://192.168.1.90:3000）；
+// CI 用 CHECK_UI_BASE_URL 覆盖为本地构建产物，例如 http://127.0.0.1:3000。
+// 环境变量：CHECK_UI_BASE_URL（被测地址）、CHECK_UI_SCREENSHOT（截图输出路径）。
 import { chromium } from "playwright";
 
-const BASE_URL = "http://192.168.1.90:3000";
+const BASE_URL = process.env.CHECK_UI_BASE_URL ?? "http://192.168.1.90:3000";
+const SHOT_PATH = process.env.CHECK_UI_SCREENSHOT ?? "/tmp/ui-check.png";
 
-// 绕过环境里的 HTTP 代理（直连内网 dev server）
-process.env.NO_PROXY = process.env.NO_PROXY || "192.168.1.90,127.0.0.1,localhost";
-process.env.no_proxy = process.env.no_proxy || "192.168.1.90,127.0.0.1,localhost";
+// 绕过环境里的 HTTP 代理（直连被测服务）
+const BASE_HOST = new URL(BASE_URL).hostname;
+const NO_PROXY_HOSTS = `${BASE_HOST},192.168.1.90,127.0.0.1,localhost`;
+process.env.NO_PROXY = process.env.NO_PROXY || NO_PROXY_HOSTS;
+process.env.no_proxy = process.env.no_proxy || NO_PROXY_HOSTS;
 
 const results = [];
 function log(label, ok, detail) {
@@ -192,8 +197,8 @@ if (!centering) {
 }
 
 // 截图
-await page.screenshot({ path: "/tmp/ui-check.png", fullPage: false });
-log("截图已保存", true, "/tmp/ui-check.png");
+await page.screenshot({ path: SHOT_PATH, fullPage: false });
+log("截图已保存", true, SHOT_PATH);
 
 // 5. 控制台错误/告警
 log("控制台错误", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | ") || "无");
