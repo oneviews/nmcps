@@ -38,14 +38,43 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare log directory
+        run: mkdir -p ci-logs
+
       - name: Lint
-        run: pnpm lint
+        run: |
+          set +e
+          pnpm lint 2>&1 | tee ci-logs/lint.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "lint" ci-logs/lint.log
+          exit $status
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: |
+          set +e
+          pnpm typecheck 2>&1 | tee ci-logs/typecheck.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "typecheck" ci-logs/typecheck.log
+          exit $status
 
       - name: Doc system guard
-        run: pnpm check:doc-system
+        run: |
+          set +e
+          pnpm check:doc-system 2>&1 | tee ci-logs/doc-system.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "doc system guard" ci-logs/doc-system.log
+          exit $status
+
+      - name: Upload quality check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-quality
+          path: |
+            ci-logs/lint.log
+            ci-logs/typecheck.log
+            ci-logs/doc-system.log
+          if-no-files-found: ignore
 
   runtime:
     name: BFF contract / page UI
@@ -67,11 +96,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build BFF
-        run: pnpm build:server
+        run: mkdir -p ci-logs && pnpm build:server 2>&1 | tee ci-logs/build-server.log
 
       # 网关契约：脚本自己拉起 .output/server 与假上游，占用随机空闲端口。
       - name: Gateway contract checks
-        run: pnpm check:bff
+        run: |
+          set +e
+          pnpm check:bff 2>&1 | tee ci-logs/check-bff.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "BFF gateway contract" ci-logs/check-bff.log
+          exit $status
 
       - name: Install Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
@@ -79,17 +113,21 @@ jobs:
       # UI 自查：check:ui 默认指向内网 dev server，这里用 CHECK_UI_BASE_URL 指向本地构建产物。
       - name: Page UI checks
         run: |
-          node .output/server/index.mjs > /tmp/nitro.log 2>&1 &
+          node .output/server/index.mjs > ci-logs/nitro.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:3000/health > /dev/null && break
             sleep 1
           done
           if ! curl -sf http://127.0.0.1:3000/health > /dev/null; then
             echo "server did not become ready on :3000" >&2
-            cat /tmp/nitro.log >&2
+            cat ci-logs/nitro.log >&2
             exit 1
           fi
-          pnpm check:ui
+          set +e
+          pnpm check:ui 2>&1 | tee ci-logs/check-ui.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "page UI checks" ci-logs/check-ui.log
+          exit $status
         env:
           HOST: 127.0.0.1
           PORT: 3000
@@ -102,4 +140,16 @@ jobs:
         with:
           name: ui-check-screenshot
           path: ui-check.png
+          if-no-files-found: ignore
+
+      - name: Upload runtime check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-runtime
+          path: |
+            ci-logs/build-server.log
+            ci-logs/check-bff.log
+            ci-logs/check-ui.log
+            ci-logs/nitro.log
           if-no-files-found: ignore
