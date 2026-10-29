@@ -95,8 +95,11 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare log directory
+        run: mkdir -p ci-logs
+
       - name: Build BFF
-        run: mkdir -p ci-logs && pnpm build:server 2>&1 | tee ci-logs/build-server.log
+        run: pnpm build:server 2>&1 | tee ci-logs/build-server.log
 
       # 网关契约：脚本自己拉起 .output/server 与假上游，占用随机空闲端口。
       - name: Gateway contract checks
