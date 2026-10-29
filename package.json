@@ -10,6 +10,8 @@
 	"scripts": {
 		"dev": "nuxt dev",
 		"generate": "nuxt generate",
+		"build:server": "nuxt build",
+		"start": "node .output/server/index.mjs",
 		"preview": "nuxt preview",
 		"preinstall": "npx only-allow pnpm",
 		"postinstall": "nuxt prepare",

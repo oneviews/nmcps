@@ -32,6 +32,22 @@ export default defineNuxtConfig({
 			typedOptionsAndMessages: "default"
 		}
 	},
+	runtimeConfig: {
+		// BFF（Nitro）运行时配置：全部可由 NUXT_BFF_* 环境变量覆盖
+		bff: {
+			// 上游 REST 基址，server-only；示例 http://192.168.1.81:8888/api/v1
+			upstreamBase: "",
+			timeoutMs: 15000,
+			// 允许携带凭据跨域的 Origin 白名单（桌面 WebView 为 tauri:// 协议）
+			allowedOrigins: "http://localhost:3000,http://127.0.0.1:3000,tauri://localhost,http://tauri.localhost,https://tauri.localhost",
+			// 会话 token cookie 名（本阶段只读，不写入）
+			tokenCookieName: "nmcps_at"
+		},
+		public: {
+			// 前端访问 BFF 的基址：web 同源留空；桌面构建必须指向已部署的 BFF
+			bffBase: ""
+		}
+	},
 	app: {
 		head: {
 			title: "nmcps",
