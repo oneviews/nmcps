@@ -1,0 +1,103 @@
+name: ci
+
+# 回归门禁：静态检查 + 文档守卫 + BFF 网关契约 + 页面 UI 自查。
+# 本地复跑同一套命令：
+#   pnpm lint && pnpm typecheck && pnpm check:doc-system
+#   pnpm build:server && pnpm check:bff
+#   CHECK_UI_BASE_URL=http://127.0.0.1:3000 pnpm check:ui（需先起服务）
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: lint / typecheck / doc guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Doc system guard
+        run: pnpm check:doc-system
+
+  runtime:
+    name: BFF contract / page UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build BFF
+        run: pnpm build:server
+
+      # 网关契约：脚本自己拉起 .output/server 与假上游，占用随机空闲端口。
+      - name: Gateway contract checks
+        run: pnpm check:bff
+
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # UI 自查：check:ui 默认指向内网 dev server，这里用 CHECK_UI_BASE_URL 指向本地构建产物。
+      - name: Page UI checks
+        run: |
+          node .output/server/index.mjs > /tmp/nitro.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3000/health > /dev/null && break
+            sleep 1
+          done
+          if ! curl -sf http://127.0.0.1:3000/health > /dev/null; then
+            echo "server did not become ready on :3000" >&2
+            cat /tmp/nitro.log >&2
+            exit 1
+          fi
+          pnpm check:ui
+        env:
+          HOST: 127.0.0.1
+          PORT: 3000
+          CHECK_UI_BASE_URL: http://127.0.0.1:3000
+          CHECK_UI_SCREENSHOT: ${{ github.workspace }}/ui-check.png
+
+      - name: Upload UI screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-check-screenshot
+          path: ui-check.png
+          if-no-files-found: ignore
