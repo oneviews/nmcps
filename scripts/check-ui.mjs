@@ -28,7 +28,24 @@ page.on("console", (msg) => {
 page.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
 await page.goto(`${BASE_URL}/`, { waitUntil: "networkidle" });
-await page.waitForURL("**/dashboard/overview", { timeout: 15000 }).catch(() => {});
+
+// 1. 落地页（官网下载页）：平台检测 + 下载链接指向 GitHub Release
+const landing = await page.evaluate(() => {
+	const links = Array.from(document.querySelectorAll("a[href*='/releases/download/']"))
+		.map((a) => a.getAttribute("href"));
+	return {
+		heading: document.querySelector("h1")?.textContent?.trim() ?? null,
+		links,
+		body: document.body.textContent ?? ""
+	};
+});
+log("落地页标题 = NMCPS", landing.heading === "NMCPS", landing.heading ?? "未找到 h1");
+log("落地页检测到 Linux 平台（默认中文文案）", landing.body.includes("检测到您正在使用") && landing.body.includes("Linux"));
+log("落地页主下载链接指向 GitHub Release", !!landing.links[0]?.startsWith("https://github.com/oneviews/nmcps/releases/download/nmcps-v2.0.0/"), landing.links[0] ?? "未找到");
+log("落地页下载链接数为 4（主按钮 + 3 个其他平台）", landing.links.length === 4, `${landing.links.length} 个`);
+
+// 2. 进入控制台页面后检查布局
+await page.goto(`${BASE_URL}/dashboard/overview`, { waitUntil: "networkidle" });
 
 // 1. 默认布局模式
 const layoutMode = await page.evaluate(() => document.querySelector("[data-layout-mode]")?.getAttribute("data-layout-mode"));
