@@ -1,15 +1,18 @@
 // scripts/check-bff.mjs
-// BFF 网关契约自查（依据 NMCPS-ADR-0007：layers/content/collections/cn/records/adr/adr-0007.md）。
+// BFF 网关契约自查（依据 NMCPS-ADR-0007：layers/content/collections/cn/records/adr/adr-0007.md；
+// 就绪探针与 SSE 透传依据 NMCPS-ADR-0010：layers/content/collections/cn/records/adr/adr-0010.md）。
 //
 // 前置：`pnpm build:server` —— 本脚本只消费 `.output/server/index.mjs`，不自行构建；
 // 它会自己拉起构建产物与一个本地假上游，跑完即关，因此不需要预先占用端口。
 //
 // 断言分组：
-//   ① 存活与信封形态：/health、/api 与 /api/ 的拒绝、拒绝也用 ApiResponse 信封
+//   ① 存活与信封形态：/health、/ready 未配上游、/api 与 /api/ 的拒绝、拒绝也用 ApiResponse 信封
 //   ② 白名单边界：未知资源 404、动词 405、资源级 PATCH 例外、路径穿越 400、未配上游 503
 //   ③ 凭据型 CORS：白名单 Origin 回显、非白名单不回显、预检 204 / 403
 //   ④ 出站行为（对假上游）：裸 JSON 包裹、已是信封则原样、上游 4xx 透传、超时 504、
 //      token cookie → Bearer、显式 Authorization 优先、非白名单请求头不转发
+//   ⑤ 就绪探针：/ready 成功态 + 缺失 / 不可达 / 超时 / 非 2xx 四种 not_ready，且不回显上游地址
+//   ⑥ SSE 流式透传：content-type 保留、增量到达（非整体缓冲）、事件完整、不套信封、禁止缓存
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
@@ -116,7 +119,54 @@ async function request(port, path, options = {}) {
 	return { status: res.status, headers: res.headers, text, json };
 }
 
-/** 假上游：覆盖裸 JSON、已是信封、业务错误、慢响应、Header 回显五种形态 */
+/** 拉起一个临时 BFF 实例跑一段断言，结束后必关（探针用例每个原因都要换配置） */
+async function withBff(env, fn) {
+	const port = await freePort();
+	const child = await startBff(port, env);
+	try {
+		return await fn(port);
+	} finally {
+		await stopBff(child);
+	}
+}
+
+/** 关闭假上游：先销毁 keep-alive 连接，避免探针用例留下挂起的 socket 拖住 close */
+async function closeUpstream(server) {
+	server.closeAllConnections?.();
+	await new Promise((resolve) => server.close(resolve));
+}
+
+/**
+ * 读取一个流式响应，记录每块到达时刻。
+ * `chunks.length >= 2` 且首块明显早于结束，说明网关是边收边发而不是攒完整包。
+ */
+async function readStream(port, path) {
+	const res = await fetch(`http://${HOST}:${port}${path}`);
+	const startedAt = Date.now();
+	const reader = res.body.getReader();
+	const decoder = new TextDecoder();
+	const chunks = [];
+	let text = "";
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done)
+			break;
+		const chunk = decoder.decode(value, { stream: true });
+		chunks.push({ at: Date.now() - startedAt, length: chunk.length });
+		text += chunk;
+	}
+
+	return {
+		status: res.status,
+		headers: res.headers,
+		chunks,
+		text,
+		totalMs: Date.now() - startedAt
+	};
+}
+
+/** 假上游：覆盖裸 JSON、已是信封、业务错误、慢响应、Header 回显、健康探针与 SSE 流 */
 async function startUpstream(port) {
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -125,6 +175,15 @@ async function startUpstream(port) {
 			res.end(JSON.stringify(payload));
 		};
 
+		if (url.pathname === "/health")
+			return send(200, { status: "ok" });
+		if (url.pathname === "/unready/health")
+			return send(503, { status: "starting" });
+		if (url.pathname === "/hang-health") {
+			// 就绪探针超时用例：永远拖到客户端超时
+			await delay(5_000);
+			return send(200, { status: "ok" });
+		}
 		if (url.pathname === "/device/ok")
 			return send(200, { id: "dev-1", name: "ok" });
 		if (url.pathname === "/device/envelope")
@@ -140,6 +199,16 @@ async function startUpstream(port) {
 				authorization: req.headers.authorization ?? null,
 				evil: req.headers["x-evil"] ?? null
 			});
+		}
+		if (url.pathname === "/device/stream") {
+			// 三个事件、间隔 150ms：用于验证网关是否边收边发（整体缓冲会只收到一块）
+			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+			for (let i = 0; i < 3; i++) {
+				res.write(`data: tick-${i}\n\n`);
+				await delay(150);
+			}
+			res.end();
+			return;
 		}
 
 		return send(404, { message: "upstream_not_found" });
@@ -166,6 +235,10 @@ try {
 	const health = await request(guardPort, "/health");
 	log("存活探针 /health 返回 200", health.status === 200, String(health.status));
 	log("存活探针声明服务名 nmcps-bff", health.json?.service === "nmcps-bff", describe(health.json?.service));
+
+	const readyNoUpstream = await request(guardPort, "/ready");
+	log("未配上游 → /ready 503 not_ready（reason=upstream_missing）", readyNoUpstream.status === 503 && readyNoUpstream.json?.status === "not_ready" && readyNoUpstream.json?.upstream?.reason === "upstream_missing", `${readyNoUpstream.status} ${describe(readyNoUpstream.json?.upstream)}`);
+	log("就绪探针禁止缓存（cache-control: no-store）", readyNoUpstream.headers.get("cache-control") === "no-store", describe(readyNoUpstream.headers.get("cache-control")));
 
 	const apiBare = await request(guardPort, "/api");
 	log("/api 无资源段 → 400 bff_path_missing", apiBare.status === 400 && apiBare.json?.message === "bff_path_missing", `${apiBare.status} ${describe(apiBare.json?.message)}`);
@@ -249,7 +322,46 @@ try {
 	log("网关响应禁止缓存（cache-control: no-store）", noStore.headers.get("cache-control") === "no-store", describe(noStore.headers.get("cache-control")));
 } finally {
 	await stopBff(proxyBff);
-	await new Promise((resolve) => upstream.close(resolve));
+}
+
+// ── ⑤ 就绪探针：成功态 + 三种失败原因（假上游仍存活） ──────────
+const upstreamBase = `http://${HOST}:${upstreamPort}`;
+
+try {
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase, NUXT_BFF_READINESS_TIMEOUT_MS: "1000" }, async (probePort) => {
+		const ready = await request(probePort, "/ready");
+		log("上游可达 → /ready 200 ready", ready.status === 200 && ready.json?.status === "ready" && ready.json?.upstream?.configured === true, `${ready.status} ${describe(ready.json?.upstream)}`);
+		log("/ready 回显上游状态码与探针耗时", ready.json?.upstream?.status === 200 && typeof ready.json?.upstream?.latencyMs === "number", describe(ready.json?.upstream));
+		log("/ready 不回显上游地址（不泄露内网拓扑）", !ready.text.includes(`${HOST}:${upstreamPort}`), ready.text.slice(0, 160));
+	});
+
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: `${upstreamBase}/unready` }, async (probePort) => {
+		const unhealthy = await request(probePort, "/ready");
+		log("上游 5xx → /ready 503 upstream_unhealthy", unhealthy.status === 503 && unhealthy.json?.upstream?.reason === "upstream_unhealthy", `${unhealthy.status} ${describe(unhealthy.json?.upstream)}`);
+	});
+
+	const closedPort = await freePort();
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${closedPort}` }, async (probePort) => {
+		const unreachable = await request(probePort, "/ready");
+		log("上游不可达 → /ready 503 upstream_unreachable", unreachable.status === 503 && unreachable.json?.upstream?.reason === "upstream_unreachable", `${unreachable.status} ${describe(unreachable.json?.upstream)}`);
+	});
+
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase, NUXT_BFF_READINESS_PATH: "/hang-health", NUXT_BFF_READINESS_TIMEOUT_MS: "300" }, async (probePort) => {
+		const timedOut = await request(probePort, "/ready");
+		log("探针超时 → /ready 503 upstream_timeout", timedOut.status === 503 && timedOut.json?.upstream?.reason === "upstream_timeout", `${timedOut.status} ${describe(timedOut.json?.upstream)}`);
+	});
+
+	// ── ⑥ SSE 流式透传：增量到达、不被信封包裹 ────────────────
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase, NUXT_BFF_TIMEOUT_MS: "1000" }, async (streamPort) => {
+		const stream = await readStream(streamPort, "/api/device/stream");
+		log("SSE 保留上游 content-type = text/event-stream", stream.status === 200 && (stream.headers.get("content-type") ?? "").startsWith("text/event-stream"), `${stream.status} ${describe(stream.headers.get("content-type"))}`);
+		log("SSE 首块早于流结束（未整体缓冲）", stream.chunks.length >= 2 && stream.chunks[0].at + 80 < stream.totalMs, `chunks=${stream.chunks.length} first=${stream.chunks[0]?.at}ms total=${stream.totalMs}ms`);
+		log("SSE 三个事件完整透传", (stream.text.match(/^data: tick-\d$/gm) ?? []).length === 3, describe(stream.text.slice(0, 120)));
+		log("SSE 不被 ApiResponse 信封包裹", !stream.text.includes("\"code\":0"), stream.text.includes("\"code\":0") ? "含信封字段" : "裸事件流");
+		log("SSE 禁止缓存并关闭代理缓冲", stream.headers.get("cache-control") === "no-store" && stream.headers.get("x-accel-buffering") === "no", `${describe(stream.headers.get("cache-control"))} / ${describe(stream.headers.get("x-accel-buffering"))}`);
+	});
+} finally {
+	await closeUpstream(upstream);
 }
 
 const passed = results.filter((item) => item.ok).length;

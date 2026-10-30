@@ -16,6 +16,9 @@ const FORWARDED_REQUEST_HEADERS = [
 
 const BODY_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/** 需要原样流式透传的响应类型（走 `Response` 分支，不做 JSON 信封） */
+const STREAM_CONTENT_TYPE = "text/event-stream";
+
 /** 单次请求体上限（BFF 对公网暴露时的基础防护；上传类端点需单独放宽） */
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -91,6 +94,27 @@ function respond<T>(event: H3Event, status: number, body: ApiResponse<T>): ApiRe
 	setResponseHeader(event, "content-type", "application/json; charset=utf-8");
 	setResponseHeader(event, "cache-control", "no-store");
 	return body;
+}
+
+/**
+ * SSE 透传：把上游流原样包成 `Response` 交给 h3（`sendWebResponse` → `sendStream`），
+ * 客户端拿到的是一段段增量事件，而不是 `response.text()` 读完后的整包。
+ *
+ * - 只接管 `2xx` + `text/event-stream`，其余响应仍走统一信封；
+ * - 显式 `cache-control: no-store` + `x-accel-buffering: no`，避免反向代理攒包；
+ * - 客户端断开时中止上游请求，不让长连接在上游侧空转。
+ */
+function streamResponse(event: H3Event, response: Response, controller: AbortController): Response {
+	event.node.res.once("close", () => controller.abort());
+
+	return new Response(response.body, {
+		status: response.status,
+		headers: {
+			"content-type": response.headers.get("content-type") ?? `${STREAM_CONTENT_TYPE}; charset=utf-8`,
+			"cache-control": "no-store",
+			"x-accel-buffering": "no"
+		}
+	});
 }
 
 function buildUpstreamUrl(event: H3Event, base: string, options: BffProxyOptions): string {
@@ -175,9 +199,10 @@ function safeJsonParse(raw: string): unknown {
  * - 未配置上游 → 503 `bff_upstream_missing`（不静默返回空数据）；
  * - 上游非 2xx → 保留真实 HTTP 状态码 + `warning`（4xx）/`error`（5xx）语义；
  * - 上游裸 JSON → 包裹为 `{ code: 0, status: "success", data }`；已是信封则原样返回；
+ * - 上游 `2xx` + `text/event-stream` → 原样流式透传（不套信封，见 `streamResponse`）；
  * - 原始上游报文只在 dev 下进入 `error_detail`，生产不泄露内网细节。
  */
-export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffProxyOptions): Promise<ApiResponse<T>> {
+export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffProxyOptions): Promise<ApiResponse<T> | Response> {
 	const config = getBffConfig(event);
 	const base = (options.baseURL || config.upstreamBase).trim();
 
@@ -213,6 +238,13 @@ export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffP
 			signal: controller.signal,
 			redirect: "manual"
 		});
+
+		const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+
+		// SSE / 流式响应：不能 `response.text()`（会攒到流结束才回客户端）
+		if (response.ok && contentType.startsWith(STREAM_CONTENT_TYPE)) {
+			return streamResponse(event, response, controller);
+		}
 
 		const raw = await response.text();
 		const payload = raw ? safeJsonParse(raw) : undefined;

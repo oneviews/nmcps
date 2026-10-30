@@ -8,9 +8,10 @@ import { proxyToUpstream } from "~~/server/utils/bff/proxy";
  *
  * 目标路径由 `resolveGatewayTarget` 依据资源/动词白名单解析（拒绝任意透传），
  * 实际出站只发生在 `server/utils/bff/proxy.ts`（超时、Header 白名单、信封归一化）。
- * 网关拒绝同样以 `ApiResponse` 信封返回，前端只需处理一种响应形态。
+ * 网关拒绝同样以 `ApiResponse` 信封返回，前端只需处理一种响应形态；
+ * SSE（`text/event-stream`）例外：由 proxy 直接返回 `Response` 做流式透传（见 NMCPS-ADR-0010）。
  */
-export default defineEventHandler(async (event): Promise<ApiResponse<unknown>> => {
+export default defineEventHandler(async (event): Promise<ApiResponse<unknown> | Response> => {
 	const resolution = resolveGatewayTarget(event.context.params?.slug, event.method);
 
 	if ("rejection" in resolution) {

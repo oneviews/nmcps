@@ -11,6 +11,10 @@ export interface BffConfig {
 	allowedOrigins: string[]
 	/** 会话令牌 cookie 名（本阶段仅读取、不写入） */
 	tokenCookieName: string
+	/** 上游就绪探针路径（拼在 `upstreamBase` 之后，以 `/` 开头） */
+	readinessPath: string
+	/** 上游就绪探针超时（毫秒，独立于业务超时，默认 2000） */
+	readinessTimeoutMs: number
 }
 
 const FALLBACK_ORIGINS = [
@@ -55,11 +59,23 @@ export function getBffConfig(event: H3Event): BffConfig {
 		? bff.tokenCookieName.trim()
 		: "nmcps_at";
 
+	const readinessPathRaw = typeof bff.readinessPath === "string" ? bff.readinessPath.trim() : "";
+	const readinessPath = readinessPathRaw
+		? (readinessPathRaw.startsWith("/") ? readinessPathRaw : `/${readinessPathRaw}`)
+		: "/health";
+
+	const readinessTimeoutCandidate = Number(bff.readinessTimeoutMs);
+	const readinessTimeoutMs = Number.isFinite(readinessTimeoutCandidate) && readinessTimeoutCandidate >= 200
+		? readinessTimeoutCandidate
+		: 2000;
+
 	return {
 		upstreamBase,
 		timeoutMs,
 		allowedOrigins: origins.length ? origins : FALLBACK_ORIGINS,
-		tokenCookieName
+		tokenCookieName,
+		readinessPath,
+		readinessTimeoutMs
 	};
 }
 

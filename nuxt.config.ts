@@ -41,7 +41,10 @@ export default defineNuxtConfig({
 			// 允许携带凭据跨域的 Origin 白名单（桌面 WebView 为 tauri:// 协议）
 			allowedOrigins: "http://localhost:3000,http://127.0.0.1:3000,tauri://localhost,http://tauri.localhost,https://tauri.localhost",
 			// 会话 token cookie 名（本阶段只读，不写入）
-			tokenCookieName: "nmcps_at"
+			tokenCookieName: "nmcps_at",
+			// 上游就绪探针路径（拼在 upstreamBase 之后）与超时，供 GET /ready 使用
+			readinessPath: "/health",
+			readinessTimeoutMs: 2000
 		},
 		public: {
 			// 前端访问 BFF 的基址：web 同源留空；桌面构建必须指向已部署的 BFF
