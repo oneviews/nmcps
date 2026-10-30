@@ -5,6 +5,7 @@ name: ci
 #   pnpm lint && pnpm typecheck && pnpm check:doc-system
 #   pnpm build:server && pnpm check:bff
 #   CHECK_UI_BASE_URL=http://127.0.0.1:3000 pnpm check:ui（需先起服务）
+# 运行排查：sh scripts/ci-doctor.sh（概览 / logs / artifacts）
 on:
   push:
     branches:
@@ -67,7 +68,7 @@ jobs:
 
       - name: Upload quality check logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: check-logs-quality
           path: |
@@ -110,10 +111,21 @@ jobs:
           sh scripts/ci-summary.sh "BFF gateway contract" ci-logs/check-bff.log
           exit $status
 
+      # Playwright 浏览器体积大（chromium 约 170MB），按 lockfile 指纹缓存；
+      # `--with-deps` 的 apt 依赖仍每次安装，缓存只覆盖浏览器本体。
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: Install Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
 
       # UI 自查：check:ui 默认指向内网 dev server，这里用 CHECK_UI_BASE_URL 指向本地构建产物。
+      # 页面断言含动画/布局测量，跑两轮做稳定性采样（CHECK_UI_ROUNDS），任一轮失败即中止。
       - name: Page UI checks
         run: |
           node .output/server/index.mjs > ci-logs/nitro.log 2>&1 &
@@ -127,19 +139,28 @@ jobs:
             exit 1
           fi
           set +e
-          pnpm check:ui 2>&1 | tee ci-logs/check-ui.log
-          status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "page UI checks" ci-logs/check-ui.log
-          exit $status
+          : > ci-logs/check-ui.log
+          for round in $(seq 1 "$CHECK_UI_ROUNDS"); do
+            echo "── check:ui round $round/$CHECK_UI_ROUNDS" | tee -a ci-logs/check-ui.log
+            pnpm check:ui 2>&1 | tee -a ci-logs/check-ui.log
+            status=${PIPESTATUS[0]}
+            if [ "$status" -ne 0 ]; then
+              sh scripts/ci-summary.sh "page UI checks（round $round 失败）" ci-logs/check-ui.log
+              exit "$status"
+            fi
+          done
+          sh scripts/ci-summary.sh "page UI checks（$CHECK_UI_ROUNDS 轮）" ci-logs/check-ui.log
+          exit 0
         env:
           HOST: 127.0.0.1
           PORT: 3000
           CHECK_UI_BASE_URL: http://127.0.0.1:3000
           CHECK_UI_SCREENSHOT: ${{ github.workspace }}/ui-check.png
+          CHECK_UI_ROUNDS: 2
 
       - name: Upload UI screenshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-check-screenshot
           path: ui-check.png
@@ -147,7 +168,7 @@ jobs:
 
       - name: Upload runtime check logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: check-logs-runtime
           path: |

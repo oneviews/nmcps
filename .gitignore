@@ -20,6 +20,9 @@ tsx-*
 .idea
 _reference
 
+# CI 本地产物（scripts/ci-doctor.sh 与本地复跑生成）
+ci-logs/
+
 # Binary installers (build artifacts — served from public/downloads/ but not committed)
 *.deb
 *.rpm
