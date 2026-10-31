@@ -143,7 +143,6 @@
 	const route = useRoute();
 	const { login, fetchSession } = useAuth();
 	const { isConfigured } = useApi();
-	const toast = useToast();
 
 	const schema = z.object({
 		accountName: z.string().min(1, t("auth.accountNameRequired")),
@@ -229,26 +228,20 @@
 
 			await fetchSession(true);
 
-			// 强制改密是纯前端约定：上游不拦接口（NMCPS-ARCH-003 §7.2 第 14 条），
-			// 客户端必须把人送去「安全设置」，否则初始口令可以一直用下去。
-			if (result.mustResetPassword) {
-				toast.add({
-					title: t("auth.resetRequiredTitle"),
-					description: t("auth.resetRequired"),
-					color: "warning",
-					duration: 0
-				});
-				await navigateTo("/user/security");
-				return;
-			}
-
 			// 只接受站内相对路径（`//host` 会被当成协议相对地址，必须排除）
 			const target = route.query.redirect;
 			const redirect = typeof target === "string" && target.startsWith("/") && !target.startsWith("//")
 				? target
-				: "/dashboard/overview";
+				: undefined;
 
-			await navigateTo(redirect);
+			// 强制改密是纯前端约定：上游不拦接口（NMCPS-ARCH-003 §7.2 第 14 条），
+			// 客户端必须把人送去专用改密页（`/auth/reset-password`），否则初始口令能一直用下去。
+			if (result.mustResetPassword) {
+				await navigateTo({ path: "/auth/reset-password", query: redirect ? { redirect } : undefined });
+				return;
+			}
+
+			await navigateTo(redirect ?? "/dashboard/overview");
 		} catch (error) {
 			// 需要动态口令时上游以 `401 20203` 拒绝本次登录（实测，见 NMCPS-REC-001）：
 			// 保留账号口令，展开动态口令输入框让用户补码后重试

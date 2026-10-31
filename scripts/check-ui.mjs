@@ -228,8 +228,9 @@ if (upstreamPort) {
 	await mfaContext.close();
 }
 
-// 4.3 强制改密：上游 `mustResetPassword: true` 不拦接口（纯前端约定），客户端必须把人送去「安全设置」，
-//     否则初始口令能一直用下去。回归守卫：登录页此前只把标志塞进 ref 后立刻跳看板，警告永远不显示。
+// 4.3 强制改密：上游 `mustResetPassword: true` 不拦接口（纯前端约定），客户端必须把人送去
+//     专用改密页 `/auth/reset-password`，改完强制重登 —— 否则初始口令能一直用下去。
+//     回归守卫：登录页此前只把标志塞进 ref 后立刻跳看板，警告永远不显示。
 if (upstreamPort) {
 	const resetContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 	const resetPage = await resetContext.newPage();
@@ -237,12 +238,44 @@ if (upstreamPort) {
 	await resetPage.locator("input[autocomplete='username']").fill("reset-user");
 	await resetPage.locator("input[type='password']").fill(PASSWORD);
 	await resetPage.locator("button[type='submit']").first().click();
-	await resetPage.waitForURL((url) => url.pathname === "/user/security", { timeout: 20_000 }).catch(() => {});
+	await resetPage.waitForURL((url) => url.pathname === "/auth/reset-password", { timeout: 20_000 }).catch(() => {});
 	const resetLanding = new URL(resetPage.url()).pathname;
-	log("mustResetPassword 登录后落到「安全设置」而不是看板", resetLanding === "/user/security", resetLanding);
+	log("mustResetPassword 登录后落到专用改密页", resetLanding === "/auth/reset-password", resetLanding);
 
 	const resetText = await resetPage.evaluate(() => document.body.textContent ?? "");
-	log("强制改密给出提示（toast 含「请先修改初始密码」）", resetText.includes("请先修改初始密码"), resetText.includes("请先修改初始密码") ? "已提示" : "无提示");
+	const hasFields = await resetPage.locator("input[autocomplete='current-password']").count() === 1
+		&& await resetPage.locator("input[autocomplete='new-password']").count() === 2;
+	log("改密页一屏给齐当前密码 / 新密码 / 确认新密码", hasFields && resetText.includes("设置新密码"), `fields=${hasFields}`);
+
+	// 提交报文必须自带旧口令、且**不得**带 `firstReset`：上游该字段会跳过旧口令校验（UP-AUTH-02），
+	// 前端一旦图省事传上去，改密就退化成「谁拿到会话谁就能改」。
+	let passwordBody;
+	resetPage.on("request", (req) => {
+		if (req.method() === "POST" && req.url().includes("/api/auth/password")) {
+			try {
+				passwordBody = req.postDataJSON();
+			} catch {
+				passwordBody = null;
+			}
+		}
+	});
+
+	const NEW_PASSWORD = "NewP@ssw0rd!";
+	await resetPage.locator("input[autocomplete='current-password']").fill(PASSWORD);
+	await resetPage.locator("input[autocomplete='new-password']").nth(0).fill(NEW_PASSWORD);
+	await resetPage.locator("input[autocomplete='new-password']").nth(1).fill(NEW_PASSWORD);
+	await resetPage.locator("button[type='submit']").first().click();
+	await resetPage.waitForURL((url) => url.pathname === "/auth/login", { timeout: 20_000 }).catch(() => {});
+	const afterReset = new URL(resetPage.url()).pathname;
+	log("改密成功后强制重登（回登录页）", afterReset === "/auth/login", afterReset);
+	log(
+		"改密请求带旧口令且不带 firstReset",
+		passwordBody?.oldPassword === PASSWORD && passwordBody?.firstReset === undefined,
+		passwordBody ? `keys=${Object.keys(passwordBody).join(",")}` : "未捕获请求"
+	);
+
+	const resetToast = await resetPage.evaluate(() => document.body.textContent ?? "");
+	log("改密成功后提示用新密码重登", resetToast.includes("密码已修改"), resetToast.includes("密码已修改") ? "已提示" : "无提示");
 	await resetContext.close();
 }
 
