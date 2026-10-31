@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.17.0
+version: 0.18.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -107,6 +107,7 @@ tags:
 | NMCPS-ADR-0011 | 认证接口对接与令牌轮换 | 5 | informative | rec.adr.0011 | baseline | records/adr/adr-0011.md |
 | NMCPS-ADR-0012 | 新增 platform 分层 | 5 | informative | rec.adr.0012 | baseline | records/adr/adr-0012.md |
 | NMCPS-ADR-0013 | 登录页命名与种子预填 | 5 | informative | rec.adr.0013 | baseline | records/adr/adr-0013.md |
+| NMCPS-ADR-0014 | 强制改密页命名 | 5 | informative | rec.adr.0014 | baseline | records/adr/adr-0014.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | baseline | records/defects/auth-upstream-defects.md |
 | NMCPS-ARCH-001 | 通信面架构 | 1 | normative | arch.transport | baseline | architecture/1.architecture/transport-architecture.md |
 | NMCPS-ARCH-002 | 数据源架构 | 1 | normative | arch.datasource | baseline | architecture/1.architecture/datasource-architecture.md |
@@ -147,3 +148,4 @@ tags:
 | 2026-10-31 | 0.15.0 | 登记记录层 ADR：0012 新增 platform 分层（Tauri 平台能力演示页归入 `layers/platform`，路由 path 不变）。 |
 | 2026-10-31 | 0.16.0 | 登记记录层 ADR：0013 登录页命名统一为 `login` 与演示种子账号预填（Tier 5，informative）。 |
 | 2026-10-31 | 0.17.0 | 登记记录层缺陷清单：REC-001 上游 `/api/v1/auth` 缺陷与仓库内漂移（6 项上游 + 3 项已修，Tier 5，informative）。 |
+| 2026-10-31 | 0.18.0 | 登记记录层 ADR：0014 强制改密页命名为 `change-password`（`reset` 留给忘记口令流程，Tier 5，informative）。 |

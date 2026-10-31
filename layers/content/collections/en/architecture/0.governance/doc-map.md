@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.16.0
+version: 0.18.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -113,6 +113,8 @@ tags:
 | NMCPS-ADR-0011 | Auth API Integration and Token Rotation | 5 | informative | rec.adr.0011 | baseline | records/adr/adr-0011.md |
 | NMCPS-ADR-0012 | Platform Layer Extraction | 5 | informative | rec.adr.0012 | baseline | records/adr/adr-0012.md |
 | NMCPS-ADR-0013 | Login Naming and Seed Prefill | 5 | informative | rec.adr.0013 | baseline | records/adr/adr-0013.md |
+| NMCPS-ADR-0014 | Forced Reset Page Naming | 5 | informative | rec.adr.0014 | baseline | records/adr/adr-0014.md |
+| NMCPS-REC-001 | Upstream auth defect list | 5 | informative | rec.defects.auth | baseline | records/defects/auth-upstream-defects.md |
 
 > Paths are relative to `layers/content/collections/cn/`; `en/` is the mirror collection with the same docId.
 
@@ -138,3 +140,5 @@ tags:
 | 2026-10-31 | 0.14.0 | Registered ADR-0011 auth API integration and token rotation (Tier 5, informative); ADR-0009 now carries `supersededBy` and is marked superseded. |
 | 2026-10-31 | 0.15.0 | Registered ADR-0012 platform layer extraction (Tauri capability demos moved into `layers/platform`, route paths unchanged). |
 | 2026-10-31 | 0.16.0 | Registered ADR-0013 login naming unification and demo seed prefill (Tier 5, informative). |
+| 2026-10-31 | 0.17.0 | Mirror catch-up: registered REC-001, the upstream `/api/v1/auth` defect list and in-repo drifts (Tier 5, informative; the zh map already carried it at 0.17.0). |
+| 2026-10-31 | 0.18.0 | Registered ADR-0014 renaming the forced password page to `change-password` (keeping `reset` for a forgot-password flow; Tier 5, informative). |
