@@ -3,8 +3,8 @@ docId: NMCPS-REC-001
 title: "Upstream `/api/v1/auth` defect list (probed 2026-10-31)"
 navigation:
   title: "Upstream auth defects"
-description: "Record-layer defect list: an exhaustive probe of the seven `/auth/*` endpoints on http://192.168.1.55:10000/api/v1 (swagger diff + live calls + BFF end-to-end) registering 6 upstream defects (non-atomic refresh rotation, 500 on missing input, unvalidated Content-Type, OPTIONS 404, undocumented mfaType default, firstReset bypassing the old-password check) and 3 in-repo drifts, each with reproduction, expected behaviour, and the closed/open checklist, plus six ready-to-file upstream tickets carrying the verbatim curl commands and output."
-excerpt: "6 upstream defects and 3 in-repo drifts on /auth, with reproduction."
+description: "Record-layer defect list: an exhaustive probe of the seven `/auth/*` endpoints on http://192.168.1.55:10000/api/v1 (swagger diff + live calls + BFF end-to-end) registering 6 upstream defects (non-atomic refresh rotation, 500 on missing input, unvalidated Content-Type, OPTIONS 404, undocumented mfaType default, firstReset bypassing the old-password check) and 4 in-repo drifts, each with reproduction, expected behaviour, and the closed/open checklist, plus six ready-to-file upstream tickets carrying the verbatim curl commands and output."
+excerpt: "6 upstream defects and 4 in-repo drifts on /auth, with reproduction."
 keywords:
   - "defect"
   - "auth"
@@ -44,6 +44,8 @@ tags:
 
 ## 2. Upstream defects (6)
 
+The `UP-AUTH-0x` IDs are the stable cross-reference shared with `NMCPS-ARCH-003` §7.8; upstream ticket numbers are never written into this table — they live in §7 so the two numbering schemes cannot clash.
+
 | ID | Severity | Symptom | Reproduction | Expected |
 | :--- | :--- | :--- | :--- | :--- |
 | UP-AUTH-01 | High | **Non-atomic refresh rotation**: the same RT fired three times concurrently returns `200` three times with three different `sessionId`s; all three ATs pass `whoami`; logging one out leaves the rest alive | Fire 3 parallel `POST /auth/token/refresh` with one `refreshToken`, then `GET /auth/whoami` per token | Single use: only the first succeeds, the rest answer `20205`. Today this is an RT replay window |
@@ -62,13 +64,14 @@ Additional observations (not defects, but worth knowing):
 - **Forced reset is a client-side convention**: an account with `mustResetPassword: true` still gets `200` from `whoami` before changing anything; upstream does not block the API.
 - **A password change takes effect immediately**: four re-probes at `0 / 200 / 1000 / 3000 ms` all answered `401 20201` for the old password, so there is no grace window.
 
-## 3. In-repo drift (3, closed by this round)
+## 3. In-repo drift (4, closed by this round)
 
 | ID | Symptom | Resolution |
 | :--- | :--- | :--- |
 | REPO-01 | The fake upstream answered `400 20205 mfa_required` where the real one answers `401 20203`, so the self-check stayed falsely green | `scripts/lib/bff-harness.mjs` now answers `401 / 20203`; the `check:bff` cases follow |
 | REPO-02 | The login page only knew `20205`, so an MFA account never saw the OTP field | `app/pages/auth/login.vue` now keys on `20203` (both `submit` and `describeError`) |
 | REPO-03 | The fake upstream consumed refresh tokens strictly once, while the real one allows concurrent use | The fake upstream now allows reuse inside a concurrency window and still rejects a serial replay; a new case locks that semantics |
+| REPO-04 | **The forced-reset branch was dead code**: the login page stored `mustResetPassword` in a ref and then called `navigateTo(redirect)` immediately, so the warning `v-if` never rendered — and upstream does not block the API, leaving the initial password usable indefinitely | The flag now redirects to `/user/security` with a persistent toast (`duration: 0`); the fake upstream gained a `reset-user` account; `check:ui` locks the landing plus the toast and `check:bff` locks the flag pass-through |
 
 ## 4. Closed and open verification items
 
@@ -81,13 +84,15 @@ Closed (probe accounts `AUTOTEST-*`, disabled with `status: 2` afterwards):
 - Creating with `mustResetPassword: true` → the flag comes back on login → a `firstReset` change clears it;
 - Both password-policy rules (complexity and history).
 
+Self-check guards (fake upstream, so they do not depend on the real one being reproducible): `check:bff` (81 assertions) covers the `20203` / `20204` pass-through pair and the `mustResetPassword` flag; `check:ui` (52 assertions in self-built mode) covers the MFA retry sign-in and the forced-reset landing (`/user/security` plus the persistent toast).
+
 Still open: natural expiry (30-minute AT / 7-day RT) and concurrent refresh across multiple browser tabs.
 
 ## 5. Re-running the probe
 
 1. Start the BFF: `PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`.
 2. Hit the upstream directly for UP-AUTH-01 (concurrent refresh) and UP-AUTH-03/04 (missing input, Content-Type) — those are only visible upstream, the BFF absorbs them.
-3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream, plus a manual login against the real one.
+3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream (81 assertions) and `pnpm check:ui` against its own fake upstream and the built artefact (52 assertions), then one manual login against the real upstream.
 4. Remember `--noproxy '*'` for local curl (the environment exports `http_proxy`).
 
 ## 6. Ticket text (ready to file)
@@ -222,3 +227,19 @@ done
 **Acceptance**: `/docs` lists the `mfaType` enum and its default; the meaning and response shape of `0` and `1` agree (`otpauthUrl` only for TOTP).
 
 > Filing suggestion: one EPIC with six children. Tickets 1 and 2 are high priority (security), 3 and 4 are robustness, 5 and 6 are consistency.
+
+## 7. Upstream ticket registry (one EPIC + 6 children)
+
+Only this table changes after filing: `UP-AUTH-0x` is the stable in-repo ID (referenced by §2 and by `NMCPS-ARCH-003` §7.8) and the upstream ticket number is an external ID — never swap one for the other. The EPIC title is "[EPIC] `/api/v1/auth` contract and security defects (6, probed 2026-10-31)"; each child copies the first heading of its §6 ticket.
+
+| Upstream ticket | Type | Defect | Title (§6) | Status | Filed on |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| — | EPIC | UP-AUTH-01…06 | `/api/v1/auth` contract and security defects (6) | To file | — |
+| — | Child | UP-AUTH-01 | Non-atomic refresh rotation: one RT usable three times concurrently | To file | — |
+| — | Child | UP-AUTH-02 | `firstReset: true` bypasses the old-password check, a session alone can change the password | To file | — |
+| — | Child | UP-AUTH-03 | Missing input always answers `500 10509`, reporting a client mistake as a crash | To file | — |
+| — | Child | UP-AUTH-04 | `Content-Type` is not validated: form encoding answers 500, a body-less `logout` answers 200 | To file | — |
+| — | Child | UP-AUTH-05 | `OPTIONS /api/v1/auth` returns `404`, unlike `/api/v1/account` with `405 + Allow` | To file | — |
+| — | Child | UP-AUTH-06 | The `mfaType` default is undocumented; `0` and `1` behave alike and both return a TOTP `otpauthUrl` | To file | — |
+
+Status vocabulary: `To file` → `Filed` (fill the ticket number and date) → `Fixed` (after re-running §5) → `Verified` (`pnpm check:bff` / `check:ui` green and the §2 row can go). Whenever a row reaches `Fixed`, update §2, `NMCPS-ARCH-003` §7.8 and this table together.

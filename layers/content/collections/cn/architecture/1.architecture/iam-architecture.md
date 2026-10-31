@@ -15,7 +15,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.6
+version: 0.3.7
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -129,7 +129,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 11. **已禁用账号与口令错误同码**：`PUT /account/{code}/status` 置 `status: 2` 后登录 → `401 20201 账号或口令错误`，不区分「已禁用」。前端无法据此提示「账号停用」。
 12. **改密不吊销旧令牌**：`password` 成功后旧访问令牌仍可 `whoami` 200 —— 7.5「改密后只提示、不登出」的约定由此得到实证，也意味着令牌泄露不能靠改密止损。
 13. **`firstReset: true` 会跳过旧口令校验**（2026-10-31 实测）：body 只带 `newPassword` 即 `200`，`oldPassword` 可缺省。该字段本意是「首次登录强制改密」，不应成为免旧口令的后门 —— 会话被劫持即可改密夺号。BFF 的 `authPasswordSchema` 仍要求 `oldPassword`，前端不要因为该字段存在就放开必填。
-14. **强制改密是纯前端约定**：`mustResetPassword: true` 的账号在未改密时 `whoami` 仍 200、其他接口照常放行；改密后标志清除（再登录 `mustResetPassword: false`）。弱口令与重复口令的策略在上游：复杂度不足 `400 20101`，与近期历史重复 `400 20302`；改密立即生效（0/200/1000/3000ms 复测旧口令均 `401 20201`），无宽限窗口。
+14. **强制改密是纯前端约定**：`mustResetPassword: true` 的账号在未改密时 `whoami` 仍 200、其他接口照常放行；改密后标志清除（再登录 `mustResetPassword: false`）。正因上游不拦，客户端必须自己执行：`POST /api/auth/login` 返回该标志时，登录页直接把人送到 `/user/security` 并弹常驻提示（`duration: 0`），不再按 `redirect` 跳看板 —— 否则初始口令可以一直用下去（2026-10-31 修复，见 7.8 第 9 项）。弱口令与重复口令的策略在上游：复杂度不足 `400 20101`，与近期历史重复 `400 20302`；改密立即生效（0/200/1000/3000ms 复测旧口令均 `401 20201`），无宽限窗口。
 
 ### 7.3 BFF 暴露面
 
@@ -190,7 +190,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
-- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 50 项、外部模式 48 项：自建多「上游掉线」与「MFA 动态口令」两项（后者需要假上游的 `mfa-user`），外部模式多前置校验一项。
+- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 52 项、外部模式 50 项：自建多「上游掉线」「MFA 动态口令」「强制改密」三项（后两者需要假上游的 `mfa-user` / `reset-user`），外部模式多前置校验一项（登录与自检用例在两种模式下都在跑）。
 - 词汇表单一事实源：`shared/constants/upstreamReasons.ts` 的 `UPSTREAM_REASONS`（`/ready` 的 `upstream.reason`）与 `BFF_UPSTREAM_MESSAGES`（API 层 `bff_upstream_*` message），server 与前端一律引用常量。自查脚本是纯 node ESM，不 import 该文件，而是按**线上字符串**断言 —— 改取值会让契约用例变红，这本身就是防漂移守卫。
 - 复用口径：`/user/security` 的绑定 MFA / 改密与登录页共用 `upstreamHintKey()`（`app/utils/apiError.ts`）：`bff_upstream_missing` → 配 `.env` 指引，`bff_upstream_unreachable` / `bff_upstream_timeout` → 上游不可达指引（`auth.bffUpstreamUnavailable`），都不再回落原始 message，避免用户把运维问题读成「口令错误」。
 - 掉线演练：假上游带控制端点 `POST /__control/down|up|state`；`down` 后除控制端点外的请求直接销毁 socket，BFF 侧表现为 502 `bff_upstream_unreachable`，因此「已登录 → 上游掉线 → 改密」这种只能运行中构造的场景也进了自查。
@@ -198,7 +198,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 
 ### 7.8 上游缺陷与两端漂移登记（2026-10-31 实测）
 
-`/api/v1/auth/*` 能力面完整：7 个端点全部可达，未登记路径（`/auth/session`、`/auth/captcha`、`/auth/mfa/disable` 等）一律 `404`，无隐藏能力；BFF 对真实上游端到端 10/10 通过。以下是仍然存在的上游缺陷与两处**仓库内漂移**，按影响排序。修复前不要把它们当契约依赖。
+`/api/v1/auth/*` 能力面完整：7 个端点全部可达，未登记路径（`/auth/session`、`/auth/captcha`、`/auth/mfa/disable` 等）一律 `404`，无隐藏能力；BFF 对真实上游端到端 10/10 通过。以下是 5 项上游缺陷与 4 项**仓库内漂移**（第 6–9 项已修复，仍留在表里防回退），按影响排序。修复前不要把它们当契约依赖。
 
 | # | 现象 | 实测证据 | 影响 | 归属 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -206,12 +206,15 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2 | 刷新轮换不是原子消费 | 同一 RT 三路并发均 200，三个 `sessionId` 互异、三把 AT 均可用，注销其一不影响余下 | 会话分裂 + RT 重放窗口（令牌被窃时单次保护被绕过） | 上游 |
 | 3 | `Content-Type` 不校验 | `form-urlencoded` 打 `login` → `500 10509`；`logout` 无 body 也 200 | 契约不清；BFF 统一只收 JSON | 上游 |
 | 4 | `OPTIONS /api/v1/auth` 返回 `404` | 对比 `/api/v1/account` → `405 + Allow` | 无统一预检与能力发现；同源部署下不触发 | 上游 |
-| 5 | `mfaType` 缺省即 TOTP、`0` 未登记却可用 | `{}` / `{mfaType:0}` / `{mfaType:1}` 同效；仅 `99` → `400 20109` | 客户端漏字段会静默绑定；两阶段绑定，未 `confirm` 时 `mfaEnabled` 不变 | 上游 |
+| 5 | `mfaType` 缺省即 TOTP、`0` 未登记却可用 | `{}` / `{mfaType:0}` / `{mfaType:1}` 同效（都返回 `otpauthUrl`）；`9` / `99` → `400 20109` | 客户端漏字段会静默绑定；两阶段绑定，未 `confirm` 时 `mfaEnabled` 不变 | 上游 |
 | 6 | 假上游的 MFA 拒绝语义与真实相反 | `scripts/lib/bff-harness.mjs` 回 `400 20205 mfa_required`；真实回 `401 20203 需要多因子验证码` 且 `data` 为空 | 自查长期为绿，掩盖了下条前端缺口 | 仓库（假上游） |
 | 7 | 登录页只认 `20205` | `app/pages/auth/login.vue` 的 `submit` 与 `describeError` 都只分支 `20205` | **MFA 已启用的账号无法登录**：只看到「需要多因子验证码」文案，不出现动态口令输入框 | 仓库（前端） |
 | 8 | 假上游的刷新是单次消费 | `usedRefresh.add` 后第二路必 `401 10201`，Node 单线程下并发也如此 | `check:bff` 断言的是真实上游不具备的语义 | 仓库（假上游） |
+| 9 | 登录页的 `mustResetPassword` 分支是死代码 | `mustResetPassword.value` 设完立即 `navigateTo(redirect)`，警告 `v-if` 永远来不及渲染；上游又不拦接口 | **强制改密等于没生效**：初始口令可长期使用 | 仓库（前端） |
 
 第 6、7、8 项已于 2026-10-31 同批修复：假上游 MFA 分支改为 `401 20203 需要多因子验证码`，登录页改认 `20203`，假上游刷新新增 `POST /__control/auth-concurrency?allow=1`「并发窗口」开关，并由 `check:bff` 新增用例锁定「并发两路均 200」的真实语义（上游修成原子消费后该用例会变红，提示回来同步本表）。三项必须一起改：只改前端而不改假上游，自查会继续按 `20205` 断言；只改假上游而不改前端，用例会立刻变红——这正是该关卡该有的样子。
+
+第 9 项同批修复：登录成功且 `mustResetPassword === true` 时不再按 `redirect` 跳看板，改为跳 `/user/security` 并弹常驻 toast（`auth.resetRequiredTitle` / `auth.resetRequired`，`duration: 0`）；假上游新增 `reset-user` 账号返回该标志，`check:ui` 用「落点 + 提示」两条用例锁住，`check:bff` 加一条「标志原样透传」用例防止 BFF 把它吞掉。
 
 原先的空白项已在本轮闭环（测试账号 `AUTOTEST-*` 用完即置 `status: 2` 禁用）：改密成功路径 `200`、随后旧口令 `401 20201`、**旧访问令牌仍 `200`**；`mfa/bind` + 真实 TOTP 计算后 `mfa/confirm` `200`、`whoami.mfaEnabled` 转 true；MFA 账号带正确 `mfaCode` 登录 `200`；禁用后登录 `20201`；`mustResetPassword: true` 建号 → 登录带该标志 → `firstReset` 改密后标志清除；弱口令 `20101` 与近三次重复 `20302` 两条策略。仍未验证：AT 30 分钟 / RT 7 天自然过期、浏览器多标签页并发刷新的实际表现。缺陷与复现方法统一登记在 `NMCPS-REC-001`（`layers/content/collections/cn/records/defects/auth-upstream-defects.md`）。
 
@@ -231,4 +234,4 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.3.3 | 7.7 记 `check:ui` 外部模式的 `/ready` 前置校验（未配上游即报错退出，48 项）与 `/user/security` 复用同一条 503 修复指引。 |
 | 2026-10-31 | 0.3.4 | 7.7 抽出 `shared/constants/upstreamReasons.ts`（`/ready` reason 与 `bff_upstream_*` message），上游侧失败统一走 `upstreamHintKey()`（掉线/超时也给指引），假上游加 `/__control/down|up` 支撑「运行中掉线」自查（48 项）。 |
 | 2026-10-31 | 0.3.5 | 7.1 补 `20203` / `20204` / 禁用同码；7.2 按实测补 6–12 条（缺参 `500 10509`、并发刷新不互斥、`mfaType` 缺省、只收 JSON、MFA 登录是 `401 20203`、禁用与口令错误同码、改密不吊销旧令牌）；新增 7.8 上游缺陷与两端漂移登记（5 项上游 + 3 项仓库内漂移）。 |
-| 2026-10-31 | 0.3.6 | 7.2 补 13–14 条（`firstReset` 跳过旧口令校验、强制改密是纯前端约定与改密即时生效）；7.8 第 6/7/8 项标记为已修（假上游改 `401 20203`、登录页改认 `20203`、并发窗口用例），并补齐 `mustResetPassword` 与口令策略的闭环结论；缺陷复现登记到 `NMCPS-REC-001`。 |
+| 2026-10-31 | 0.3.7 | 7.2 第 14 条补客户端执行口径（`mustResetPassword` → 跳 `/user/security` + 常驻 toast）；7.7 计数改为自建 52 / 外部 50；7.8 新增第 9 项（登录页强制改密分支曾是死代码，已修并由 `check:ui` 两条用例锁住），第 5 项 `mfaType` 证据改为 `9` / `99` → `400 20109`；`check:bff` 增 `20204` 与 `mustResetPassword` 透传用例（81 项）。 |
