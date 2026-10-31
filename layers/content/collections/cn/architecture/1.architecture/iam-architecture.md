@@ -15,7 +15,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.1
+version: 0.3.2
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -179,6 +179,9 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 演示专用：种子口令只用于演示与录屏；上线前须核对与上游 IAM 种子脚本一致，或移除预填（裁决见 `NMCPS-ADR-0013`）。
 - 种子事实（需求方给定 + 2026-10-31 对 `http://192.168.1.55:10000/api/v1` 实测）：登录 API = `POST /api/v1/auth/login`；超级管理员 `admin` / `Admin@123456`（`accountLevel: 0`、`tenantId: 0`）；租户管理员 `tenantadmin` / `Tenant@123456`（`accountLevel: 1`、`tenantId: 1`）。种子不含租户编码，`tenantCode` 留空即可登录（内置默认租户 code 为 `default`，仅显式多租户时填）。
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
+- 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
+- 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
+- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）。
 - 流程不变：预填不绕过任何环节 —— 仍走 `POST /api/auth/login`，守卫判据仍是 `GET /api/auth/session`（见 7.6）。
 
 ---
@@ -193,3 +196,4 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.2.2 | 新增 7.6：全局登录守卫（除落地页与 `/auth/**` 外强制登录），明确 SPA 下的客户端判定与回跳规则。 |
 | 2026-10-31 | 0.3.0 | 登录页统一为 `/auth/login`（文件名 / 路由 / i18n 键由 `sign-in` 改为 `login`）；新增 7.7 演示种子账号与登录页预填。 |
 | 2026-10-31 | 0.3.1 | 7.7 按实测补全种子事实（`admin` / `tenantadmin`，`tenantCode` 留空即可登录）与登录前提（`NUXT_BFF_UPSTREAM_BASE` 未配置时 `/api/auth/*` 返回 503）。 |
+| 2026-10-31 | 0.3.2 | 7.7 补登录页上游探针（`useBffUpstream()` + `/ready`）、探针缓存 TTL（已配置 30s / 未配置 5s）与「重新检测」，并记录 CI 不得把 `CHECK_UI_BASE_URL` 指向无上游实例。 |

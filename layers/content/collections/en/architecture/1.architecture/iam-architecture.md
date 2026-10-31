@@ -13,7 +13,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.1
+version: 0.3.2
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -177,6 +177,9 @@ This repository is a demo program, so the login page must be loggable out of the
 - Demo only: the seed passwords serve demos and recordings; before going live they must be checked against the upstream IAM seed script, or the prefill removed (see `NMCPS-ADR-0013`).
 - Verified seed facts (owner-specified, probe on 2026-10-31 against `http://192.168.1.55:10000/api/v1`): login API `POST /api/v1/auth/login`; super admin `admin` / `Admin@123456` (`accountLevel: 0`, `tenantId: 0`); tenant admin `tenantadmin` / `Tenant@123456` (`accountLevel: 1`, `tenantId: 1`). The seeds carry no tenant code, so an empty `tenantCode` is enough to log in (the built-in default tenant code is `default`, used only when a tenant must be chosen explicitly).
 - Prerequisite: `NUXT_BFF_UPSTREAM_BASE` must be set (local `.env`, never committed). With an empty upstream every `/api/auth/*` route answers `503 bff_upstream_missing`, so no account — seed or otherwise — can log in; the prefill cannot compensate for a missing upstream.
+- Upstream probe: on mount the login page calls `GET /ready` through `useBffUpstream()` with an explicit `retry: false` (503 sits in ofetch's default retry list, so leaving it on means two requests per visit). Only an explicit `upstream.configured === false` triggers the warning; a failed probe (network outage, or desktop with no same-origin Nitro) draws no conclusion and defers to the login call.
+- Probe cache: `sessionStorage` under `bff.upstreamProbe`, 30s for "configured" and 5s for "not configured" (a to-fix state should heal quickly). The warning carries a "Check again" button that skips the cache, so fixing `.env` and restarting the BFF takes effect without waiting for the TTL.
+- CI shape: `check:ui` starts its own fake upstream plus the built artefact on random ports. Never point `CHECK_UI_BASE_URL` at an instance without `NUXT_BFF_UPSTREAM_BASE`; the login and upstream-ready cases fail by construction (observed in CI on 2026-10-31).
 - Flow unchanged: the prefill bypasses nothing — it still calls `POST /api/auth/login`, and the guard still judges by `GET /api/auth/session` (see 7.6).
 
 ---
@@ -191,3 +194,4 @@ This repository is a demo program, so the login page must be loggable out of the
 | 2026-10-31 | 0.2.2 | Added 7.6: the global sign-in guard (mandatory login outside the landing page and `/auth/**`), including the client-side check and bounce rules that follow from the SPA setup. |
 | 2026-10-31 | 0.3.0 | Unified the login page on `/auth/login` (file name / route / i18n key renamed from `sign-in` to `login`); added 7.7 demo seed accounts and login prefill. |
 | 2026-10-31 | 0.3.1 | 7.7 now records the verified seed facts (`admin` / `tenantadmin`, login works with an empty `tenantCode`) and the login prerequisite: without `NUXT_BFF_UPSTREAM_BASE`, `/api/auth/*` answers 503. |
+| 2026-10-31 | 0.3.2 | 7.7 now records the login-page upstream probe (`useBffUpstream()` + `/ready`), the probe cache TTLs (30s configured / 5s missing), the "Check again" action, and the CI rule that `CHECK_UI_BASE_URL` must point at an instance with an upstream. |
