@@ -14,7 +14,7 @@
 //   ⑤ 就绪探针：/ready 成功态 + 缺失 / 不可达 / 超时 / 非 2xx 四种 not_ready，且不回显上游地址
 //   ⑥ SSE 流式透传：content-type 保留、增量到达（非整体缓冲）、事件完整、不套信封、禁止缓存
 //   ⑦ 认证会话（NMCPS-ADR-0011）：web HttpOnly 双 cookie / desktop body 令牌、会话单一事实源、
-//      刷新即轮换、CSRF 403、登出恒 ok、上游业务码（10201 / 20205）保真
+//      刷新即轮换、CSRF 403、登出恒 ok、上游业务码（10201 / 20205）保真、非 JSON 报文挡在上游之外
 import { existsSync } from "node:fs";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
@@ -281,6 +281,14 @@ try {
 		log("空 body 登录 → 400 bff_invalid_body，且未触达上游", emptyLogin.status === 400 && emptyLogin.json?.message === "bff_invalid_body" && upstream.authLog.login === 0, `${emptyLogin.status} ${describe(emptyLogin.json?.message)} upstreamHits=${upstream.authLog.login}`);
 		log("校验失败回带字段级 error_detail", Array.isArray(emptyLogin.json?.error_detail) && emptyLogin.json.error_detail.some((item) => (item.loc ?? []).includes("accountName")), describe(emptyLogin.json?.error_detail?.[0]));
 
+		// 1b) 非 JSON 报文：上游不校验 Content-Type（form-urlencoded 会 500 / 10509），BFF 必须同样挡在门外
+		const formLogin = await request(authPort, "/api/auth/login", {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded" },
+			body: "accountName=alice&password=p%40ssw0rd"
+		});
+		log("form-urlencoded 登录 → 400 bff_invalid_body，且未触达上游", formLogin.status === 400 && formLogin.json?.message === "bff_invalid_body" && upstream.authLog.login === 0, `${formLogin.status} ${describe(formLogin.json?.message)} upstreamHits=${upstream.authLog.login}`);
+
 		// 2) Web 登录：令牌只进 HttpOnly cookie，响应体不含令牌
 		const webLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody() });
 		const webCookies = setCookies(webLogin);
@@ -312,7 +320,7 @@ try {
 		const sessionExpired = await request(authPort, "/api/auth/session", { cookie: "nmcps_at=revoked" });
 		log("上游 10201 → 200 未登录并清除 cookie", sessionExpired.status === 200 && sessionExpired.json?.data?.authenticated === false && setCookies(sessionExpired).some((raw) => raw.startsWith("nmcps_at=;")), `${sessionExpired.status} ${describe(setCookies(sessionExpired))}`);
 
-		// 5) 刷新即轮换：旧 refresh 只能成功一次，且 web 不回传令牌
+		// 5) 刷新即轮换：旧 refresh 串行复用失败（真实上游回 20205），且 web 不回传令牌
 		const refreshed = await request(authPort, "/api/auth/refresh", {
 			method: "POST",
 			headers: { origin: sameOrigin },
@@ -328,8 +336,21 @@ try {
 			headers: { origin: sameOrigin },
 			cookie: cookieHeader(webCookies, "nmcps_rt")
 		});
-		log("重复使用旧 refresh → 401 且业务码保留 10201", reused.status === 401 && reused.json?.code === 10201, `${reused.status} ${describe(reused.json?.code)}`);
+		log("重复使用旧 refresh → 401 20205（真实上游串行复用语义）", reused.status === 401 && reused.json?.code === 20205, `${reused.status} ${describe(reused.json?.code)}`);
 		log("刷新失败清除会话 cookie", setCookies(reused).some((raw) => raw.startsWith("nmcps_at=;")), describe(setCookies(reused)));
+
+		// 5.5) 并发窗口：真实上游的轮换非原子，同一 refresh 并发可全部成功（NMCPS-REC-001 UP-AUTH-01）。
+		//      假上游默认单次消费，这里显式打开开关复现真实语义 —— 前端仍须单飞刷新，
+		//      上游修成原子消费后本用例会变红，提示同步文档与开关。
+		await fetch(`${upstreamBase}/__control/auth-concurrency?allow=1`, { method: "POST" });
+		const concurrentRt = cookieHeader(rotatedCookies, "nmcps_rt");
+		const concurrent = await Promise.all([0, 1].map(() => request(authPort, "/api/auth/refresh", {
+			method: "POST",
+			headers: { origin: sameOrigin },
+			cookie: concurrentRt
+		})));
+		log("上游并发窗口内同一 refresh 两路均 200（锁定真实语义）", concurrent.every((res) => res.status === 200), concurrent.map((res) => `${res.status} ${describe(res.json?.code)}`).join(" | "));
+		await fetch(`${upstreamBase}/__control/auth-concurrency?allow=0`, { method: "POST" });
 
 		// 6) 桌面刷新：refreshToken 走 body，新 tokens 回传；Origin 为 tauri 白名单
 		const desktopRefresh = await request(authPort, "/api/auth/refresh", {
@@ -344,7 +365,7 @@ try {
 			headers: { ...jsonHeaders, origin: "tauri://localhost", "x-nmcps-client": "desktop" },
 			body: JSON.stringify({ refreshToken: desktopTokens?.refreshToken })
 		});
-		log("桌面重复刷新 → 401 且业务码 10201", revokedRefresh.status === 401 && revokedRefresh.json?.code === 10201, `${revokedRefresh.status} ${describe(revokedRefresh.json?.code)}`);
+		log("桌面重复刷新 → 401 且业务码 20205", revokedRefresh.status === 401 && revokedRefresh.json?.code === 20205, `${revokedRefresh.status} ${describe(revokedRefresh.json?.code)}`);
 
 		// 6.5) 自助安全设置：MFA 绑定 / 确认（cookie 模式，Origin 同源）
 		const rotatedAt = cookieHeader(rotatedCookies, "nmcps_at");
@@ -457,10 +478,10 @@ try {
 		});
 		log("上游已 401（不幂等）仍返回 200 { ok:true }", logoutAgain.status === 200 && logoutAgain.json?.data?.ok === true, `${logoutAgain.status} ${describe(logoutAgain.json?.data)}`);
 
-		// 9) 业务码保真：上游 20205 + `msg` → BFF `code` 原样、`message` 补齐
+		// 9) 业务码保真：上游 20203（需要动态口令）+ `msg` → BFF `code` 原样、`message` 补齐
 		const mfaLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "mfa-user" }) });
-		log("上游 20205 业务码原样透传（不被压成 400）", mfaLogin.status === 400 && mfaLogin.json?.code === 20205, `${mfaLogin.status} ${describe(mfaLogin.json?.code)}`);
-		log("上游 msg 归一为 message 且不写 cookie", mfaLogin.json?.message === "mfa_required" && !setCookies(mfaLogin).some((raw) => raw.startsWith("nmcps_at=")), describe(mfaLogin.json?.message));
+		log("上游 20203 需要动态口令 → 401 且业务码原样透传（不被压成 400）", mfaLogin.status === 401 && mfaLogin.json?.code === 20203, `${mfaLogin.status} ${describe(mfaLogin.json?.code)}`);
+		log("上游 msg 归一为 message 且不写 cookie", mfaLogin.json?.message === "需要多因子验证码" && !setCookies(mfaLogin).some((raw) => raw.startsWith("nmcps_at=")), describe(mfaLogin.json?.message));
 	});
 } finally {
 	await closeUpstream(upstream);

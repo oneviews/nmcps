@@ -90,8 +90,16 @@ export async function closeUpstream(server) {
  * `whoami` 只认签发过的访问令牌 —— 浏览器自查靠它走完「登录 → 会话 → 自助安全设置」全流程。
  */
 export async function startUpstream(port) {
-	/** 认证相关状态：验证刷新轮换、登出不幂等（第二次返回 401 10201） */
-	const authLog = { login: 0, refresh: 0, logout: [], mfaBind: [], mfaConfirm: [], password: [], issuedAccess: new Set(), revokedAccess: new Set(), usedRefresh: new Set(), seq: 0 };
+	/**
+	 * 认证相关状态：验证刷新轮换、登出不幂等（第二次返回 401 10201）。
+	 *
+	 * `refreshConcurrency` 是「并发窗口」开关，默认关闭＝严格单次消费（模拟串行复用）。
+	 * 打开后同一 refresh 可被重复使用 —— 这是**真实上游当前的行为**（2026-10-31 实测：
+	 * 同一 RT 三路并发全部 200，各自产出不同 sessionId，见 NMCPS-REC-001 UP-AUTH-01）。
+	 * 假上游默认仍走严格单次消费，让串行用例保持确定性；并发用例显式打开开关，
+	 * 等上游修成原子消费后，那条用例会变红，提示同步文档。
+	 */
+	const authLog = { login: 0, refresh: 0, logout: [], mfaBind: [], mfaConfirm: [], password: [], issuedAccess: new Set(), revokedAccess: new Set(), usedRefresh: new Set(), refreshConcurrency: false, seq: 0 };
 
 	/**
 	 * 「运行中掉线」开关：`POST /__control/down` 后除控制端点外的请求一律直接销毁 socket，
@@ -117,6 +125,10 @@ export async function startUpstream(port) {
 		}
 		if (url.pathname === "/__control/state")
 			return send(200, { down: control.down });
+		if (url.pathname === "/__control/auth-concurrency") {
+			authLog.refreshConcurrency = url.searchParams.get("allow") === "1";
+			return send(200, { refreshConcurrency: authLog.refreshConcurrency });
+		}
 
 		if (control.down) {
 			req.socket.destroy();
@@ -158,17 +170,26 @@ export async function startUpstream(port) {
 				// 与真实上游一致：空 body 直接 500 / 10509（BFF 必须挡在前面）
 				if (!body?.accountName || !body?.password)
 					return send(500, { code: 10509, msg: "invalid request" });
-				if (body.accountName === "mfa-user")
-					return send(400, { code: 20205, msg: "mfa_required" });
+				if (body.accountName === "mfa-user") {
+					// 真实上游：MFA 账号不带动态口令 → `401 20203`，带错码 → `401 20204`，带对 → 200
+					if (body.mfaCode === "123456")
+						return send(200, { code: 0, msg: "success", data: nextTokens() });
+					return body.mfaCode
+						? send(401, { code: 20204, msg: "动态验证码错误" })
+						: send(401, { code: 20203, msg: "需要多因子验证码" });
+				}
 				return send(200, { code: 0, msg: "success", data: nextTokens() });
 			}
 
 			if (url.pathname === "/auth/token/refresh") {
 				authLog.refresh += 1;
 				const token = body?.refreshToken;
-				// 刷新即轮换：旧 refresh 立刻失效
-				if (!token || authLog.usedRefresh.has(token))
-					return send(401, { code: 10201, msg: "session_expired" });
+				// 未知令牌 → 10201；已用过的令牌 → 20205（真实上游串行复用的形态）
+				if (!token)
+					return send(401, { code: 10201, msg: "未认证或登录态已失效" });
+				// 刷新即轮换：旧 refresh 失效；`refreshConcurrency` 打开时模拟真实上游的并发窗口
+				if (authLog.usedRefresh.has(token) && !authLog.refreshConcurrency)
+					return send(401, { code: 20205, msg: "会话已失效" });
 				authLog.usedRefresh.add(token);
 				return send(200, { code: 0, msg: "success", data: nextTokens() });
 			}

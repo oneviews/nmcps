@@ -203,6 +203,31 @@ await page.waitForURL((url) => url.pathname === "/dashboard/overview", { timeout
 const afterLogin = new URL(page.url());
 log("登录成功后按 redirect 回到目标页", afterLogin.pathname === "/dashboard/overview", `${afterLogin.pathname}${afterLogin.search}`);
 
+// 4.2 MFA 账号：上游以 `401 20203` 拒绝本次登录 → 登录页必须展开动态口令输入框，补码后成功。
+//     回归守卫：登录页曾只认 `20205`，MFA 已启用的账号因此永远看不到输入框（NMCPS-REC-001 REPO-02）。
+//     仅在自建假上游模式跑：外部实例没有 `mfa-user` 这个探测账号。
+if (upstreamPort) {
+	const mfaContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const mfaPage = await mfaContext.newPage();
+	await mfaPage.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
+	await mfaPage.locator("input[autocomplete='username']").fill("mfa-user");
+	await mfaPage.locator("input[type='password']").fill(PASSWORD);
+	await mfaPage.locator("button[type='submit']").first().click();
+
+	const otp = mfaPage.locator("input[autocomplete='one-time-code']");
+	await otp.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {});
+	const otpVisible = await otp.isVisible().catch(() => false);
+	const mfaText = await mfaPage.evaluate(() => document.body.textContent ?? "");
+	log("上游 20203 时展开动态口令输入框并给出提示", otpVisible && mfaText.includes("需要动态口令"), `otp=${otpVisible}`);
+
+	await otp.fill("123456");
+	await mfaPage.locator("button[type='submit']").first().click();
+	await mfaPage.waitForURL((url) => url.pathname === "/dashboard/overview", { timeout: 20_000 }).catch(() => {});
+	const mfaLanding = new URL(mfaPage.url()).pathname;
+	log("补齐动态口令后登录成功", mfaLanding === "/dashboard/overview", mfaLanding);
+	await mfaContext.close();
+}
+
 // 4.5 已登录再访问登录页 → 直接回跳，不再展示登录表单
 await page.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
 await page.waitForTimeout(500);
