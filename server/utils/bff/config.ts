@@ -9,8 +9,14 @@ export interface BffConfig {
 	timeoutMs: number
 	/** 允许携带凭据跨域访问的 Origin 白名单（`*` 表示放行全部，仅限本地开发） */
 	allowedOrigins: string[]
-	/** 会话令牌 cookie 名（本阶段仅读取、不写入） */
+	/** 访问令牌 cookie 名（`nmcps_at`；BFF 写入，`proxy.ts` 读取转 Bearer） */
 	tokenCookieName: string
+	/** 刷新令牌 cookie 名（`nmcps_rt`；仅 `Path=/api/auth` 下可见） */
+	refreshCookieName: string
+	/** 访问令牌兜底有效期（毫秒；正常以上游 `expiresIn` 为准） */
+	accessTtlMs: number
+	/** 刷新令牌有效期（毫秒；上游不返回刷新 TTL，只能配置兜底） */
+	refreshTtlMs: number
 	/** 上游就绪探针路径（拼在 `upstreamBase` 之后，以 `/` 开头） */
 	readinessPath: string
 	/** 上游就绪探针超时（毫秒，独立于业务超时，默认 2000） */
@@ -59,6 +65,20 @@ export function getBffConfig(event: H3Event): BffConfig {
 		? bff.tokenCookieName.trim()
 		: "nmcps_at";
 
+	const refreshCookieName = typeof bff.refreshCookieName === "string" && bff.refreshCookieName.trim()
+		? bff.refreshCookieName.trim()
+		: "nmcps_rt";
+
+	const accessTtlCandidate = Number(bff.accessTtlMs);
+	const accessTtlMs = Number.isFinite(accessTtlCandidate) && accessTtlCandidate >= 60_000
+		? accessTtlCandidate
+		: 1_800_000;
+
+	const refreshTtlCandidate = Number(bff.refreshTtlMs);
+	const refreshTtlMs = Number.isFinite(refreshTtlCandidate) && refreshTtlCandidate >= 60_000
+		? refreshTtlCandidate
+		: 7 * 24 * 60 * 60 * 1000;
+
 	const readinessPathRaw = typeof bff.readinessPath === "string" ? bff.readinessPath.trim() : "";
 	const readinessPath = readinessPathRaw
 		? (readinessPathRaw.startsWith("/") ? readinessPathRaw : `/${readinessPathRaw}`)
@@ -74,6 +94,9 @@ export function getBffConfig(event: H3Event): BffConfig {
 		timeoutMs,
 		allowedOrigins: origins.length ? origins : FALLBACK_ORIGINS,
 		tokenCookieName,
+		refreshCookieName,
+		accessTtlMs,
+		refreshTtlMs,
 		readinessPath,
 		readinessTimeoutMs
 	};

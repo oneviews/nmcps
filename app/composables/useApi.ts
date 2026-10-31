@@ -24,6 +24,14 @@ export interface ApiRequestOptions {
 	headers?: Record<string, string>
 	signal?: AbortSignal
 	timeoutMs?: number
+	/**
+	 * 是否参与认证（默认 `true`）：
+	 * - 桌面端注入 `Authorization: Bearer <访问令牌>`；
+	 * - 收到 401 后单飞刷新一次并重试原请求。
+	 *
+	 * 登录、刷新、会话探测等端点应显式传 `false`，避免递归刷新（NMCPS-ADR-0011）。
+	 */
+	auth?: boolean
 }
 
 function toApiError(res: ApiResponse<unknown>): ApiError {
@@ -62,6 +70,39 @@ export function useApi() {
 	const baseURL = String(config.public.bffBase ?? "").replace(/\/+$/, "");
 	const isDesktop = isTauri();
 	const isConfigured = computed(() => !isDesktop || baseURL.length > 0);
+	const { accessToken } = useAuthTokens();
+
+	async function send<T>(path: string, options: ApiRequestOptions, withAuth: boolean): Promise<T> {
+		const headers: Record<string, string> = { ...options.headers };
+
+		if (isDesktop) {
+			// 桌面端静态包没有同源 cookie：显式标识客户端并按需注入 Bearer
+			headers["x-nmcps-client"] = "desktop";
+
+			if (withAuth) {
+				const token = await accessToken();
+				if (token)
+					headers.authorization = `Bearer ${token}`;
+			}
+		}
+
+		const response = await $fetch<ApiResponse<T>>(path, {
+			baseURL,
+			method: options.method ?? "GET",
+			query: options.query,
+			body: options.body as Record<string, unknown> | undefined,
+			headers,
+			signal: options.signal,
+			timeout: options.timeoutMs ?? 20_000,
+			credentials: "include"
+		});
+
+		if (!isSuccessResponse(response)) {
+			throw toApiError(response);
+		}
+
+		return response.data as T;
+	}
 
 	async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
 		if (!isConfigured.value) {
@@ -69,31 +110,30 @@ export function useApi() {
 		}
 
 		const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+		const withAuth = options.auth !== false;
 
 		try {
-			const response = await $fetch<ApiResponse<T>>(normalizedPath, {
-				baseURL,
-				method: options.method ?? "GET",
-				query: options.query,
-				body: options.body as Record<string, unknown> | undefined,
-				headers: options.headers,
-				signal: options.signal,
-				timeout: options.timeoutMs ?? 20_000,
-				credentials: "include"
-			});
+			return await send<T>(normalizedPath, options, withAuth);
+		} catch (raw) {
+			const error = normalizeFetchError(raw);
 
-			if (!isSuccessResponse(response)) {
-				throw toApiError(response);
+			// 401 → 单飞刷新一次并重试（上游刷新即轮换，不能并发刷新；认证端点自身不再递归）
+			if (withAuth && isUnauthorizedCode(error.code) && await refreshAuthSession()) {
+				try {
+					return await send<T>(normalizedPath, options, withAuth);
+				} catch (retryError) {
+					throw normalizeFetchError(retryError);
+				}
 			}
 
-			return response.data as T;
-		} catch (error) {
-			throw normalizeFetchError(error);
+			throw error;
 		}
 	}
 
 	return {
 		isConfigured,
+		/** 归一化后的 BFF 基址（web 为空串 ⇒ 同源；桌面为构建时注入的地址） */
+		bffBase: baseURL,
 		request,
 		get: <T>(path: string, options: Omit<ApiRequestOptions, "method" | "body"> = {}) =>
 			request<T>(path, { ...options, method: "GET" }),

@@ -1,7 +1,7 @@
 ---
 docId: NMCPS-CONTRACT-001
 title: "Shared Types Contract"
-description: "Tier 3 contract baseline for shared types (contract.shared-types): naming conventions, directory organization, reuse rules, and the no-any / null-semantics hard constraints for cross-module shared types. This is the single authority for the contract.shared-types domain."
+description: "Tier 3 contract baseline for shared types (contract.shared-types): naming conventions, directory organization, reuse rules, and the no-any / null-semantics hard constraints for cross-module shared types, including the `/api/v1/auth` DTOs in `shared/types/auth.ts`. This is the single authority for the contract.shared-types domain."
 excerpt: "Naming, directory organization and reuse rules for shared types."
 keywords:
   - "contract"
@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.shared-types
 status: baseline
-version: 0.1.0
+version: 0.2.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -20,7 +20,7 @@ dependsOn:
   - NMCPS-GOV-003
   - NMCPS-ARCH-002
 createdAt: "2026-10-25"
-updatedAt: "2026-10-25"
+updatedAt: "2026-10-31"
 icon: "carbon:data-class"
 tags:
   - "Contract"
@@ -84,8 +84,10 @@ shared/
 | :--- | :--- | :--- |
 | `DocId` / `DOC_PATHS` | `shared/constants/docIds.ts` | docId ↔ path unique mapping |
 | `LayoutMode` / `UserPreferences` | `layers/user/app/composables/useUserPreferences.ts` | Layout preference types |
+| `ApiResponse` / `ApiStatus` / `ApiError` | `shared/types/api.ts` / `shared/utils/apiGuard.ts` | Unified response envelope and type guards |
+| `AuthUser` / `AuthTokens` / `AuthLoginPayload` / `AuthLoginResult` / `AuthRefreshResult` / `AuthSessionState` | `shared/types/auth.ts` | `/api/v1/auth` contract: field names stay upstream camelCase (`accountCode` / `accountLevel` / `sessionId`…) with **no snake_case conversion**; the BFF only normalises the error envelope's `msg` into `message` and passes business fields through verbatim; missing semantics (e.g. login has no `displayName`) are `null`, never a look-alike field |
 
-> As S2 domain baselines land, `metric` / `topology` / `iam` contract types will migrate into `shared/types/`; this contract registers them as they evolve.
+> As S2 domain baselines land, `metric` / `topology` contract types will migrate into `shared/types/`; this contract registers them as they evolve.
 
 ---
 
@@ -94,3 +96,4 @@ shared/
 | Date | Version | Change |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: shared types contract (naming, organization, reuse constraints, existing types). |
+| 2026-10-31 | 0.2.0 | Registered `shared/types/api.ts` and `shared/types/auth.ts`: verbatim upstream fields, `msg` → `message` normalisation, missing means `null`. |

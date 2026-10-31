@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.13.0
+version: 0.16.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-10-30"
+updatedAt: "2026-10-31"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -102,8 +102,11 @@ tags:
 | NMCPS-ADR-0006 | 桌面端自动更新入口 | 5 | informative | rec.adr.0006 | baseline | records/adr/adr-0006.md |
 | NMCPS-ADR-0007 | Nitro BFF 网关 | 5 | informative | rec.adr.0007 | baseline | records/adr/adr-0007.md |
 | NMCPS-ADR-0008 | 下载落地页恢复 | 5 | informative | rec.adr.0008 | baseline | records/adr/adr-0008.md |
-| NMCPS-ADR-0009 | 会话与令牌模型 | 5 | informative | rec.adr.0009 | baseline | records/adr/adr-0009.md |
+| NMCPS-ADR-0009 | 会话与令牌模型 | 5 | informative | rec.adr.0009 | superseded | records/adr/adr-0009.md |
 | NMCPS-ADR-0010 | 就绪探针与 SSE 透传 | 5 | informative | rec.adr.0010 | baseline | records/adr/adr-0010.md |
+| NMCPS-ADR-0011 | 认证接口对接与令牌轮换 | 5 | informative | rec.adr.0011 | baseline | records/adr/adr-0011.md |
+| NMCPS-ADR-0012 | 新增 platform 分层 | 5 | informative | rec.adr.0012 | baseline | records/adr/adr-0012.md |
+| NMCPS-ADR-0013 | 登录页命名与种子预填 | 5 | informative | rec.adr.0013 | baseline | records/adr/adr-0013.md |
 | NMCPS-ARCH-001 | 通信面架构 | 1 | normative | arch.transport | baseline | architecture/1.architecture/transport-architecture.md |
 | NMCPS-ARCH-002 | 数据源架构 | 1 | normative | arch.datasource | baseline | architecture/1.architecture/datasource-architecture.md |
 | NMCPS-ARCH-003 | IAM 架构 | 1 | normative | arch.iam | baseline | architecture/1.architecture/iam-architecture.md |
@@ -139,3 +142,6 @@ tags:
 | 2026-10-29 | 0.11.0 | 登记记录层 ADR：0008 恢复站点下载落地页与首页入口（Tier 5，informative）。 |
 | 2026-10-30 | 0.12.0 | 登记记录层 ADR：0010 BFF 上游就绪探针与 SSE 流式透传（Tier 5，informative；0009 由 ADR-0008 预留给会话/令牌模型）。 |
 | 2026-10-30 | 0.13.0 | 登记记录层 ADR：0009 会话与令牌模型（Tier 5，informative；清空 ADR-0008 预留位）。 |
+| 2026-10-31 | 0.14.0 | 登记记录层 ADR：0011 认证接口对接与令牌轮换（Tier 5，informative）；0009 登记 `supersededBy` 并置为 superseded。 |
+| 2026-10-31 | 0.15.0 | 登记记录层 ADR：0012 新增 platform 分层（Tauri 平台能力演示页归入 `layers/platform`，路由 path 不变）。 |
+| 2026-10-31 | 0.16.0 | 登记记录层 ADR：0013 登录页命名统一为 `login` 与演示种子账号预填（Tier 5，informative）。 |

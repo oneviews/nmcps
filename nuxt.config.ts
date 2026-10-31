@@ -41,8 +41,12 @@ export default defineNuxtConfig({
 			timeoutMs: 15000,
 			// 允许携带凭据跨域的 Origin 白名单（桌面 WebView 为 tauri:// 协议）
 			allowedOrigins: "http://localhost:3000,http://127.0.0.1:3000,tauri://localhost,http://tauri.localhost,https://tauri.localhost",
-			// 会话 token cookie 名（本阶段只读，不写入）
+			// 会话 token cookie 名：访问令牌（proxy.ts 读它转 Bearer）+ 刷新令牌（仅 /api/auth 可见）
 			tokenCookieName: "nmcps_at",
+			refreshCookieName: "nmcps_rt",
+			// 令牌有效期兜底（毫秒）：访问令牌优先用上游 expiresIn，刷新令牌上游不返回 TTL
+			accessTtlMs: 1800000,
+			refreshTtlMs: 604800000,
 			// 上游就绪探针路径（拼在 upstreamBase 之后）与超时，供 GET /ready 使用
 			readinessPath: "/health",
 			readinessTimeoutMs: 2000

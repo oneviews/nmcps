@@ -14,13 +14,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.13.0
+version: 0.16.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-10-30"
+updatedAt: "2026-10-31"
 icon: "carbon:list"
 tags:
   - "Governance"
@@ -108,8 +108,11 @@ tags:
 | NMCPS-ADR-0006 | Desktop Update Entry & Startup Silent Check | 5 | informative | rec.adr.0006 | baseline | records/adr/adr-0006.md |
 | NMCPS-ADR-0007 | Nitro BFF Gateway | 5 | informative | rec.adr.0007 | baseline | records/adr/adr-0007.md |
 | NMCPS-ADR-0008 | Download Landing Page Restoration | 5 | informative | rec.adr.0008 | baseline | records/adr/adr-0008.md |
-| NMCPS-ADR-0009 | Session and Token Model | 5 | informative | rec.adr.0009 | baseline | records/adr/adr-0009.md |
+| NMCPS-ADR-0009 | Session and Token Model | 5 | informative | rec.adr.0009 | superseded | records/adr/adr-0009.md |
 | NMCPS-ADR-0010 | Readiness Probe and SSE Passthrough | 5 | informative | rec.adr.0010 | baseline | records/adr/adr-0010.md |
+| NMCPS-ADR-0011 | Auth API Integration and Token Rotation | 5 | informative | rec.adr.0011 | baseline | records/adr/adr-0011.md |
+| NMCPS-ADR-0012 | Platform Layer Extraction | 5 | informative | rec.adr.0012 | baseline | records/adr/adr-0012.md |
+| NMCPS-ADR-0013 | Login Naming and Seed Prefill | 5 | informative | rec.adr.0013 | baseline | records/adr/adr-0013.md |
 
 > Paths are relative to `layers/content/collections/cn/`; `en/` is the mirror collection with the same docId.
 
@@ -132,3 +135,6 @@ tags:
 | 2026-10-29 | 0.11.0 | Registered ADR-0008 restoring the download landing page and the `/` entry (Tier 5, informative). |
 | 2026-10-30 | 0.12.0 | Registered ADR-0010 BFF upstream readiness probe and SSE streaming passthrough (Tier 5, informative; mirror catch-up). |
 | 2026-10-30 | 0.13.0 | Registered ADR-0009 session and token model (Tier 5, informative; fills the slot reserved by ADR-0008). |
+| 2026-10-31 | 0.14.0 | Registered ADR-0011 auth API integration and token rotation (Tier 5, informative); ADR-0009 now carries `supersededBy` and is marked superseded. |
+| 2026-10-31 | 0.15.0 | Registered ADR-0012 platform layer extraction (Tauri capability demos moved into `layers/platform`, route paths unchanged). |
+| 2026-10-31 | 0.16.0 | Registered ADR-0013 login naming unification and demo seed prefill (Tier 5, informative). |

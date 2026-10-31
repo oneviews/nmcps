@@ -131,26 +131,44 @@
 		{ label: t("preferences.theme.visual.fontScale.xl"), icon: "carbon:text-scale", type: "checkbox", checked: fontScale.value === "xl", color: fontScale.value === "xl" ? "primary" : undefined, onSelect: () => setFontScale("xl") }
 	]);
 
-	/** 用户中心菜单：子路由 + 分割线 + 切换账号/退出登录（预留） */
+	/** 用户中心菜单：当前账号 + 子路由 + 分割线 + 切换账号/退出登录 */
+	const { isAuthenticated, displayName, logout, fetchSession } = useAuth();
+	const toast = useToast();
+
+	onMounted(() => {
+		void fetchSession();
+	});
+
+	async function handleLogout(): Promise<void> {
+		await logout();
+		toast.add({ title: t("auth.loggedOut"), color: "success" });
+		await navigateTo("/auth/login");
+	}
+
 	const userMenuItems = computed<DropdownMenuItem[]>(() => {
 		const subRoutes = router.getRoutes()
 			.filter((r) => r.path.startsWith("/user/") && typeof r.meta.sort === "number" && !r.meta.hide)
 			.sort((a, b) => (a.meta.sort ?? 999) - (b.meta.sort ?? 999));
 
 		return [
+			...(isAuthenticated.value && displayName.value
+				? [{ label: displayName.value, icon: "carbon:user-avatar", disabled: true } as DropdownMenuItem, { type: "separator" } as DropdownMenuItem]
+				: []),
 			...subRoutes.map((r) => ({
 				label: t(`pages.${String(r.name)}.title`),
 				icon: r.meta.icon,
 				to: r.path
 			})),
 			{ type: "separator" },
-			{ label: t("common.switchAccount"), icon: "carbon:user-multiple", onSelect: () => {
-				// TODO: 切换账号
-			} },
-			{ label: t("common.logout"), icon: "carbon:logout", onSelect: () => {
-				// TODO: 退出登录
-			} }
-		];
+			isAuthenticated.value
+				? { label: t("common.switchAccount"), icon: "carbon:user-multiple", onSelect: () => {
+					// TODO: 切换账号（多账号会话切换待后端支持）
+				} }
+				: { label: t("auth.login"), icon: "carbon:login", onSelect: () => router.push("/auth/login") },
+			...(isAuthenticated.value
+				? [{ label: t("common.logout"), icon: "carbon:logout", onSelect: () => void handleLogout() }]
+				: [])
+		] as DropdownMenuItem[];
 	});
 
 	// header 根类：磨砂玻璃（所有模式，bg-default/50 半透明 + backdrop-blur-sm）；大屏额外加阴影（悬浮海拔）

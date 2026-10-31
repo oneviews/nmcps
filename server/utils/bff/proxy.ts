@@ -34,6 +34,14 @@ export interface BffProxyOptions {
 	baseURL?: string
 	timeoutMs?: number
 	headers?: Record<string, string | undefined>
+	/**
+	 * 覆盖发往上游的请求体（字符串 / 字节）。
+	 *
+	 * 认证类 BFF 路由需要先校验入参再转发（缺字段不直传上游），或把 cookie 里的
+	 * 刷新令牌拼成上游报文 —— 这两种场景都无法直接透传客户端原始 body。
+	 * 未提供时仍读取客户端原始 body。
+	 */
+	body?: string | Uint8Array
 }
 
 function now(): string {
@@ -80,13 +88,48 @@ function normalizeUpstreamError(status: number, payload: unknown, raw: string): 
 	const details = pickDetails(payload)
 		?? (import.meta.dev && raw ? [{ loc: [], msg: raw.slice(0, 2000), type: "upstream_body" }] : undefined);
 
+	// 上游业务码（如 iam 的 20201 / 20205）与 HTTP 状态码天然不撞：> 599 时保留，
+	// 让前端能区分「口令错」「会话失效」「未认证」；HTTP 语义码仍以 status 为准。
+	const candidate = Number(asRecord(payload)?.code);
+	const code = Number.isFinite(candidate) && candidate > 599 ? candidate : status;
+
 	return {
-		code: status,
+		code,
 		status: status >= 500 ? "error" : "warning",
 		message,
 		error_detail: details,
 		timestamp: now()
 	};
+}
+
+/**
+ * 归一化上游「已是信封」的 2xx 载荷。
+ *
+ * 新后端（gateway/iam）用 `{ code, msg, data }`，缺 `status` 与 `message`；
+ * 这里补齐成 BFF 契约（`msg` → `message`，`code === 0` → `success`），
+ * 业务字段一字不动。
+ */
+function normalizeUpstreamEnvelope<T>(payload: unknown, status: number): ApiResponse<T> {
+	const record = asRecord(payload)!;
+	const code = Number(record.code);
+	if (!Number.isFinite(code)) {
+		return payload as ApiResponse<T>;
+	}
+
+	const rawStatus = record.status;
+	const envelopeStatus: ApiResponse["status"] = rawStatus === "success" || rawStatus === "info" || rawStatus === "warning" || rawStatus === "error"
+		? rawStatus
+		: (code === 0 ? "success" : (status >= 500 ? "error" : "warning"));
+
+	return {
+		...record,
+		code,
+		status: envelopeStatus,
+		message: typeof record.message === "string" && record.message.trim()
+			? record.message
+			: (typeof record.msg === "string" && record.msg.trim() ? record.msg : (code === 0 ? "success" : "upstream_rejected")),
+		timestamp: typeof record.timestamp === "string" ? record.timestamp : now()
+	} as ApiResponse<T>;
 }
 
 function respond<T>(event: H3Event, status: number, body: ApiResponse<T>): ApiResponse<T> {
@@ -198,7 +241,8 @@ function safeJsonParse(raw: string): unknown {
  * - 上游不可达 → 502 `bff_upstream_unreachable`；超时 → 504 `bff_upstream_timeout`；
  * - 未配置上游 → 503 `bff_upstream_missing`（不静默返回空数据）；
  * - 上游非 2xx → 保留真实 HTTP 状态码 + `warning`（4xx）/`error`（5xx）语义；
- * - 上游裸 JSON → 包裹为 `{ code: 0, status: "success", data }`；已是信封则原样返回；
+ * - 上游非 2xx 且带业务码（`code > 599`，如 iam 的 20201）→ 保留业务码，便于 UI 分类；
+ * - 上游裸 JSON → 包裹为 `{ code: 0, status: "success", data }`；已是信封则归一化后返回（`msg` → `message`）；
  * - 上游 `2xx` + `text/event-stream` → 原样流式透传（不套信封，见 `streamResponse`）；
  * - 原始上游报文只在 dev 下进入 `error_detail`，生产不泄露内网细节。
  */
@@ -217,7 +261,7 @@ export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffP
 		return respond(event, 413, envelope(413, "warning", "bff_body_too_large"));
 	}
 
-	const body = BODY_METHODS.has(method) ? await readRawBody(event, false) : undefined;
+	const body = options.body ?? (BODY_METHODS.has(method) ? await readRawBody(event, false) : undefined);
 	const timeoutMs = options.timeoutMs ?? config.timeoutMs;
 
 	let url: string;
@@ -258,7 +302,7 @@ export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffP
 		}
 
 		if (isApiEnvelope(payload)) {
-			return respond(event, response.status, payload as ApiResponse<T>);
+			return respond(event, response.status, normalizeUpstreamEnvelope<T>(payload, response.status));
 		}
 
 		return respond(event, response.status, {

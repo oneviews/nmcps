@@ -2,7 +2,8 @@ import { defineEventHandler, getHeader, setResponseHeaders, setResponseStatus } 
 import { getBffConfig, isOriginAllowed } from "~~/server/utils/bff/config";
 
 const ALLOWED_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-const ALLOWED_HEADERS = "content-type,authorization,x-tenant-id,x-request-id";
+// `x-nmcps-client` 由桌面端携带（`desktop` 时 `/api/auth/login|refresh` 在响应体回传令牌）
+const ALLOWED_HEADERS = "content-type,authorization,x-tenant-id,x-request-id,x-nmcps-client";
 
 /**
  * `/api/**` 的凭据型 CORS。
