@@ -100,6 +100,10 @@ log("未登录访问安全设置被送回登录页并带回跳目标", guardSecu
 const guardCommands = await guardOf("/commands");
 log("未登录访问其他业务页同样被拦截", guardCommands.path === "/auth/login" && guardCommands.redirect === "/commands", guardCommands.landing);
 
+// `/auth/**` 在守卫白名单里，改密页只能自己判登录态：未登录直接进也要回登录页并带回跳
+const guardReset = await guardOf("/auth/reset-password");
+log("未登录访问改密页被送回登录页并带回跳目标", guardReset.path === "/auth/login" && guardReset.redirect === "/auth/reset-password", guardReset.landing);
+
 // 3. 登录页：独立布局 + 表单校验 + 导航不暴露入口
 const loginPage = await page.evaluate(() => ({
 	heading: document.querySelector("h1")?.textContent?.trim() ?? null,
@@ -249,30 +253,56 @@ if (upstreamPort) {
 
 	// 提交报文必须自带旧口令、且**不得**带 `firstReset`：上游该字段会跳过旧口令校验（UP-AUTH-02），
 	// 前端一旦图省事传上去，改密就退化成「谁拿到会话谁就能改」。
-	let passwordBody;
+	const passwordBodies = [];
 	resetPage.on("request", (req) => {
 		if (req.method() === "POST" && req.url().includes("/api/auth/password")) {
 			try {
-				passwordBody = req.postDataJSON();
+				passwordBodies.push(req.postDataJSON());
 			} catch {
-				passwordBody = null;
+				passwordBodies.push(null);
 			}
 		}
 	});
 
+	/** 填三格并提交，返回页面文案：校验态与报错态都靠它读 */
+	async function submitReset(oldPassword, newPassword, confirmPassword) {
+		await resetPage.locator("input[autocomplete='current-password']").fill(oldPassword);
+		await resetPage.locator("input[autocomplete='new-password']").nth(0).fill(newPassword);
+		await resetPage.locator("input[autocomplete='new-password']").nth(1).fill(confirmPassword);
+		await resetPage.locator("button[type='submit']").first().click();
+		await resetPage.waitForTimeout(400);
+		return resetPage.evaluate(() => document.body.textContent ?? "");
+	}
+
+	// 表单校验也得进守卫：拦不住就会把「自己改自己」的坏报文送到上游
+	const sameText = await submitReset(PASSWORD, PASSWORD, PASSWORD);
+	log("新密码与当前密码相同时内联拦下", sameText.includes("新密码不能与当前密码相同"));
+
+	const mismatchText = await submitReset(PASSWORD, "NewP@ssw0rd!", "NewP@ssw0rd?");
+	log("两次新密码不一致时内联拦下", mismatchText.includes("两次输入的新密码不一致"));
+
+	const shortText = await submitReset(PASSWORD, "Short7!", "Short7!");
+	log("新密码不足 8 位时内联拦下", shortText.includes("新密码至少 8 位"));
+
+	// 旧口令错是真的打到上游（`400 20201`）：必须点名「当前密码不正确」，不能回落通用失败
+	const wrongOldText = await submitReset("Wrong@12345", "NewP@ssw0rd!", "NewP@ssw0rd!");
+	const stillOnReset = new URL(resetPage.url()).pathname === "/auth/reset-password";
+	log("旧口令错误时点名「当前密码不正确」且停在改密页", wrongOldText.includes("当前密码不正确") && stillOnReset, `stay=${stillOnReset}`);
+
 	const NEW_PASSWORD = "NewP@ssw0rd!";
-	await resetPage.locator("input[autocomplete='current-password']").fill(PASSWORD);
-	await resetPage.locator("input[autocomplete='new-password']").nth(0).fill(NEW_PASSWORD);
-	await resetPage.locator("input[autocomplete='new-password']").nth(1).fill(NEW_PASSWORD);
-	await resetPage.locator("button[type='submit']").first().click();
+	await submitReset(PASSWORD, NEW_PASSWORD, NEW_PASSWORD);
 	await resetPage.waitForURL((url) => url.pathname === "/auth/login", { timeout: 20_000 }).catch(() => {});
 	const afterReset = new URL(resetPage.url()).pathname;
 	log("改密成功后强制重登（回登录页）", afterReset === "/auth/login", afterReset);
+
+	const lastBody = passwordBodies.at(-1);
 	log(
-		"改密请求带旧口令且不带 firstReset",
-		passwordBody?.oldPassword === PASSWORD && passwordBody?.firstReset === undefined,
-		passwordBody ? `keys=${Object.keys(passwordBody).join(",")}` : "未捕获请求"
+		"改密请求带旧口令且全程不带 firstReset",
+		lastBody?.oldPassword === PASSWORD && passwordBodies.every((body) => body && body.firstReset === undefined),
+		passwordBodies.length ? `${passwordBodies.length} 次提交 / keys=${Object.keys(lastBody ?? {}).join(",")}` : "未捕获请求"
 	);
+	// 交叉验证：三个校验态若没真拦住，报文数会变成 5 —— 这条把「内联提示」与「不发请求」绑一起
+	log("三个内联校验态都没有发出请求", passwordBodies.length === 2, `requests=${passwordBodies.length}`);
 
 	const resetToast = await resetPage.evaluate(() => document.body.textContent ?? "");
 	log("改密成功后提示用新密码重登", resetToast.includes("密码已修改"), resetToast.includes("密码已修改") ? "已提示" : "无提示");
