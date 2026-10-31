@@ -93,6 +93,10 @@ log("新文档须同步 doc-map 与 shared/constants/docIds.ts", docs.includes("
 // ── ⑤ 工程约定 ───────────────────────────────────────
 const coding = texts.get("02-coding-conventions.md") ?? "";
 log("编码约定仍要求在改动后跑 typecheck / lint", coding.includes("pnpm typecheck") && coding.includes("pnpm lint"));
+log(
+	"编码约定记录了 runtimeConfig 改动后先 nuxt prepare（.nuxt/types 缓存坑）",
+	bulletLines(coding, ["nuxt prepare"]).length === 1 && coding.includes("runtimeConfig") && coding.includes("TS2353")
+);
 
 const rust = texts.get("05-rust.md") ?? "";
 log("Rust 约定仍要求 cargo build 校验", rust.includes("cargo build") && rust.includes("src-tauri"));

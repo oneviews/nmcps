@@ -8,6 +8,7 @@ Follow the project's existing conventions at all times:
 - Use `<script setup>` in Vue SFCs.
 - Respect the existing folder structure and naming patterns (e.g. `app/composables/`, `app/components/<Group>/`).
 - Run `pnpm typecheck` and `pnpm lint` after changes and fix any errors.
+- After changing `runtimeConfig` keys in `nuxt.config.ts`, run `pnpm exec nuxt prepare` before `pnpm typecheck` — `.nuxt/types/runtime-config.d.ts` is generated, so a stale copy fails with `TS2353 ... does not exist in type`.
 - Do not introduce new dependencies unless they are already used in the project.
 
 ## Tauri Conventions
