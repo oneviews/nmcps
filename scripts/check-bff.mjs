@@ -155,6 +155,15 @@ try {
 
 	const noUpstream = await request(guardPort, "/api/device/abc");
 	log("未配置上游 → 503 bff_upstream_missing", noUpstream.status === 503 && noUpstream.json?.message === "bff_upstream_missing", `${noUpstream.status} ${describe(noUpstream.json?.message)}`);
+
+	// 登录页据此文案给出可执行指引（NMCPS-ARCH-003 §7.7）：网关先在鉴权之前回 503，
+	// 别让前端把「运维没配上游」读成「账号或密码错误」。
+	const loginNoUpstream = await request(guardPort, "/api/auth/login", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ accountName: "admin", password: "irrelevant" })
+	});
+	log("未配置上游 → POST /api/auth/login 403 之前先回 503 bff_upstream_missing", loginNoUpstream.status === 503 && loginNoUpstream.json?.message === "bff_upstream_missing", `${loginNoUpstream.status} ${describe(loginNoUpstream.json?.message)}`);
 	log("5xx 信封语义为 error", noUpstream.json?.status === "error", describe(noUpstream.json?.status));
 
 	const evilOrigin = await request(guardPort, "/api/device", { headers: { origin: "https://evil.example" } });
