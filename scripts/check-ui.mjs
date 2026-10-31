@@ -101,8 +101,8 @@ const guardCommands = await guardOf("/commands");
 log("未登录访问其他业务页同样被拦截", guardCommands.path === "/auth/login" && guardCommands.redirect === "/commands", guardCommands.landing);
 
 // `/auth/**` 在守卫白名单里，改密页只能自己判登录态：未登录直接进也要回登录页并带回跳
-const guardReset = await guardOf("/auth/reset-password");
-log("未登录访问改密页被送回登录页并带回跳目标", guardReset.path === "/auth/login" && guardReset.redirect === "/auth/reset-password", guardReset.landing);
+const guardChange = await guardOf("/auth/change-password");
+log("未登录访问改密页被送回登录页并带回跳目标", guardChange.path === "/auth/login" && guardChange.redirect === "/auth/change-password", guardChange.landing);
 
 // 3. 登录页：独立布局 + 表单校验 + 导航不暴露入口
 const loginPage = await page.evaluate(() => ({
@@ -233,28 +233,41 @@ if (upstreamPort) {
 }
 
 // 4.3 强制改密：上游 `mustResetPassword: true` 不拦接口（纯前端约定），客户端必须把人送去
-//     专用改密页 `/auth/reset-password`，改完强制重登 —— 否则初始口令能一直用下去。
+//     专用改密页 `/auth/change-password`，改完强制重登 —— 否则初始口令能一直用下去。
 //     回归守卫：登录页此前只把标志塞进 ref 后立刻跳看板，警告永远不显示。
 if (upstreamPort) {
-	const resetContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-	const resetPage = await resetContext.newPage();
-	await resetPage.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
-	await resetPage.locator("input[autocomplete='username']").fill("reset-user");
-	await resetPage.locator("input[type='password']").fill(PASSWORD);
-	await resetPage.locator("button[type='submit']").first().click();
-	await resetPage.waitForURL((url) => url.pathname === "/auth/reset-password", { timeout: 20_000 }).catch(() => {});
-	const resetLanding = new URL(resetPage.url()).pathname;
-	log("mustResetPassword 登录后落到专用改密页", resetLanding === "/auth/reset-password", resetLanding);
+	const changeContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const changePage = await changeContext.newPage();
+	await changePage.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
+	await changePage.locator("input[autocomplete='username']").fill("reset-user");
+	await changePage.locator("input[type='password']").fill(PASSWORD);
+	await changePage.locator("button[type='submit']").first().click();
+	await changePage.waitForURL((url) => url.pathname === "/auth/change-password", { timeout: 20_000 }).catch(() => {});
+	const changeLanding = new URL(changePage.url()).pathname;
+	log("mustResetPassword 登录后落到专用改密页", changeLanding === "/auth/change-password", changeLanding);
 
-	const resetText = await resetPage.evaluate(() => document.body.textContent ?? "");
-	const hasFields = await resetPage.locator("input[autocomplete='current-password']").count() === 1
-		&& await resetPage.locator("input[autocomplete='new-password']").count() === 2;
-	log("改密页一屏给齐当前密码 / 新密码 / 确认新密码", hasFields && resetText.includes("设置新密码"), `fields=${hasFields}`);
+	const changeText = await changePage.evaluate(() => document.body.textContent ?? "");
+	const hasFields = await changePage.locator("input[autocomplete='current-password']").count() === 1
+		&& await changePage.locator("input[autocomplete='new-password']").count() === 2;
+	log("改密页一屏给齐当前密码 / 新密码 / 确认新密码", hasFields && changeText.includes("设置新密码"), `fields=${hasFields}`);
+
+	// 密码管理器归属：只有密码框、没有「用户名」时，浏览器会把新口令记成一条新账号，
+	// 用户下次自动填充就填进去一条永远登不进去的记录。字段隐藏、只读、不进 Tab 序。
+	const usernameHint = changePage.locator("input[autocomplete='username']");
+	await usernameHint.first().waitFor({ timeout: 5_000 }).catch(() => {});
+	const usernameHintCount = await usernameHint.count();
+	const usernameHintValue = usernameHintCount ? await usernameHint.first().inputValue() : "";
+	const usernameHintVisible = usernameHintCount ? await usernameHint.first().isVisible() : false;
+	log(
+		"改密页带隐藏 autocomplete=username（密码管理器记到对账号）",
+		usernameHintCount === 1 && !usernameHintVisible && usernameHintValue === "reset-user",
+		`count=${usernameHintCount} visible=${usernameHintVisible} value=${usernameHintValue}`
+	);
 
 	// 提交报文必须自带旧口令、且**不得**带 `firstReset`：上游该字段会跳过旧口令校验（UP-AUTH-02），
 	// 前端一旦图省事传上去，改密就退化成「谁拿到会话谁就能改」。
 	const passwordBodies = [];
-	resetPage.on("request", (req) => {
+	changePage.on("request", (req) => {
 		if (req.method() === "POST" && req.url().includes("/api/auth/password")) {
 			try {
 				passwordBodies.push(req.postDataJSON());
@@ -265,35 +278,35 @@ if (upstreamPort) {
 	});
 
 	/** 填三格并提交，返回页面文案：校验态与报错态都靠它读 */
-	async function submitReset(oldPassword, newPassword, confirmPassword) {
-		await resetPage.locator("input[autocomplete='current-password']").fill(oldPassword);
-		await resetPage.locator("input[autocomplete='new-password']").nth(0).fill(newPassword);
-		await resetPage.locator("input[autocomplete='new-password']").nth(1).fill(confirmPassword);
-		await resetPage.locator("button[type='submit']").first().click();
-		await resetPage.waitForTimeout(400);
-		return resetPage.evaluate(() => document.body.textContent ?? "");
+	async function submitChange(oldPassword, newPassword, confirmPassword) {
+		await changePage.locator("input[autocomplete='current-password']").fill(oldPassword);
+		await changePage.locator("input[autocomplete='new-password']").nth(0).fill(newPassword);
+		await changePage.locator("input[autocomplete='new-password']").nth(1).fill(confirmPassword);
+		await changePage.locator("button[type='submit']").first().click();
+		await changePage.waitForTimeout(400);
+		return changePage.evaluate(() => document.body.textContent ?? "");
 	}
 
 	// 表单校验也得进守卫：拦不住就会把「自己改自己」的坏报文送到上游
-	const sameText = await submitReset(PASSWORD, PASSWORD, PASSWORD);
+	const sameText = await submitChange(PASSWORD, PASSWORD, PASSWORD);
 	log("新密码与当前密码相同时内联拦下", sameText.includes("新密码不能与当前密码相同"));
 
-	const mismatchText = await submitReset(PASSWORD, "NewP@ssw0rd!", "NewP@ssw0rd?");
+	const mismatchText = await submitChange(PASSWORD, "NewP@ssw0rd!", "NewP@ssw0rd?");
 	log("两次新密码不一致时内联拦下", mismatchText.includes("两次输入的新密码不一致"));
 
-	const shortText = await submitReset(PASSWORD, "Short7!", "Short7!");
+	const shortText = await submitChange(PASSWORD, "Short7!", "Short7!");
 	log("新密码不足 8 位时内联拦下", shortText.includes("新密码至少 8 位"));
 
 	// 旧口令错是真的打到上游（`400 20201`）：必须点名「当前密码不正确」，不能回落通用失败
-	const wrongOldText = await submitReset("Wrong@12345", "NewP@ssw0rd!", "NewP@ssw0rd!");
-	const stillOnReset = new URL(resetPage.url()).pathname === "/auth/reset-password";
-	log("旧口令错误时点名「当前密码不正确」且停在改密页", wrongOldText.includes("当前密码不正确") && stillOnReset, `stay=${stillOnReset}`);
+	const wrongOldText = await submitChange("Wrong@12345", "NewP@ssw0rd!", "NewP@ssw0rd!");
+	const stillOnChange = new URL(changePage.url()).pathname === "/auth/change-password";
+	log("旧口令错误时点名「当前密码不正确」且停在改密页", wrongOldText.includes("当前密码不正确") && stillOnChange, `stay=${stillOnChange}`);
 
 	const NEW_PASSWORD = "NewP@ssw0rd!";
-	await submitReset(PASSWORD, NEW_PASSWORD, NEW_PASSWORD);
-	await resetPage.waitForURL((url) => url.pathname === "/auth/login", { timeout: 20_000 }).catch(() => {});
-	const afterReset = new URL(resetPage.url()).pathname;
-	log("改密成功后强制重登（回登录页）", afterReset === "/auth/login", afterReset);
+	await submitChange(PASSWORD, NEW_PASSWORD, NEW_PASSWORD);
+	await changePage.waitForURL((url) => url.pathname === "/auth/login", { timeout: 20_000 }).catch(() => {});
+	const afterChange = new URL(changePage.url()).pathname;
+	log("改密成功后强制重登（回登录页）", afterChange === "/auth/login", afterChange);
 
 	const lastBody = passwordBodies.at(-1);
 	log(
@@ -304,9 +317,36 @@ if (upstreamPort) {
 	// 交叉验证：三个校验态若没真拦住，报文数会变成 5 —— 这条把「内联提示」与「不发请求」绑一起
 	log("三个内联校验态都没有发出请求", passwordBodies.length === 2, `requests=${passwordBodies.length}`);
 
-	const resetToast = await resetPage.evaluate(() => document.body.textContent ?? "");
-	log("改密成功后提示用新密码重登", resetToast.includes("密码已修改"), resetToast.includes("密码已修改") ? "已提示" : "无提示");
-	await resetContext.close();
+	const changeToast = await changePage.evaluate(() => document.body.textContent ?? "");
+	log("改密成功后提示用新密码重登", changeToast.includes("密码已修改"), changeToast.includes("密码已修改") ? "已提示" : "无提示");
+
+	// 改密必须真的落库：假上游此前把 `mustResetPassword` 钉死成 `true`、也不改口令，
+	// 「重登不再被弹回」与「旧口令失效」这两条根本写不出来（2026-10-31 评审发现），现在补上。
+	await changePage.locator("input[autocomplete='username']").fill("reset-user");
+	await changePage.locator("input[type='password']").fill(NEW_PASSWORD);
+	await changePage.locator("button[type='submit']").first().click();
+	await changePage.waitForURL((url) => url.pathname === "/dashboard/overview", { timeout: 20_000 }).catch(() => {});
+	const reLoginLanding = new URL(changePage.url()).pathname;
+	log("改密后用新口令重登不再被弹回改密页", reLoginLanding === "/dashboard/overview", reLoginLanding);
+	await changeContext.close();
+
+	// 旧口令必须在上游就失效（`401 20201`）→ 登录页点名「账号或密码错误」且停在登录页，
+	// 不能出现「改完密码旧口令还能用」这种最坏结果。
+	const staleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const stalePage = await staleContext.newPage();
+	await stalePage.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
+	await stalePage.locator("input[autocomplete='username']").fill("reset-user");
+	await stalePage.locator("input[type='password']").fill(PASSWORD);
+	await stalePage.locator("button[type='submit']").first().click();
+	await stalePage.waitForTimeout(1_500);
+	const staleLanding = new URL(stalePage.url()).pathname;
+	const staleText = await stalePage.evaluate(() => document.body.textContent ?? "");
+	log(
+		"改密后旧口令登录被拒（401 20201）",
+		staleLanding === "/auth/login" && staleText.includes("账号或密码错误"),
+		`${staleLanding} / ${staleText.includes("账号或密码错误") ? "已提示" : "未提示"}`
+	);
+	await staleContext.close();
 }
 
 // 4.5 已登录再访问登录页 → 直接回跳，不再展示登录表单

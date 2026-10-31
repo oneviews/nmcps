@@ -235,9 +235,9 @@
 				: undefined;
 
 			// 强制改密是纯前端约定：上游不拦接口（NMCPS-ARCH-003 §7.2 第 14 条），
-			// 客户端必须把人送去专用改密页（`/auth/reset-password`），否则初始口令能一直用下去。
+			// 客户端必须把人送去专用改密页（`/auth/change-password`），否则初始口令能一直用下去。
 			if (result.mustResetPassword) {
-				await navigateTo({ path: "/auth/reset-password", query: redirect ? { redirect } : undefined });
+				await navigateTo({ path: "/auth/change-password", query: redirect ? { redirect } : undefined });
 				return;
 			}
 

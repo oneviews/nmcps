@@ -102,6 +102,24 @@ export async function startUpstream(port) {
 	const authLog = { login: 0, refresh: 0, logout: [], mfaBind: [], mfaConfirm: [], password: [], issuedAccess: new Set(), revokedAccess: new Set(), usedRefresh: new Set(), refreshConcurrency: false, seq: 0 };
 
 	/**
+	 * 账号口令是**可变**的：改密真的落库、重登真的校验（默认口令 `p@ssw0rd`）。
+	 *
+	 * 之前假上游把 `reset-user` 的 `mustResetPassword` 固定成 `true`、改密也不改库，
+	 * 于是「改密后新口令能重登且不再被弹回」「旧口令被拒」这两条根本写不出来 ——
+	 * 真实上游改密后会清标志并让旧口令失效（2026-10-31 评审发现）。
+	 * 只有 `reset-user` 初始带强制改密标志，其余账号按普通账号处理。
+	 */
+	const DEFAULT_PASSWORD = "p@ssw0rd";
+	const accounts = new Map();
+	const accountOf = (name) => {
+		if (!accounts.has(name))
+			accounts.set(name, { password: DEFAULT_PASSWORD, mustResetPassword: name === "reset-user" });
+		return accounts.get(name);
+	};
+	/** 令牌归属账号：`whoami` 与改密都按令牌判身份，不再一律回 `alice` */
+	const tokenAccount = new Map();
+
+	/**
 	 * 「运行中掉线」开关：`POST /__control/down` 后除控制端点外的请求一律直接销毁 socket，
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
@@ -158,10 +176,12 @@ export async function startUpstream(port) {
 			}
 
 			const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-			const nextTokens = () => {
+			const nextTokens = (accountName = "alice") => {
 				authLog.seq += 1;
 				const tokens = { accessToken: `at-${authLog.seq}`, refreshToken: `rt-${authLog.seq}`, expiresIn: 1800, sessionId: `s-${authLog.seq}` };
 				authLog.issuedAccess.add(tokens.accessToken);
+				tokenAccount.set(tokens.accessToken, accountName);
+				tokenAccount.set(tokens.refreshToken, accountName);
 				return tokens;
 			};
 
@@ -173,16 +193,17 @@ export async function startUpstream(port) {
 				if (body.accountName === "mfa-user") {
 					// 真实上游：MFA 账号不带动态口令 → `401 20203`，带错码 → `401 20204`，带对 → 200
 					if (body.mfaCode === "123456")
-						return send(200, { code: 0, msg: "success", data: nextTokens() });
+						return send(200, { code: 0, msg: "success", data: nextTokens("mfa-user") });
 					return body.mfaCode
 						? send(401, { code: 20204, msg: "动态验证码错误" })
 						: send(401, { code: 20203, msg: "需要多因子验证码" });
 				}
-				if (body.accountName === "reset-user") {
-					// 真实上游：`mustResetPassword: true` 的账号登录成功但带标志，接口不拦（强制改密是纯前端约定）
-					return send(200, { code: 0, msg: "success", data: { ...nextTokens(), mustResetPassword: true } });
-				}
-				return send(200, { code: 0, msg: "success", data: nextTokens() });
+				// 真实上游：口令错 → `401 20201`（与「账号不存在」同码，不泄露账号是否存在）
+				const account = accountOf(body.accountName);
+				if (body.password !== account.password)
+					return send(401, { code: 20201, msg: "账号或密码错误" });
+				// `mustResetPassword: true` 的账号登录成功但带标志，接口不拦（强制改密是纯前端约定）；改密后置 false
+				return send(200, { code: 0, msg: "success", data: { ...nextTokens(body.accountName), mustResetPassword: account.mustResetPassword } });
 			}
 
 			if (url.pathname === "/auth/token/refresh") {
@@ -195,7 +216,8 @@ export async function startUpstream(port) {
 				if (authLog.usedRefresh.has(token) && !authLog.refreshConcurrency)
 					return send(401, { code: 20205, msg: "会话已失效" });
 				authLog.usedRefresh.add(token);
-				return send(200, { code: 0, msg: "success", data: nextTokens() });
+				// 刷新保持账号归属：`whoami` 之后仍要认出是哪个账号
+				return send(200, { code: 0, msg: "success", data: nextTokens(tokenAccount.get(token) ?? "alice") });
 			}
 
 			if (url.pathname === "/auth/whoami") {
@@ -205,7 +227,7 @@ export async function startUpstream(port) {
 				return send(200, {
 					code: 0,
 					msg: "success",
-					data: { accountCode: "acc-1", accountName: "alice", displayName: "Alice", tenantId: 7, accountLevel: 2, mfaEnabled: true, sessionId: "s-1" }
+					data: { accountCode: "acc-1", accountName: tokenAccount.get(bearer) ?? "alice", displayName: "Alice", tenantId: 7, accountLevel: 2, mfaEnabled: true, sessionId: "s-1" }
 				});
 			}
 
@@ -244,8 +266,14 @@ export async function startUpstream(port) {
 				// 与真实上游一致：缺字段直接 500 / 10509（BFF 必须挡在前面）
 				if (!body?.oldPassword || !body?.newPassword)
 					return send(500, { code: 10509, msg: "invalid request" });
-				if (body.oldPassword !== "p@ssw0rd")
+				// 按令牌判账号：改密只影响自己的口令，不串号
+				const accountName = tokenAccount.get(bearer);
+				const account = accountName ? accountOf(accountName) : null;
+				if (!account || body.oldPassword !== account.password)
 					return send(400, { code: 20201, msg: "old_password_invalid" });
+				// 真实上游：改密真的落库 —— 新口令立刻可登录、旧口令失效，同时清掉强制改密标志
+				account.password = body.newPassword;
+				account.mustResetPassword = false;
 				return send(200, { code: 0, msg: "success", data: null });
 			}
 

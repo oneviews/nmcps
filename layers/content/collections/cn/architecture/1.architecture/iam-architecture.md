@@ -15,7 +15,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.9
+version: 0.5.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -129,7 +129,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 11. **已禁用账号与口令错误同码**：`PUT /account/{code}/status` 置 `status: 2` 后登录 → `401 20201 账号或口令错误`，不区分「已禁用」。前端无法据此提示「账号停用」。
 12. **改密不吊销旧令牌**：`password` 成功后旧访问令牌仍可 `whoami` 200 —— 7.5「改密后只提示、不登出」的约定由此得到实证，也意味着令牌泄露不能靠改密止损。
 13. **`firstReset: true` 会跳过旧口令校验**（2026-10-31 实测）：body 只带 `newPassword` 即 `200`，`oldPassword` 可缺省。该字段本意是「首次登录强制改密」，不应成为免旧口令的后门 —— 会话被劫持即可改密夺号。BFF 的 `authPasswordSchema` 仍要求 `oldPassword`，前端不要因为该字段存在就放开必填。
-14. **强制改密是纯前端约定**：`mustResetPassword: true` 的账号在未改密时 `whoami` 仍 200、其他接口照常放行；改密后标志清除（再登录 `mustResetPassword: false`）。正因上游不拦，客户端必须自己执行：`POST /api/auth/login` 返回该标志时，登录页直接把人送到专用改密页 `/auth/reset-password`（并带上原始 `redirect`），改密成功后**强制登出、用新口令重登**，不再按 `redirect` 跳看板 —— 否则初始口令可以一直用下去（2026-10-31 修复，见 7.8 第 9 项）。该页提交改密时**不带** `firstReset`：该字段会跳过旧口令校验（第 13 条 / `NMCPS-REC-001` UP-AUTH-02），用户刚用旧口令登录过，让他再填一次即可。弱口令与重复口令的策略在上游：复杂度不足 `400 20101`，与近期历史重复 `400 20302`；改密立即生效（0/200/1000/3000ms 复测旧口令均 `401 20201`），无宽限窗口。
+14. **强制改密是纯前端约定**：`mustResetPassword: true` 的账号在未改密时 `whoami` 仍 200、其他接口照常放行；改密后标志清除（再登录 `mustResetPassword: false`）。正因上游不拦，客户端必须自己执行：`POST /api/auth/login` 返回该标志时，登录页直接把人送到专用改密页 `/auth/change-password`（并带上原始 `redirect`），改密成功后**强制登出、用新口令重登**，不再按 `redirect` 跳看板 —— 否则初始口令可以一直用下去（2026-10-31 修复，见 7.8 第 9 项）。该页提交改密时**不带** `firstReset`：该字段会跳过旧口令校验（第 13 条 / `NMCPS-REC-001` UP-AUTH-02），用户刚用旧口令登录过，让他再填一次即可。弱口令与重复口令的策略在上游：复杂度不足 `400 20101`，与近期历史重复 `400 20302`；改密立即生效（0/200/1000/3000ms 复测旧口令均 `401 20201`），无宽限窗口。
 
 ### 7.3 BFF 暴露面
 
@@ -151,7 +151,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 组合式函数：`useAuth()`（登录 / 登出 / 会话恢复 / 改密 / MFA 绑定与确认）+ `useAuthTokens()`（桌面令牌持久化）；所有 BFF 调用走 `useApi()`。
 - `useApi` 命中 401 且有刷新令牌时单飞刷新一次并重放原请求；刷新失败即清会话。`login` 以 `auth: false` 跳过注入与重试；`refresh` 由 `useAuth` 直接 `$fetch`（不经 `useApi`），避免递归刷新。
 - 登录页 `/auth/login`（`hide`，不进侧栏）；除落地页与 `/auth/**` 外，所有页面由全局守卫强制登录（见 7.6），页面无需逐条声明中间件。认证动作在源码与路由上统一用 `login`（不写 `sign-in`），裁决见 `NMCPS-ADR-0013`。
-- 强制改密页 `/auth/reset-password`（`hide` + `layout: false`，与登录页同壳）：一屏给齐「当前密码 / 新密码 / 确认新密码」，提交后提示并强制重登。它落在 `/auth/**` 白名单里，全局守卫不判登录态，所以页面自己在 `onMounted` 用 `fetchSession(true)` 兜底，未登录即带着 `redirect` 回登录页。
+- 强制改密页 `/auth/change-password`（`hide` + `layout: false`，与登录页同壳）：一屏给齐「当前密码 / 新密码 / 确认新密码」，提交后提示并强制重登。它落在 `/auth/**` 白名单里，全局守卫不判登录态，所以页面自己在 `onMounted` 用 `fetchSession(true)` 兜底，未登录即带着 `redirect` 回登录页。**命名用 `change-password` 而不是 `reset-password`**：`reset` 在行业里专指「忘记口令」的匿名令牌流程（Auth0 `password-reset`、Keycloak `reset-credentials`、Django `reset/<uid>/<token>/`），上游接口设计表也把 `ResetPassword` 定为管理员重置、`ChangePassword` 定为自助改密；本页是已认证 + 需旧口令的**自助改密**，与 `useAuth().changePassword()` / `POST /api/auth/password` 取同一个词。裁决与备选见 `NMCPS-ADR-0014`（`layers/content/collections/cn/records/adr/adr-0014.md`），`reset` 一词保留给未来的忘记口令流程。页面另带一个隐藏的 `<input autocomplete="username">`（只读、`tabindex="-1"`、`aria-hidden`，值取会话里的 `accountName`）：密码管理器要靠表单里的「用户名」把新口令记到对应账号下，缺了它会新建一条永远登不进去的重复记录；`check:ui` 断言它恰好一个、不可见、且值等于当前账号。
 
 ### 7.5 自助安全设置页
 
@@ -166,7 +166,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - **不引入二维码依赖**：项目依赖清单里没有 QR 库，页面改为「复制 URI + 复制密钥 + 引导手动录入」，避免为一个可选交互新增依赖。
 - **登录由全局守卫接管**：本页不再声明按需中间件，未登录由 `/api/auth/session` 判定后直接跳登录页（见 7.6）。页面内保留引导态，只作为兜底：会话在停留期间失效、桌面端令牌被清空时，页面明确提示而不是留白。
 - 错误码映射复用登录页口径：`20201` 旧口令错误、`20204` 动态口令错误、`10201` 会话失效（提示重新登录）。
-- 两条改密路径要分清：本页是**普通自助改密**（改完只提示、不登出）；`mustResetPassword` 的账号走 `/auth/reset-password`（改完强制重登，见 7.2 第 14 条 / 7.4）。
+- 两条改密路径要分清：本页是**普通自助改密**（改完只提示、不登出）；`mustResetPassword` 的账号走 `/auth/change-password`（改完强制重登，见 7.2 第 14 条 / 7.4）。
 
 ### 7.6 登录守卫（全局强制）
 
@@ -175,7 +175,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 实现：`app/middleware/auth.global.ts`（全局路由中间件）；白名单仅 `/`（下载落地页）与 `/auth/**`（登录页）。
 - 未登录：`navigateTo('/auth/login?redirect=<完整路径>')`；登录成功后按 `redirect` 回跳，缺省 `/dashboard/overview`。
 - 已登录访问 `/auth/login`：直接回跳（`redirect` 优先，其次 `/dashboard/overview`），避免二次登录。
-- 白名单内的非登录页（如 `/auth/reset-password`）自己兜底：页面挂载时用 `fetchSession(true)` 判态，未登录即带 `redirect` 回登录页。`check:ui` 有专门用例锁这条（外部模式也跑）。
+- 白名单内的非登录页（如 `/auth/change-password`）自己兜底：页面挂载时用 `fetchSession(true)` 判态，未登录即带 `redirect` 回登录页。`check:ui` 有专门用例锁这条（外部模式也跑）。
 - 判据唯一：只认 `GET /api/auth/session`（`fetchSession()` 带缓存，登录后用 `force` 刷新）；守卫不读 cookie、不解析令牌。
 - SSR 不需要特判：应用是 SPA（`nuxt.config.ts` 的 `ssr: false`），守卫恒在客户端执行；首帧不渲染业务数据，会话回来后立即重定向。
 - 桌面静态包：同样走客户端守卫，`useAuthTokens()` 无令牌即未登录。
@@ -193,7 +193,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
-- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 61 项、外部模式 49 项：自建多 13 项（MFA 动态口令 2、强制改密 10、上游掉线 1，前两者依赖假上游的 `mfa-user` / `reset-user` 与 `__control/down`），外部模式多前置校验 1 项（登录与自检用例在两种模式下都在跑，含「未登录直进 `/auth/reset-password`」这条守卫）。
+- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 64 项、外部模式 49 项：自建多 16 项（MFA 动态口令 2、强制改密 13、上游掉线 1，前两者依赖假上游的 `mfa-user` / `reset-user` 与 `__control/down`），外部模式多前置校验 1 项（登录与自检用例在两种模式下都在跑，含「未登录直进 `/auth/change-password`」这条守卫）。假上游的口令是**按账号可变**的（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），否则「新口令重登不再被弹回」「旧口令 `401 20201`」这两条断言写不出来。
 - 词汇表单一事实源：`shared/constants/upstreamReasons.ts` 的 `UPSTREAM_REASONS`（`/ready` 的 `upstream.reason`）与 `BFF_UPSTREAM_MESSAGES`（API 层 `bff_upstream_*` message），server 与前端一律引用常量。自查脚本是纯 node ESM，不 import 该文件，而是按**线上字符串**断言 —— 改取值会让契约用例变红，这本身就是防漂移守卫。
 - 复用口径：`/user/security` 的绑定 MFA / 改密与登录页共用 `upstreamHintKey()`（`app/utils/apiError.ts`）：`bff_upstream_missing` → 配 `.env` 指引，`bff_upstream_unreachable` / `bff_upstream_timeout` → 上游不可达指引（`auth.bffUpstreamUnavailable`），都不再回落原始 message，避免用户把运维问题读成「口令错误」。
 - 掉线演练：假上游带控制端点 `POST /__control/down|up|state`；`down` 后除控制端点外的请求直接销毁 socket，BFF 侧表现为 502 `bff_upstream_unreachable`，因此「已登录 → 上游掉线 → 改密」这种只能运行中构造的场景也进了自查。
@@ -217,7 +217,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 
 第 6、7、8 项已于 2026-10-31 同批修复：假上游 MFA 分支改为 `401 20203 需要多因子验证码`，登录页改认 `20203`，假上游刷新新增 `POST /__control/auth-concurrency?allow=1`「并发窗口」开关，并由 `check:bff` 新增用例锁定「并发两路均 200」的真实语义（上游修成原子消费后该用例会变红，提示回来同步本表）。三项必须一起改：只改前端而不改假上游，自查会继续按 `20205` 断言；只改假上游而不改前端，用例会立刻变红——这正是该关卡该有的样子。
 
-第 9 项的修复分两步收口：先修死代码（登录成功且 `mustResetPassword === true` 时不再按 `redirect` 跳看板），再补齐缺口本身 —— 新增专用改密页 `/auth/reset-password`（一屏三字段，改完强制重登），登录页只负责带 `redirect` 送人过去。假上游新增 `reset-user` 账号返回该标志；`check:ui` 用十条用例锁住（落点 / 表单齐备 / 三个内联校验态 / 旧口令错点名 `20201` / 强制重登 / 报文带旧口令且不带 `firstReset` / 校验态不发请求 / 重登提示）+ 一条守卫用例（未登录直进回登录页并带回跳），`check:bff` 加一条「标志原样透传」用例防止 BFF 把它吞掉。三条内联校验（新旧相同、两次不一致、不足 8 位）另配「报文数必须为 2」的交叉断言：校验若被绕开，请求数会变成 5，用例立刻变红。
+第 9 项的修复分两步收口：先修死代码（登录成功且 `mustResetPassword === true` 时不再按 `redirect` 跳看板），再补齐缺口本身 —— 新增专用改密页 `/auth/change-password`（一屏三字段，改完强制重登），登录页只负责带 `redirect` 送人过去。假上游新增 `reset-user` 账号返回该标志；`check:ui` 用十三条用例锁住（落点 / 表单齐备 / 隐藏 `autocomplete="username"` 归属当前账号 / 三个内联校验态 / 旧口令错点名 `20201` / 强制重登 / 报文带旧口令且不带 `firstReset` / 校验态不发请求 / 重登提示 / 新口令重登不再被弹回 / 旧口令改后被拒）+ 一条守卫用例（未登录直进回登录页并带回跳），`check:bff` 加一条「标志原样透传」用例防止 BFF 把它吞掉。三条内联校验（新旧相同、两次不一致、不足 8 位）另配「报文数必须为 2」的交叉断言：校验若被绕开，请求数会变成 5，用例立刻变红。
 
 原先的空白项已在本轮闭环（测试账号 `AUTOTEST-*` 用完即置 `status: 2` 禁用）：改密成功路径 `200`、随后旧口令 `401 20201`、**旧访问令牌仍 `200`**；`mfa/bind` + 真实 TOTP 计算后 `mfa/confirm` `200`、`whoami.mfaEnabled` 转 true；MFA 账号带正确 `mfaCode` 登录 `200`；禁用后登录 `20201`；`mustResetPassword: true` 建号 → 登录带该标志 → `firstReset` 改密后标志清除；弱口令 `20101` 与近三次重复 `20302` 两条策略。仍未验证：AT 30 分钟 / RT 7 天自然过期、浏览器多标签页并发刷新的实际表现。缺陷与复现方法统一登记在 `NMCPS-REC-001`（`layers/content/collections/cn/records/defects/auth-upstream-defects.md`）。
 
@@ -240,3 +240,5 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.3.7 | 7.2 第 14 条补客户端执行口径（`mustResetPassword` → 跳 `/user/security` + 常驻 toast）；7.7 计数改为自建 52 / 外部 50；7.8 新增第 9 项（登录页强制改密分支曾是死代码，已修并由 `check:ui` 两条用例锁住），第 5 项 `mfaType` 证据改为 `9` / `99` → `400 20109`；`check:bff` 增 `20204` 与 `mustResetPassword` 透传用例（81 项）。 |
 | 2026-10-31 | 0.3.8 | 强制改密落地专用页：7.2 第 14 条改为「跳 `/auth/reset-password` + 改完强制重登 + 提交不带 `firstReset`」（对齐第 13 条 UP-AUTH-02）；7.4 补该页的壳与自判登录约定；7.7 计数改为自建 55 / 外部 48；7.8 第 9 项补「先修死代码、再补专用表单」两步收口与 5 条用例。 |
 | 2026-10-31 | 0.3.9 | 改密页把表单校验与错误映射纳入守卫：`check:ui` 7.8 第 9 项由 5 条扩到 10 条（新增新旧相同 / 两次不一致 / 不足 8 位三个内联校验态、旧口令错点名「当前密码不正确」、以及「校验态不发请求」的报文数交叉断言），另加一条守卫用例（未登录直进 `/auth/reset-password` 回登录页并带回跳）；7.7 计数改为自建 61 / 外部 49。 |
+| 2026-10-31 | 0.4.0 | 改密页更名 `/auth/reset-password` → `/auth/change-password`（i18n 21 键 `auth.reset*` → `auth.changePassword*`，文案不变；自查条数不变，自建 61 / 外部 49）：`reset` 在行业与上游设计里都指「忘记口令」的匿名令牌流程，本页是需旧口令的自助改密，与 `useAuth().changePassword()` 取同词；裁决见 `NMCPS-ADR-0014`（`layers/content/collections/cn/records/adr/adr-0014.md`），7.4 补命名理由。 |
+| 2026-10-31 | 0.5.0 | 改密页补密码管理器语义与闭环断言：页面加隐藏 `<input autocomplete="username">`（值取会话账号）；假上游口令改为**按账号可变**（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），`check:ui` 补三条用例（新口令重登不再被弹回 / 改后旧口令被拒 `401 20201` / 隐藏用户名归属当前账号），7.7 计数改为自建 64 / 外部 49；`check:bff` 的第二次改密改用上一次设的新口令。 |

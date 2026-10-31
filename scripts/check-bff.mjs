@@ -442,7 +442,9 @@ try {
 				"x-nmcps-client": "desktop",
 				authorization: `Bearer ${desktopRefresh.json?.data?.tokens?.accessToken}`
 			},
-			body: JSON.stringify({ oldPassword: "p@ssw0rd", newPassword: "newp@ss123" })
+			// 假上游的改密已经落库（`accountOf`）：上一条把 alice 的口令换成了 newp@ss123，
+			// 这里必须用新口令当旧口令，才和真实上游一致
+			body: JSON.stringify({ oldPassword: "newp@ss123", newPassword: "newp@ss456" })
 		});
 		log("桌面令牌（无 cookie）改密 200", desktopPassword.status === 200 && desktopPassword.json?.data?.ok === true, `${desktopPassword.status} ${describe(desktopPassword.json?.data)}`);
 

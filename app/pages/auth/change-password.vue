@@ -5,6 +5,9 @@
 	登录页收到该标志就把人送到这里，改完立刻登出、用新口令重登 —— 初始口令不上路。
 	有意**不带** `firstReset: true`：该字段会跳过旧口令校验（`NMCPS-REC-001` UP-AUTH-02），
 	而用户刚用旧口令登录过，让他再填一次即可，不把上游的后门写进前端。
+
+	页面叫 `change-password` 而不是 `reset-password`：`reset` 在行业与上游接口设计里
+	都指「忘记口令」的匿名令牌流程，本页是需旧口令的自助改密（`NMCPS-ADR-0014`）。
 -->
 <template>
 	<div class="relative flex min-h-svh items-center justify-center overflow-hidden bg-default/50 p-4">
@@ -16,16 +19,31 @@
 				<div class="flex flex-col items-center gap-y-2 text-center">
 					<SvgoLogo :filled="true" :font-controlled="false" class="size-14" />
 					<h1 class="text-lg font-semibold font-heading">
-						{{ $t("auth.resetTitle") }}
+						{{ $t("auth.changePasswordTitle") }}
 					</h1>
 					<p class="text-sm text-muted">
-						{{ $t("auth.resetDescription") }}
+						{{ $t("auth.changePasswordDescription") }}
 					</p>
 				</div>
 			</template>
 
 			<UForm :state="state" :schema="schema" class="flex flex-col gap-y-4" @submit="submit">
-				<UFormField :label="$t('auth.resetOldPassword')" name="oldPassword">
+				<!--
+					密码管理器靠表单里的「用户名」把新口令记到对应账号下；缺了它，浏览器会把这条
+					当成另一个账号，留下一条永远登不进去的重复记录。字段隐藏、只读、不进 Tab 序，
+					纯粹是给浏览器的表单语义（`NMCPS-ARCH-003` §7.4）。
+				-->
+				<input
+					v-if="accountName"
+					type="text"
+					autocomplete="username"
+					:value="accountName"
+					readonly
+					tabindex="-1"
+					aria-hidden="true"
+					class="hidden"
+				>
+				<UFormField :label="$t('auth.changePasswordCurrentLabel')" name="oldPassword">
 					<UInput
 						v-model="state.oldPassword"
 						type="password"
@@ -37,26 +55,26 @@
 					/>
 				</UFormField>
 
-				<UFormField :label="$t('auth.resetNewPassword')" name="newPassword">
+				<UFormField :label="$t('auth.changePasswordNewLabel')" name="newPassword">
 					<UInput
 						v-model="state.newPassword"
 						type="password"
 						variant="subtle"
 						size="lg"
 						autocomplete="new-password"
-						:placeholder="$t('auth.resetNewPasswordPlaceholder')"
+						:placeholder="$t('auth.changePasswordNewPlaceholder')"
 						class="w-full"
 					/>
 				</UFormField>
 
-				<UFormField :label="$t('auth.resetConfirmPassword')" name="confirmPassword">
+				<UFormField :label="$t('auth.changePasswordConfirmLabel')" name="confirmPassword">
 					<UInput
 						v-model="state.confirmPassword"
 						type="password"
 						variant="subtle"
 						size="lg"
 						autocomplete="new-password"
-						:placeholder="$t('auth.resetConfirmPasswordPlaceholder')"
+						:placeholder="$t('auth.changePasswordConfirmPlaceholder')"
 						class="w-full"
 					/>
 				</UFormField>
@@ -70,7 +88,7 @@
 				/>
 
 				<UButton type="submit" size="lg" block :loading="submitting" :disabled="!isConfigured">
-					{{ submitting ? $t("auth.resetSubmitting") : $t("auth.resetSubmit") }}
+					{{ submitting ? $t("auth.changePasswordSubmitting") : $t("auth.changePasswordSubmit") }}
 				</UButton>
 			</UForm>
 		</UCard>
@@ -99,18 +117,18 @@
 	});
 
 	const schema = z.object({
-		oldPassword: z.string().min(1, t("auth.resetOldRequired")),
+		oldPassword: z.string().min(1, t("auth.changePasswordCurrentRequired")),
 		newPassword: z.string()
-			.min(1, t("auth.resetNewRequired"))
-			.min(8, t("auth.resetNewTooShort")),
-		confirmPassword: z.string().min(1, t("auth.resetConfirmRequired"))
+			.min(1, t("auth.changePasswordNewRequired"))
+			.min(8, t("auth.changePasswordNewTooShort")),
+		confirmPassword: z.string().min(1, t("auth.changePasswordConfirmRequired"))
 	})
 		.refine((data) => data.newPassword !== data.oldPassword, {
-			error: t("auth.resetSameAsOld"),
+			error: t("auth.changePasswordSameAsCurrent"),
 			path: ["newPassword"]
 		})
 		.refine((data) => data.newPassword === data.confirmPassword, {
-			error: t("auth.resetMismatch"),
+			error: t("auth.changePasswordMismatch"),
 			path: ["confirmPassword"]
 		});
 
@@ -124,6 +142,8 @@
 
 	const submitting = ref(false);
 	const errorMessage = ref<string>();
+	/** 当前账号名：只喂给隐藏的 `autocomplete="username"`，不在界面上出现 */
+	const accountName = ref<string>();
 
 	/**
 	 * 未登录直接进来（手动敲地址 / 改密途中会话过期）：送回登录页并带回跳，
@@ -131,8 +151,9 @@
 	 */
 	onMounted(async () => {
 		const session = await fetchSession(true);
+		accountName.value = session.user?.accountName;
 		if (!session.authenticated) {
-			await navigateTo({ path: "/auth/login", query: { redirect: "/auth/reset-password" } });
+			await navigateTo({ path: "/auth/login", query: { redirect: "/auth/change-password" } });
 		}
 	});
 
@@ -143,19 +164,19 @@
 			if (hint)
 				return t(hint);
 			if (error.code === 20201 || error.code === 401)
-				return t("auth.resetOldPasswordInvalid");
+				return t("auth.changePasswordCurrentInvalid");
 			// 口令策略在上游：复杂度不足 400 20101，与近期历史重复 400 20302
 			if (error.code === 20101)
-				return t("auth.resetTooWeak");
+				return t("auth.changePasswordTooWeak");
 			if (error.code === 20302)
-				return t("auth.resetReused");
+				return t("auth.changePasswordReused");
 			if (isUnauthorizedCode(error.code))
-				return t("auth.resetSessionExpired");
+				return t("auth.changePasswordSessionExpired");
 			if (error.message)
 				return error.message;
 		}
 
-		return t("auth.resetFailed");
+		return t("auth.changePasswordFailed");
 	}
 
 	async function submit(): Promise<void> {
@@ -169,7 +190,7 @@
 			// 第三参刻意不带 `firstReset`：见文件头注释
 			await changePassword(state.newPassword, state.oldPassword);
 
-			toast.add({ title: t("auth.resetSuccess"), color: "success" });
+			toast.add({ title: t("auth.changePasswordSuccess"), color: "success" });
 
 			// 强制重登：初始口令已经作废，旧会话不再复用
 			await logout();
