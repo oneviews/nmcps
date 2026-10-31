@@ -1,0 +1,11 @@
+{
+	"name": "nmcps-platform",
+	"type": "module",
+	"version": "2.0.0",
+	"private": true,
+	"description": "NMCPS platform layer: Tauri platform capability demos (shell / fs / os / store / notification / webview)",
+	"license": "MIT",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	}
+}

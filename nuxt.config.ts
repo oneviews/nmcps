@@ -16,7 +16,8 @@ export default defineNuxtConfig({
 		"./layers/transmission",
 		"./layers/content",
 		"./layers/system",
-		"./layers/user"
+		"./layers/user",
+		"./layers/platform"
 	],
 	ssr: false,
 	ignore: ["**/src-tauri/**"],
