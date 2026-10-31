@@ -203,7 +203,7 @@
 		if (error instanceof ApiError) {
 			if (error.code === 401 || error.code === 20201 || error.code === 20202)
 				return t("auth.invalidCredentials");
-			if (error.code === 20205)
+			if (error.code === 20203)
 				return t("auth.mfaRequired");
 			if (error.code === 403)
 				return t("auth.forbidden");
@@ -246,8 +246,9 @@
 
 			await navigateTo(redirect);
 		} catch (error) {
-			// 需要动态口令时上游会拒绝本次登录：保留账号口令，只让用户补码后重试
-			if (error instanceof ApiError && error.code === 20205)
+			// 需要动态口令时上游以 `401 20203` 拒绝本次登录（实测，见 NMCPS-REC-001）：
+			// 保留账号口令，展开动态口令输入框让用户补码后重试
+			if (error instanceof ApiError && error.code === 20203)
 				mfaRequired.value = true;
 
 			errorMessage.value = describeError(error);
