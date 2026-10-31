@@ -126,20 +126,12 @@ jobs:
       - name: Install Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      # UI 自查：check:ui 默认指向内网 dev server，这里用 CHECK_UI_BASE_URL 指向本地构建产物。
+      # UI 自查：check:ui 自己拉起假上游 + 构建产物（随机空闲端口，跑完即关）。
+      # ⚠️ 不要把 CHECK_UI_BASE_URL 指向手起的 BFF：那个实例没有 NUXT_BFF_UPSTREAM_BASE，
+      # 「上游就绪」与登录用例必然失败（2026-10-31 CI 实证）。
       # 页面断言含动画/布局测量，跑两轮做稳定性采样（CHECK_UI_ROUNDS），任一轮失败即中止。
       - name: Page UI checks
         run: |
-          node .output/server/index.mjs > ci-logs/nitro.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:3000/health > /dev/null && break
-            sleep 1
-          done
-          if ! curl -sf http://127.0.0.1:3000/health > /dev/null; then
-            echo "server did not become ready on :3000" >&2
-            cat ci-logs/nitro.log >&2
-            exit 1
-          fi
           set +e
           : > ci-logs/check-ui.log
           for round in $(seq 1 "$CHECK_UI_ROUNDS"); do
@@ -154,9 +146,6 @@ jobs:
           sh scripts/ci-summary.sh "page UI checks（$CHECK_UI_ROUNDS 轮）" ci-logs/check-ui.log
           exit 0
         env:
-          HOST: 127.0.0.1
-          PORT: 3000
-          CHECK_UI_BASE_URL: http://127.0.0.1:3000
           CHECK_UI_SCREENSHOT: ${{ github.workspace }}/ui-check.png
           CHECK_UI_ROUNDS: 2
 
@@ -177,5 +166,4 @@ jobs:
             ci-logs/build-server.log
             ci-logs/check-bff.log
             ci-logs/check-ui.log
-            ci-logs/nitro.log
           if-no-files-found: ignore
