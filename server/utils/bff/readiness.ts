@@ -1,4 +1,6 @@
 import type { H3Event } from "h3";
+import type { UpstreamReason } from "~~/shared/constants/upstreamReasons";
+import { UPSTREAM_REASONS } from "~~/shared/constants/upstreamReasons";
 import { getBffConfig } from "./config";
 
 /**
@@ -9,7 +11,7 @@ import { getBffConfig } from "./config";
  * `/ready` 额外要求上游在 `readinessTimeoutMs` 内回 2xx（readiness）。
  * 探针只读状态码、不消费 body，也不回显上游地址（避免内网拓扑泄露）。
  */
-export type ReadinessReason = "upstream_missing" | "upstream_unreachable" | "upstream_timeout" | "upstream_unhealthy";
+export type ReadinessReason = UpstreamReason;
 
 export interface UpstreamReadiness {
 	/** 是否配置了上游基址 */
@@ -52,7 +54,7 @@ export async function probeUpstreamReadiness(event: H3Event): Promise<ReadinessR
 	const { upstreamBase, readinessPath, readinessTimeoutMs } = getBffConfig(event);
 
 	if (!upstreamBase) {
-		return report({ configured: false, reason: "upstream_missing" });
+		return report({ configured: false, reason: UPSTREAM_REASONS.missing });
 	}
 
 	const url = `${upstreamBase}${readinessPath}`;
@@ -77,7 +79,7 @@ export async function probeUpstreamReadiness(event: H3Event): Promise<ReadinessR
 		}
 
 		if (!response.ok) {
-			return report({ configured: true, status: response.status, latencyMs, reason: "upstream_unhealthy" });
+			return report({ configured: true, status: response.status, latencyMs, reason: UPSTREAM_REASONS.unhealthy });
 		}
 
 		return report({ configured: true, status: response.status, latencyMs });
@@ -89,7 +91,7 @@ export async function probeUpstreamReadiness(event: H3Event): Promise<ReadinessR
 		return report({
 			configured: true,
 			latencyMs: Date.now() - startedAt,
-			reason: isAbortError(error) ? "upstream_timeout" : "upstream_unreachable"
+			reason: isAbortError(error) ? UPSTREAM_REASONS.timeout : UPSTREAM_REASONS.unreachable
 		});
 	} finally {
 		clearTimeout(timer);

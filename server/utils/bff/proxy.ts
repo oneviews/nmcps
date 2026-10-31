@@ -1,6 +1,7 @@
 import type { H3Event } from "h3";
 import type { ApiResponse, ValidationError } from "~~/shared/types/api";
 import { getCookie, getHeader, getQuery, readRawBody, setResponseHeader, setResponseStatus } from "h3";
+import { BFF_UPSTREAM_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { isApiEnvelope } from "~~/shared/utils/apiGuard";
 import { getBffConfig } from "./config";
 
@@ -251,7 +252,7 @@ export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffP
 	const base = (options.baseURL || config.upstreamBase).trim();
 
 	if (!base) {
-		return respond(event, 503, envelope(503, "error", "bff_upstream_missing"));
+		return respond(event, 503, envelope(503, "error", BFF_UPSTREAM_MESSAGES.missing));
 	}
 
 	const method = (options.method ?? event.method).toUpperCase();
@@ -268,7 +269,7 @@ export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffP
 	try {
 		url = buildUpstreamUrl(event, base, options);
 	} catch {
-		return respond(event, 500, envelope(500, "error", "bff_upstream_base_invalid"));
+		return respond(event, 500, envelope(500, "error", BFF_UPSTREAM_MESSAGES.baseInvalid));
 	}
 
 	const controller = new AbortController();
@@ -314,14 +315,14 @@ export async function proxyToUpstream<T = unknown>(event: H3Event, options: BffP
 		});
 	} catch (error) {
 		if (isAbortError(error)) {
-			return respond(event, 504, envelope(504, "error", "bff_upstream_timeout"));
+			return respond(event, 504, envelope(504, "error", BFF_UPSTREAM_MESSAGES.timeout));
 		}
 
 		if (import.meta.dev) {
 			console.error("[bff] upstream request failed", method, url, error);
 		}
 
-		return respond(event, 502, envelope(502, "error", "bff_upstream_unreachable"));
+		return respond(event, 502, envelope(502, "error", BFF_UPSTREAM_MESSAGES.unreachable));
 	} finally {
 		clearTimeout(timer);
 	}
