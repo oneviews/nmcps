@@ -71,7 +71,7 @@ Additional observations (not defects, but worth knowing):
 | REPO-01 | The fake upstream answered `400 20205 mfa_required` where the real one answers `401 20203`, so the self-check stayed falsely green | `scripts/lib/bff-harness.mjs` now answers `401 / 20203`; the `check:bff` cases follow |
 | REPO-02 | The login page only knew `20205`, so an MFA account never saw the OTP field | `app/pages/auth/login.vue` now keys on `20203` (both `submit` and `describeError`) |
 | REPO-03 | The fake upstream consumed refresh tokens strictly once, while the real one allows concurrent use | The fake upstream now allows reuse inside a concurrency window and still rejects a serial replay; a new case locks that semantics |
-| REPO-04 | **The forced-reset branch was dead code**: the login page stored `mustResetPassword` in a ref and then called `navigateTo(redirect)` immediately, so the warning `v-if` never rendered — and upstream does not block the API, leaving the initial password usable indefinitely | Closed in two steps: first the dead code, then the gap itself — a dedicated `/auth/reset-password` page (one screen, three fields, forced re-login afterwards, submitted **without** `firstReset`), with the login page only forwarding `redirect`; the fake upstream gained a `reset-user` account; `check:ui` locks five cases (landing, complete form, forced re-login, request body carries the old password and no `firstReset`, toast after re-login) and `check:bff` locks the flag pass-through |
+| REPO-04 | **The forced-reset branch was dead code**: the login page stored `mustResetPassword` in a ref and then called `navigateTo(redirect)` immediately, so the warning `v-if` never rendered — and upstream does not block the API, leaving the initial password usable indefinitely | Closed in two steps: first the dead code, then the gap itself — a dedicated `/auth/reset-password` page (one screen, three fields, forced re-login afterwards, submitted **without** `firstReset`), with the login page only forwarding `redirect`; the fake upstream gained a `reset-user` account; `check:ui` locks ten cases (landing, complete form, three inline validation states, a wrong old password naming `20201`, forced re-login, request body carries the old password and no `firstReset`, no request emitted by the validation states, toast after re-login) plus one guard case (an anonymous visit bounces back to the login page with the redirect target), and `check:bff` locks the flag pass-through |
 
 ## 4. Closed and open verification items
 
@@ -84,7 +84,7 @@ Closed (probe accounts `AUTOTEST-*`, disabled with `status: 2` afterwards):
 - Creating with `mustResetPassword: true` → the flag comes back on login → a `firstReset` change clears it;
 - Both password-policy rules (complexity and history).
 
-Self-check guards (fake upstream, so they do not depend on the real one being reproducible): `check:bff` (81 assertions) covers the `20203` / `20204` pass-through pair and the `mustResetPassword` flag; `check:ui` (55 assertions self-built, 48 external) covers the MFA retry sign-in and the whole forced-reset flow (landing on `/auth/reset-password` → complete form → forced re-login → request body carrying the old password and no `firstReset` → toast after re-login).
+Self-check guards (fake upstream, so they do not depend on the real one being reproducible): `check:bff` (81 assertions) covers the `20203` / `20204` pass-through pair and the `mustResetPassword` flag; `check:ui` (61 assertions self-built, 49 external) covers the MFA retry sign-in and the whole forced-reset flow (landing on `/auth/reset-password` → complete form → three inline validation states → a wrong old password naming `20201` → forced re-login → request body carrying the old password and no `firstReset` → toast after re-login), plus the "anonymous visit to the reset page bounces to the login page with the redirect target" guard.
 
 Still open: natural expiry (30-minute AT / 7-day RT) and concurrent refresh across multiple browser tabs.
 
@@ -92,7 +92,7 @@ Still open: natural expiry (30-minute AT / 7-day RT) and concurrent refresh acro
 
 1. Start the BFF: `PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`.
 2. Hit the upstream directly for UP-AUTH-01 (concurrent refresh) and UP-AUTH-03/04 (missing input, Content-Type) — those are only visible upstream, the BFF absorbs them.
-3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream (81 assertions) and `pnpm check:ui` against its own fake upstream and the built artefact (55 assertions), then one manual login against the real upstream.
+3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream (81 assertions) and `pnpm check:ui` against its own fake upstream and the built artefact (61 assertions), then one manual login against the real upstream.
 4. Remember `--noproxy '*'` for local curl (the environment exports `http_proxy`).
 
 ## 6. Ticket text (ready to file)

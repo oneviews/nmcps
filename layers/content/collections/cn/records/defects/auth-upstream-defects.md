@@ -71,7 +71,7 @@ tags:
 | REPO-01 | 假上游 MFA 分支回 `400 20205 mfa_required`，真实回 `401 20203`，自查长期假绿 | `scripts/lib/bff-harness.mjs` 改为 `401 / 20203`，`check:bff` 用例同步 |
 | REPO-02 | 登录页只认 `20205`，MFA 账号看不到动态口令输入框 | `app/pages/auth/login.vue` 改认 `20203`（`submit` 与 `describeError` 两处） |
 | REPO-03 | 假上游刷新为严格单次消费，真实上游允许并发使用 | 假上游改为「并发窗口内允许重复使用、串行复用仍 `401`」，并新增并发用例锁定该语义 |
-| REPO-04 | **强制改密分支是死代码**：登录页把 `mustResetPassword` 塞进 ref 后立刻 `navigateTo(redirect)`，警告 `v-if` 永远渲染不到；上游又不拦接口 ⇒ 初始口令可长期使用 | 分两步收口：先修死代码，再补缺口本身 —— 新增专用页 `/auth/reset-password`（一屏三字段，改完强制重登，提交**不带** `firstReset`），登录页只带 `redirect` 送人过去；假上游加 `reset-user` 账号；`check:ui` 锁 5 条（落点 / 表单齐备 / 强制重登 / 报文带旧口令且无 `firstReset` / 重登提示）、`check:bff` 锁「标志透传」 |
+| REPO-04 | **强制改密分支是死代码**：登录页把 `mustResetPassword` 塞进 ref 后立刻 `navigateTo(redirect)`，警告 `v-if` 永远渲染不到；上游又不拦接口 ⇒ 初始口令可长期使用 | 分两步收口：先修死代码，再补缺口本身 —— 新增专用页 `/auth/reset-password`（一屏三字段，改完强制重登，提交**不带** `firstReset`），登录页只带 `redirect` 送人过去；假上游加 `reset-user` 账号；`check:ui` 锁 10 条（落点 / 表单齐备 / 三个内联校验态 / 旧口令错点名 `20201` / 强制重登 / 报文带旧口令且无 `firstReset` / 校验态不发请求 / 重登提示）+ 1 条守卫（未登录直进回登录页并带回跳）、`check:bff` 锁「标志透传」 |
 
 ## 四、已闭环与未闭环的验证项
 
@@ -84,7 +84,7 @@ tags:
 - `mustResetPassword: true` 建号 → 登录带标志 → `firstReset` 改密后标志清除；
 - 密码复杂度与历史重复两条策略。
 
-自查守卫（假上游，不依赖真上游可复现）：`check:bff` 81 项覆盖 `20203` / `20204` 双码透传与 `mustResetPassword` 标志透传；`check:ui` 自建模式 55 项（外部模式 48 项）覆盖 MFA 补码登录与强制改密全流程（落 `/auth/reset-password` → 表单齐备 → 强制重登 → 报文带旧口令且不带 `firstReset` → 重登提示）。
+自查守卫（假上游，不依赖真上游可复现）：`check:bff` 81 项覆盖 `20203` / `20204` 双码透传与 `mustResetPassword` 标志透传；`check:ui` 自建模式 61 项（外部模式 49 项）覆盖 MFA 补码登录与强制改密全流程（落 `/auth/reset-password` → 表单齐备 → 三个内联校验态 → 旧口令错点名「当前密码不正确」→ 强制重登 → 报文带旧口令且不带 `firstReset` → 重登提示），另含「未登录直进改密页回登录页并带回跳」守卫。
 
 未闭环：AT 30 分钟 / RT 7 天自然过期；浏览器多标签页并发刷新的实际表现。
 
@@ -92,7 +92,7 @@ tags:
 
 1. 起 BFF：`PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`。
 2. 直连上游跑 UP-AUTH-01（并发刷新）、UP-AUTH-03/04（缺参与 Content-Type）——这三项只在上游侧可见，BFF 已吸收。
-3. 走 BFF 复验端到端：`pnpm check:bff`（假上游，81 项）与 `pnpm check:ui`（自建假上游 + 构建产物，55 项）各一轮，再补一次真上游手工登录。
+3. 走 BFF 复验端到端：`pnpm check:bff`（假上游，81 项）与 `pnpm check:ui`（自建假上游 + 构建产物，61 项）各一轮，再补一次真上游手工登录。
 4. 本地 curl 记得 `--noproxy '*'`（环境变量里有 `http_proxy`）。
 
 ## 六、工单文本（可直接提交）
