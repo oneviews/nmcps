@@ -15,7 +15,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.3
+version: 0.3.4
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -181,8 +181,10 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
-- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出（`check:ui` 外部模式另计一项，自查项数为 48）。
-- 复用口径：`/user/security` 的绑定 MFA / 改密同样把 `503 bff_upstream_missing` 映射为这条修复指引，避免用户把「运维没配上游」读成「口令错误」。
+- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。两种模式各 48 项：自建多「上游掉线」一项，外部模式多前置校验一项。
+- 词汇表单一事实源：`shared/constants/upstreamReasons.ts` 的 `UPSTREAM_REASONS`（`/ready` 的 `upstream.reason`）与 `BFF_UPSTREAM_MESSAGES`（API 层 `bff_upstream_*` message），server 与前端一律引用常量。自查脚本是纯 node ESM，不 import 该文件，而是按**线上字符串**断言 —— 改取值会让契约用例变红，这本身就是防漂移守卫。
+- 复用口径：`/user/security` 的绑定 MFA / 改密与登录页共用 `upstreamHintKey()`（`app/utils/apiError.ts`）：`bff_upstream_missing` → 配 `.env` 指引，`bff_upstream_unreachable` / `bff_upstream_timeout` → 上游不可达指引（`auth.bffUpstreamUnavailable`），都不再回落原始 message，避免用户把运维问题读成「口令错误」。
+- 掉线演练：假上游带控制端点 `POST /__control/down|up|state`；`down` 后除控制端点外的请求直接销毁 socket，BFF 侧表现为 502 `bff_upstream_unreachable`，因此「已登录 → 上游掉线 → 改密」这种只能运行中构造的场景也进了自查。
 - 流程不变：预填不绕过任何环节 —— 仍走 `POST /api/auth/login`，守卫判据仍是 `GET /api/auth/session`（见 7.6）。
 
 ---
@@ -199,3 +201,4 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.3.1 | 7.7 按实测补全种子事实（`admin` / `tenantadmin`，`tenantCode` 留空即可登录）与登录前提（`NUXT_BFF_UPSTREAM_BASE` 未配置时 `/api/auth/*` 返回 503）。 |
 | 2026-10-31 | 0.3.2 | 7.7 补登录页上游探针（`useBffUpstream()` + `/ready`）、探针缓存 TTL（已配置 30s / 未配置 5s）与「重新检测」，并记录 CI 不得把 `CHECK_UI_BASE_URL` 指向无上游实例。 |
 | 2026-10-31 | 0.3.3 | 7.7 记 `check:ui` 外部模式的 `/ready` 前置校验（未配上游即报错退出，48 项）与 `/user/security` 复用同一条 503 修复指引。 |
+| 2026-10-31 | 0.3.4 | 7.7 抽出 `shared/constants/upstreamReasons.ts`（`/ready` reason 与 `bff_upstream_*` message），上游侧失败统一走 `upstreamHintKey()`（掉线/超时也给指引），假上游加 `/__control/down|up` 支撑「运行中掉线」自查（48 项）。 |

@@ -13,7 +13,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.3
+version: 0.3.4
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -179,8 +179,10 @@ This repository is a demo program, so the login page must be loggable out of the
 - Prerequisite: `NUXT_BFF_UPSTREAM_BASE` must be set (local `.env`, never committed). With an empty upstream every `/api/auth/*` route answers `503 bff_upstream_missing`, so no account — seed or otherwise — can log in; the prefill cannot compensate for a missing upstream.
 - Upstream probe: on mount the login page calls `GET /ready` through `useBffUpstream()` with an explicit `retry: false` (503 sits in ofetch's default retry list, so leaving it on means two requests per visit). Only an explicit `upstream.configured === false` triggers the warning; a failed probe (network outage, or desktop with no same-origin Nitro) draws no conclusion and defers to the login call.
 - Probe cache: `sessionStorage` under `bff.upstreamProbe`, 30s for "configured" and 5s for "not configured" (a to-fix state should heal quickly). The warning carries a "Check again" button that skips the cache, so fixing `.env` and restarting the BFF takes effect without waiting for the TTL.
-- CI shape: `check:ui` starts its own fake upstream plus the built artefact on random ports. Never point `CHECK_UI_BASE_URL` at an instance without `NUXT_BFF_UPSTREAM_BASE`; the login and upstream-ready cases fail by construction (observed in CI on 2026-10-31). In that external mode the script now probes `/ready` first and aborts when no upstream is configured (one extra assertion, so the suite reports 48 instead of 47).
-- Reuse: the MFA bind and password-change actions on `/user/security` map `503 bff_upstream_missing` to the same remediation hint, so users do not read "upstream not configured" as "wrong password".
+- CI shape: `check:ui` starts its own fake upstream plus the built artefact on random ports. Never point `CHECK_UI_BASE_URL` at an instance without `NUXT_BFF_UPSTREAM_BASE`; the login and upstream-ready cases fail by construction (observed in CI on 2026-10-31). In that external mode the script probes `/ready` first and aborts when no upstream is configured. Both modes report 48 assertions: the self-built one adds an "upstream dropped" case, the external one adds the preflight.
+- Single vocabulary: `shared/constants/upstreamReasons.ts` holds `UPSTREAM_REASONS` (the `/ready` `upstream.reason` values) and `BFF_UPSTREAM_MESSAGES` (the `bff_upstream_*` API messages); server and client reference the constants. The self-check scripts are plain node ESM and do not import that file — they assert the wire strings, so changing a value turns the contract cases red. That is the drift guard.
+- Reuse: the MFA bind and password-change actions on `/user/security` share `upstreamHintKey()` (`app/utils/apiError.ts`) with the login page: `bff_upstream_missing` → the "set `.env`" hint, `bff_upstream_unreachable` / `bff_upstream_timeout` → the unreachable hint (`auth.bffUpstreamUnavailable`). Neither falls back to the raw message, so an ops problem is not read as "wrong password".
+- Drop drill: the fake upstream exposes `POST /__control/down|up|state`; while down it destroys sockets for every other path, which surfaces as 502 `bff_upstream_unreachable` on the BFF side. That makes "signed in → upstream dropped → change password" testable, which cannot be built any other way.
 - Flow unchanged: the prefill bypasses nothing — it still calls `POST /api/auth/login`, and the guard still judges by `GET /api/auth/session` (see 7.6).
 
 ---
@@ -197,3 +199,4 @@ This repository is a demo program, so the login page must be loggable out of the
 | 2026-10-31 | 0.3.1 | 7.7 now records the verified seed facts (`admin` / `tenantadmin`, login works with an empty `tenantCode`) and the login prerequisite: without `NUXT_BFF_UPSTREAM_BASE`, `/api/auth/*` answers 503. |
 | 2026-10-31 | 0.3.2 | 7.7 now records the login-page upstream probe (`useBffUpstream()` + `/ready`), the probe cache TTLs (30s configured / 5s missing), the "Check again" action, and the CI rule that `CHECK_UI_BASE_URL` must point at an instance with an upstream. |
 | 2026-10-31 | 0.3.3 | 7.7 now records the `/ready` preflight of the `check:ui` external mode (aborts without an upstream, 48 assertions) and the shared 503 guidance reused by `/user/security`. |
+| 2026-10-31 | 0.3.4 | 7.7 now extracts `shared/constants/upstreamReasons.ts` (the `/ready` reasons and the `bff_upstream_*` messages), routes every upstream-side failure through `upstreamHintKey()` (unreachable/timeout get a hint too), and gives the fake upstream `/__control/down|up` so the "upstream dropped while signed in" case is covered (48 assertions). |
