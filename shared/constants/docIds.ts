@@ -40,7 +40,8 @@ export const DOC_PATHS = {
 	"NMCPS-DESIGN-006": "layers/content/collections/cn/architecture/2.domain/scenario.md",
 	"NMCPS-DESIGN-007": "layers/content/collections/cn/architecture/2.domain/dashboard.md",
 	"NMCPS-CONTRACT-001": "layers/content/collections/cn/architecture/3.contract/shared-types.md",
-	"NMCPS-CONTRACT-002": "layers/content/collections/cn/architecture/3.contract/metrics.md"
+	"NMCPS-CONTRACT-002": "layers/content/collections/cn/architecture/3.contract/metrics.md",
+	"NMCPS-REC-001": "layers/content/collections/cn/records/defects/auth-upstream-defects.md"
 } as const;
 
 export type DocId = keyof typeof DOC_PATHS;
