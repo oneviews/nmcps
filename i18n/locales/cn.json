@@ -91,6 +91,9 @@
 		"recheckUpstream": "重新检测"
 	},
 	"pages": {
+		"platform": {
+			"title": "平台能力"
+		},
 		"index": {
 			"poweredBy": "Powered by",
 			"download": "下载",
@@ -120,14 +123,6 @@
 			"titleRequired": "标题为必填项",
 			"missingPermission": "缺少通知权限"
 		},
-		"commands": {
-			"title": "命令",
-			"description": "访问系统 shell，创建子进程并使用默认应用管理文件和 URL。",
-			"commandInput": "命令输入",
-			"send": "发送命令",
-			"commandOutput": "命令输出",
-			"inputRequired": "输入为必填项"
-		},
 		"file": {
 			"title": "文件系统",
 			"description": "访问文件系统。本示例仅允许读写 Documents 文件夹（不含子目录）。",
@@ -138,14 +133,18 @@
 			"invalidFilename": "无效的文件名格式",
 			"fileContentRequired": "文件内容为必填项",
 			"alreadyExists": "文件已存在",
-			"created": "文件已创建"
+			"created": "文件已创建",
+			"scopeDesktop": "写入系统文档目录（Documents）",
+			"scopeMobile": "写入应用私有文档目录：移动端的 Documents 不是系统共享目录"
 		},
 		"webview": {
 			"title": "Webview 窗口",
 			"description": "在独立窗口中创建新 webview。",
 			"createExternal": "创建外部 Webview",
 			"createInternal": "创建内部 Webview",
-			"created": "Webview 已创建"
+			"created": "Webview 已创建",
+			"failed": "创建窗口失败：请检查窗口权限或是否已存在同名窗口",
+			"desktopOnly": "多窗口仅桌面端可用：移动端需系统级分屏能力，当前降级为单窗口"
 		},
 		"store": {
 			"title": "存储",

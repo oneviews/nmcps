@@ -3,41 +3,49 @@
 		:title="$t('pages.os.title')"
 		:description="$t('pages.os.description')"
 	>
-		<UAccordion :items="items" type="multiple" />
+		<div class="space-y-4">
+			<UAlert
+				v-if="!isDesktop"
+				color="neutral"
+				variant="subtle"
+				icon="carbon:warning-alt"
+				:title="$t('common.unavailableInBrowser')"
+			/>
+			<UAccordion :items="items" type="multiple" />
+		</div>
 	</LayoutTile>
 </template>
 
 <script lang="ts" setup>
-	import { isTauri } from "@tauri-apps/api/core";
-
 	definePageMeta({
 		name: "pages.os.title",
 		icon: "carbon:information",
 		category: "system",
-		description: "pages.os.description"
+		description: "pages.os.description",
+		sort: 1,
+		group: "platform",
+		tauriOnly: true
 	});
 
 	const { t } = useI18n();
-	const isTauriEnv = isTauri();
-
-	// 异步 OS locale 提前在 setup 顶层 await，computed 内保持纯同步
-	const osLocale = isTauriEnv ? (await useTauriOsLocale()) || null : null;
+	const { isDesktop, platform, version, arch } = usePlatformInfo();
+	const locale = await usePlatformLocale();
 
 	const items = computed(() => [
 		{
 			label: t("pages.os.system"),
 			icon: "carbon:screen",
-			content: isTauriEnv ? `${useTauriOsPlatform()} ${useTauriOsVersion()}` : t("common.unavailableInBrowser")
+			content: isDesktop ? [platform, version].filter(Boolean).join(" ") : t("common.unavailableInBrowser")
 		},
 		{
 			label: t("pages.os.arch"),
 			icon: "carbon:chip",
-			content: isTauriEnv ? useTauriOsArch() : t("common.unavailableInBrowser")
+			content: isDesktop ? arch || t("pages.os.notDetectable") : t("common.unavailableInBrowser")
 		},
 		{
 			label: t("pages.os.locale"),
 			icon: "carbon:globe",
-			content: isTauriEnv ? osLocale || t("pages.os.notDetectable") : t("common.unavailableInBrowser")
+			content: isDesktop ? locale || t("pages.os.notDetectable") : t("common.unavailableInBrowser")
 		}
 	]);
 </script>

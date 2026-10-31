@@ -13,21 +13,6 @@
 	],
 	"permissions": [
 		"core:tray:default",
-		"core:menu:default",
-		{
-			"identifier": "shell:allow-execute",
-			"allow": [
-				{
-					"name": "exec-sh",
-					"cmd": "sh",
-					"args": [
-						"-c",
-						{
-							"validator": "\\S.*"
-						}
-					]
-				}
-			]
-		}
+		"core:menu:default"
 	]
 }

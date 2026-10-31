@@ -16,7 +16,7 @@ authority: normative
 scope:
   - gov.doc-system
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn: []
@@ -156,7 +156,7 @@ tags:
 | 阶段 | 交付 | 内容 |
 | :--- | :--- | :--- |
 | **S0 奠基** | 治理 + 契约 + 守卫 | 接入 `@nuxt/content`；建 collections；定 frontmatter schema；写 `check:doc-system`；重组 `.clinerules/`；落本文 + doc-map |
-| **S1 架构层** | Tier 1 | 通信面 / 数据源 / 内容中心 / IAM / 共享契约 各一篇 normative 架构文档 |
+| **S1 架构层** | Tier 1 | 通信面 / 数据源 / 内容中心 / IAM / 平台能力面 / 共享契约 各一篇 normative 架构文档 |
 | **S2 领域基准** | Tier 2 | 每个已建模块（topology / spectrum / transmission / device / system…）一份唯一设计基准 |
 | **S3 记录层** | Tier 5 | 把已发生的决策（模块改名 / 命名规范 / 排序）回填为 ADR，作为首批记录 |
 
@@ -169,3 +169,4 @@ tags:
 | 2026-10-24 | 0.1.0 | 首版：目标原则、Tier 0~5、单一事实源分配表、docId 体系、三条治理硬约束、先文档再落码工作流、S0~S3 分期。 |
 | 2026-10-24 | 0.2.0 | 新增 §五 元数据契约（frontmatter 字段表）：基础/治理/导航三层、受治理 vs 普通两级、excerpt/keywords 字段、schema 与守卫分工、删除 contentType/accessLevel。 |
 | 2026-10-25 | 0.3.0 | 权威金字塔落地（Tier 1~3）并整体推进为 baseline；登记 ADR-0004 金字塔落地 / ADR-0005 双语镜像。 |
+| 2026-10-31 | 0.4.0 | §八 S1 架构层补「平台能力面」：登记 `NMCPS-ARCH-005`（`arch.platform`：能力矩阵 / 权限分层 / 探针口径），对应裁决 `NMCPS-ADR-0015`。 |

@@ -15,7 +15,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.5.0
+version: 0.6.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -193,7 +193,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
-- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 64 项、外部模式 49 项：自建多 16 项（MFA 动态口令 2、强制改密 13、上游掉线 1，前两者依赖假上游的 `mfa-user` / `reset-user` 与 `__control/down`），外部模式多前置校验 1 项（登录与自检用例在两种模式下都在跑，含「未登录直进 `/auth/change-password`」这条守卫）。假上游的口令是**按账号可变**的（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），否则「新口令重登不再被弹回」「旧口令 `401 20201`」这两条断言写不出来。
+- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 68 项、外部模式 51 项：自建多 17 项（MFA 动态口令 2、强制改密 13、上游掉线 1、Tauri 宿主模拟 2，前两者依赖假上游的 `mfa-user` / `reset-user` 与 `__control/down`），外部模式多前置校验 1 项（登录与自检用例在两种模式下都在跑，含「未登录直进 `/auth/change-password`」这条守卫与平台能力面 2 条浏览器断言）。假上游的口令是**按账号可变**的（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），否则「新口令重登不再被弹回」「旧口令 `401 20201`」这两条断言写不出来。
 - 词汇表单一事实源：`shared/constants/upstreamReasons.ts` 的 `UPSTREAM_REASONS`（`/ready` 的 `upstream.reason`）与 `BFF_UPSTREAM_MESSAGES`（API 层 `bff_upstream_*` message），server 与前端一律引用常量。自查脚本是纯 node ESM，不 import 该文件，而是按**线上字符串**断言 —— 改取值会让契约用例变红，这本身就是防漂移守卫。
 - 复用口径：`/user/security` 的绑定 MFA / 改密与登录页共用 `upstreamHintKey()`（`app/utils/apiError.ts`）：`bff_upstream_missing` → 配 `.env` 指引，`bff_upstream_unreachable` / `bff_upstream_timeout` → 上游不可达指引（`auth.bffUpstreamUnavailable`），都不再回落原始 message，避免用户把运维问题读成「口令错误」。
 - 掉线演练：假上游带控制端点 `POST /__control/down|up|state`；`down` 后除控制端点外的请求直接销毁 socket，BFF 侧表现为 502 `bff_upstream_unreachable`，因此「已登录 → 上游掉线 → 改密」这种只能运行中构造的场景也进了自查。
@@ -242,3 +242,5 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.3.9 | 改密页把表单校验与错误映射纳入守卫：`check:ui` 7.8 第 9 项由 5 条扩到 10 条（新增新旧相同 / 两次不一致 / 不足 8 位三个内联校验态、旧口令错点名「当前密码不正确」、以及「校验态不发请求」的报文数交叉断言），另加一条守卫用例（未登录直进 `/auth/reset-password` 回登录页并带回跳）；7.7 计数改为自建 61 / 外部 49。 |
 | 2026-10-31 | 0.4.0 | 改密页更名 `/auth/reset-password` → `/auth/change-password`（i18n 21 键 `auth.reset*` → `auth.changePassword*`，文案不变；自查条数不变，自建 61 / 外部 49）：`reset` 在行业与上游设计里都指「忘记口令」的匿名令牌流程，本页是需旧口令的自助改密，与 `useAuth().changePassword()` 取同词；裁决见 `NMCPS-ADR-0014`（`layers/content/collections/cn/records/adr/adr-0014.md`），7.4 补命名理由。 |
 | 2026-10-31 | 0.5.0 | 改密页补密码管理器语义与闭环断言：页面加隐藏 `<input autocomplete="username">`（值取会话账号）；假上游口令改为**按账号可变**（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），`check:ui` 补三条用例（新口令重登不再被弹回 / 改后旧口令被拒 `401 20201` / 隐藏用户名归属当前账号），7.7 计数改为自建 64 / 外部 49；`check:bff` 的第二次改密改用上一次设的新口令。 |
+| 2026-10-31 | 0.6.0 | 平台能力面引入 2 条浏览器断言（侧栏不出现「平台能力」分组 / `/os` 只显示降级提示），守卫用例由 `/commands` 改判 `/os`，7.7 计数改为自建 66 / 外部 51；能力矩阵与探针口径见 `NMCPS-ARCH-005`（layers/content/collections/cn/architecture/1.architecture/platform-architecture.md），裁决见 `NMCPS-ADR-0015`（layers/content/collections/cn/records/adr/adr-0015.md）。 |
+| 2026-10-31 | 0.6.1 | 平台能力面补「显示」分支：`check:ui` 末尾用宿主模拟（注入 `globalThis.isTauri` + 最小 IPC 桩，另起一个带 `NUXT_PUBLIC_BFF_BASE` 的实例）断言分组出现且含 5 个入口，7.7 计数改为自建 68 / 外部 51；无头环境无 `DISPLAY`，原生窗口与移动端仍为手验项（`NMCPS-ARCH-005` §7）。 |

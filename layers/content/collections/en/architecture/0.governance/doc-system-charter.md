@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-system
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn: []
@@ -126,7 +126,7 @@ Need → ① locate domain & tier
 | Phase | Deliverable | Content |
 | :--- | :--- | :--- |
 | **S0 Foundation** | Governance + contract + guard | `@nuxt/content`; collections; frontmatter schema; `check:doc-system`; `.clinerules/`; this charter + doc-map |
-| **S1 Architecture** | Tier 1 | transport / data source / content center / IAM / shared contract, one normative each |
+| **S1 Architecture** | Tier 1 | transport / data source / content center / IAM / platform capability / shared contract, one normative each |
 | **S2 Domain baselines** | Tier 2 | one design baseline per built module |
 | **S3 Records** | Tier 5 | backfill decisions as ADRs |
 
@@ -139,4 +139,5 @@ Need → ① locate domain & tier
 | 2026-10-24 | 0.1.0 | Initial: principles, Tier 0~5, SSOT, docId, hard constraints, workflow, S0~S3. |
 | 2026-10-24 | 0.2.0 | Added §5 metadata contract (field table): three layers, governed vs plain, excerpt/keywords, schema/guard division, removed contentType/accessLevel. |
 | 2026-10-25 | 0.3.0 | Authority pyramid rolled out (Tier 1~3) and promoted to baseline; registered ADR-0004 rollout / ADR-0005 bilingual mirror. |
+| 2026-10-31 | 0.4.0 | §8 S1 Architecture gains "platform capability": registered `NMCPS-ARCH-005` (`arch.platform`: capability matrix, permission layering, probe scope), decided in `NMCPS-ADR-0015`. |
 

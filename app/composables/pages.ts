@@ -3,7 +3,7 @@ export const usePages = () => {
 	const { pageCategories } = useAppConfig();
 	const { t } = useI18n();
 
-	const routes = router.getRoutes().filter((route) => route.name !== "index" && route.name !== "all");
+	const routes = router.getRoutes().filter((route) => route.name !== "index" && route.name !== "all" && !route.meta.tauriOnly);
 
 	// computed：语言切换后导航菜单文案随之重算
 	const pages = computed(() => {

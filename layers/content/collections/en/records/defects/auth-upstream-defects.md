@@ -84,7 +84,7 @@ Closed (probe accounts `AUTOTEST-*`, disabled with `status: 2` afterwards):
 - Creating with `mustResetPassword: true` → the flag comes back on login → a `firstReset` change clears it;
 - Both password-policy rules (complexity and history).
 
-Self-check guards (fake upstream, so they do not depend on the real one being reproducible): `check:bff` (81 assertions) covers the `20203` / `20204` pass-through pair and the `mustResetPassword` flag; `check:ui` (64 assertions self-built, 49 external) covers the MFA retry sign-in and the whole forced-reset flow (landing on `/auth/change-password` → complete form → the hidden `autocomplete="username"` bound to the current account → three inline validation states → a wrong old password naming `20201` → forced re-login → request body carrying the old password and no `firstReset` → toast after re-login → the new password signing in without a bounce → the old password rejected with `401 20201`), plus the "anonymous visit to the change page bounces to the login page with the redirect target" guard. The fake upstream keeps a mutable password per account (a change is persisted, `whoami` answers for the token's account, the flag is cleared), which is what makes the last three assertions possible.
+Self-check guards (fake upstream, so they do not depend on the real one being reproducible): `check:bff` (81 assertions) covers the `20203` / `20204` pass-through pair and the `mustResetPassword` flag; `check:ui` (68 assertions self-built, 51 external) covers the MFA retry sign-in and the whole forced-reset flow (landing on `/auth/change-password` → complete form → the hidden `autocomplete="username"` bound to the current account → three inline validation states → a wrong old password naming `20201` → forced re-login → request body carrying the old password and no `firstReset` → toast after re-login → the new password signing in without a bounce → the old password rejected with `401 20201`), plus the "anonymous visit to the change page bounces to the login page with the redirect target" guard. The fake upstream keeps a mutable password per account (a change is persisted, `whoami` answers for the token's account, the flag is cleared), which is what makes the last three assertions possible.
 
 Still open: natural expiry (30-minute AT / 7-day RT) and concurrent refresh across multiple browser tabs.
 
@@ -92,7 +92,7 @@ Still open: natural expiry (30-minute AT / 7-day RT) and concurrent refresh acro
 
 1. Start the BFF: `PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`.
 2. Hit the upstream directly for UP-AUTH-01 (concurrent refresh) and UP-AUTH-03/04 (missing input, Content-Type) — those are only visible upstream, the BFF absorbs them.
-3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream (81 assertions) and `pnpm check:ui` against its own fake upstream and the built artefact (64 assertions), then one manual login against the real upstream.
+3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream (81 assertions) and `pnpm check:ui` against its own fake upstream and the built artefact (68 assertions), then one manual login against the real upstream.
 4. Remember `--noproxy '*'` for local curl (the environment exports `http_proxy`).
 
 ## 6. Ticket text (ready to file)

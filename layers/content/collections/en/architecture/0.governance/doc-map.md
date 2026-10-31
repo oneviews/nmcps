@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.18.0
+version: 0.19.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -69,6 +69,7 @@ tags:
 | `arch.datasource` | 1 | NMCPS-ARCH-002 | baseline |
 | `arch.iam` | 1 | NMCPS-ARCH-003 | baseline |
 | `arch.content` | 1 | NMCPS-ARCH-004 | baseline |
+| `arch.platform` | 1 | NMCPS-ARCH-005 | baseline |
 | `domain.topology` | 2 | NMCPS-DESIGN-001 | baseline |
 | `domain.spectrum` | 2 | NMCPS-DESIGN-002 | baseline |
 | `domain.transmission` | 2 | NMCPS-DESIGN-003 | baseline |
@@ -91,6 +92,7 @@ tags:
 | NMCPS-ARCH-002 | Data Source Architecture | 1 | normative | arch.datasource | baseline | architecture/1.architecture/datasource-architecture.md |
 | NMCPS-ARCH-003 | IAM Architecture | 1 | normative | arch.iam | baseline | architecture/1.architecture/iam-architecture.md |
 | NMCPS-ARCH-004 | Content Center Architecture | 1 | normative | arch.content | baseline | architecture/1.architecture/content-center-architecture.md |
+| NMCPS-ARCH-005 | Platform Capability Architecture | 1 | normative | arch.platform | baseline | architecture/1.architecture/platform-architecture.md |
 | NMCPS-DESIGN-001 | Topology Monitoring Baseline | 2 | normative | domain.topology | baseline | architecture/2.domain/topology.md |
 | NMCPS-DESIGN-002 | Spectrum Management Baseline | 2 | normative | domain.spectrum | baseline | architecture/2.domain/spectrum.md |
 | NMCPS-DESIGN-003 | Transmission Control Baseline | 2 | normative | domain.transmission | baseline | architecture/2.domain/transmission.md |
@@ -114,6 +116,7 @@ tags:
 | NMCPS-ADR-0012 | Platform Layer Extraction | 5 | informative | rec.adr.0012 | baseline | records/adr/adr-0012.md |
 | NMCPS-ADR-0013 | Login Naming and Seed Prefill | 5 | informative | rec.adr.0013 | baseline | records/adr/adr-0013.md |
 | NMCPS-ADR-0014 | Forced Reset Page Naming | 5 | informative | rec.adr.0014 | baseline | records/adr/adr-0014.md |
+| NMCPS-ADR-0015 | Platform Capability Probes | 5 | informative | rec.adr.0015 | baseline | records/adr/adr-0015.md |
 | NMCPS-REC-001 | Upstream auth defect list | 5 | informative | rec.defects.auth | baseline | records/defects/auth-upstream-defects.md |
 
 > Paths are relative to `layers/content/collections/cn/`; `en/` is the mirror collection with the same docId.
@@ -142,3 +145,4 @@ tags:
 | 2026-10-31 | 0.16.0 | Registered ADR-0013 login naming unification and demo seed prefill (Tier 5, informative). |
 | 2026-10-31 | 0.17.0 | Mirror catch-up: registered REC-001, the upstream `/api/v1/auth` defect list and in-repo drifts (Tier 5, informative; the zh map already carried it at 0.17.0). |
 | 2026-10-31 | 0.18.0 | Registered ADR-0014 renaming the forced password page to `change-password` (keeping `reset` for a forgot-password flow; Tier 5, informative). |
+| 2026-10-31 | 0.19.0 | Registered ARCH-005 Platform Capability Architecture (`arch.platform`, Tier 1, normative: capability matrix, permission layering, probe scope) and ADR-0015 platform capability probes (drop `commands` and `shell:allow-execute`; Tier 5, informative). |

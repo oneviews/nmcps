@@ -97,8 +97,8 @@ log("未登录访问控制台被送回登录页", guardDashboard.path === "/auth
 const guardSecurity = await guardOf("/user/security");
 log("未登录访问安全设置被送回登录页并带回跳目标", guardSecurity.path === "/auth/login" && guardSecurity.redirect === "/user/security", guardSecurity.landing);
 
-const guardCommands = await guardOf("/commands");
-log("未登录访问其他业务页同样被拦截", guardCommands.path === "/auth/login" && guardCommands.redirect === "/commands", guardCommands.landing);
+const guardProbe = await guardOf("/os");
+log("未登录访问平台探针页同样被拦截", guardProbe.path === "/auth/login" && guardProbe.redirect === "/os", guardProbe.landing);
 
 // `/auth/**` 在守卫白名单里，改密页只能自己判登录态：未登录直接进也要回登录页并带回跳
 const guardChange = await guardOf("/auth/change-password");
@@ -510,6 +510,22 @@ log("截图已保存", true, SHOT_PATH);
 const navLinks = await page.evaluate(() => Array.from(document.querySelectorAll("a[href]")).map((a) => a.getAttribute("href") ?? ""));
 log("侧栏/页头导航不含登录页", !navLinks.some((href) => href.includes("/auth/")), navLinks.filter((href) => href.includes("/auth/")).join(" / ") || "无");
 
+// 7.1 平台能力探针只在 Tauri 宿主暴露入口（NMCPS-ARCH-005 §六）：
+// 浏览器是主自查环境，入口必须消失；直访仍可打开，但只能看到降级提示。
+const platformGroupVisible = await page.evaluate(() => {
+	const sidebar = document.querySelector("[data-layout-metrics='sidebar']");
+	return (sidebar?.textContent ?? "").includes("平台能力");
+});
+log("浏览器侧栏不显示「平台能力」分组", !platformGroupVisible, platformGroupVisible ? "仍显示" : "未显示");
+
+await page.goto(`${BASE_URL}/os`, { waitUntil: "networkidle" });
+const osProbeText = await page.evaluate(() => document.body.textContent ?? "");
+log(
+	"浏览器直访 /os 只显示降级提示",
+	osProbeText.includes("浏览器中不可用"),
+	osProbeText.includes("浏览器中不可用") ? "已提示" : `未见提示：${osProbeText.slice(0, 120)}`
+);
+
 await page.getByRole("button", { name: "用户菜单" }).first().click();
 await page.waitForTimeout(300);
 const userMenu = await page.evaluate(() => ({
@@ -570,6 +586,81 @@ if (upstreamPort) {
 	);
 
 	await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
+}
+
+// 11. Tauri 宿主模拟（NMCPS-ARCH-005 §7）：真实桌面壳（`pnpm tauri:dev`）需要图形环境，无头 CI 跑不起来，
+// 但 `isTauri()` 只读 `globalThis.isTauri`；注入这一位 + 一个最小 IPC 桩，就能走到与桌面壳同一份运行时分支：
+// 侧栏应出现「平台能力」分组，分组下正好 5 个探针入口。桌面模式下 BFF 不回写 cookie（令牌走
+// `tauri-plugin-store`），所以这里另起一个带 `NUXT_PUBLIC_BFF_BASE` 的实例，并把桩 store 落 sessionStorage，
+// 否则刷新即掉登录态。只在自建模式跑：外部实例的 bffBase 不归我们控制。
+if (upstreamPort) {
+	const tauriPort = await freePort();
+	const tauriBase = `http://${HOST}:${tauriPort}`;
+	const tauriBff = await startBff(tauriPort, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		NUXT_PUBLIC_BFF_BASE: tauriBase
+	});
+	const tauriContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+	await tauriContext.addInitScript(() => {
+		// `@tauri-apps/api` 的 isTauri() 只认这一位
+		window.isTauri = true;
+		const PREFIX = "nmcps-stub-store:";
+		const readKey = (key) => {
+			const raw = sessionStorage.getItem(PREFIX + key);
+			return raw === null ? [null, false] : [JSON.parse(raw), true];
+		};
+		// 只覆盖产品代码用到的命令：store（令牌仓）、updater（静默检查）、os（平台探针）
+		window.__TAURI_INTERNALS__ = {
+			invoke: async (cmd, args = {}) => {
+				switch (cmd) {
+					case "plugin:store|load": return 1;
+					case "plugin:store|get": return readKey(args.key);
+					case "plugin:store|has": return readKey(args.key)[1];
+					case "plugin:store|set":
+						sessionStorage.setItem(PREFIX + args.key, JSON.stringify(args.value));
+						return null;
+					case "plugin:store|delete":
+						sessionStorage.removeItem(PREFIX + args.key);
+						return null;
+					case "plugin:os|platform": return "linux";
+					case "plugin:os|version": return "0.0.0-stub";
+					case "plugin:os|arch": return "x86_64";
+					case "plugin:os|locale": return "zh-CN";
+					// 更新器无新版本，窗口 / 通知等探针在无头环境一律按「未支持」降级
+					default: return null;
+				}
+			},
+			transformCallback: () => 1,
+			convertFileSrc: (path) => path
+		};
+	});
+
+	const tauriPage = await tauriContext.newPage();
+	await tauriPage.goto(`${tauriBase}/auth/login`, { waitUntil: "networkidle" });
+	await tauriPage.locator("input[autocomplete='username']").fill(ACCOUNT);
+	await tauriPage.locator("input[type='password']").fill(PASSWORD);
+	await tauriPage.locator("button[type='submit']").first().click();
+	await tauriPage.waitForURL((url) => url.pathname !== "/auth/login", { timeout: 20_000 }).catch(() => {});
+	await tauriPage.goto(`${tauriBase}/dashboard/overview`, { waitUntil: "networkidle" });
+
+	const sidebarText = await tauriPage.evaluate(() =>
+		document.querySelector("[data-layout-metrics='sidebar']")?.textContent ?? ""
+	);
+	log("Tauri 宿主侧栏出现「平台能力」分组", sidebarText.includes("平台能力"), sidebarText.includes("平台能力") ? "已显示" : `未见分组：${sidebarText.slice(0, 160)}`);
+
+	// 无 `to` 的分组父项是折叠触发器：展开后再核对 5 个探针入口
+	await tauriPage.getByText("平台能力", { exact: true }).first().click();
+	await tauriPage.waitForTimeout(300);
+	const probeHrefs = await tauriPage.evaluate(() =>
+		Array.from(document.querySelectorAll("[data-layout-metrics='sidebar'] a[href]"))
+			.map((a) => a.getAttribute("href") ?? "")
+	);
+	const expectedHrefs = ["/os", "/file", "/store", "/notifications", "/webview"];
+	const missingHrefs = expectedHrefs.filter((href) => !probeHrefs.includes(href));
+	log("「平台能力」分组含 5 个探针入口", missingHrefs.length === 0, missingHrefs.length ? `缺 ${missingHrefs.join(" ")}` : expectedHrefs.join(" "));
+
+	await tauriContext.close();
+	await stopBff(tauriBff);
 }
 
 await browser.close();

@@ -24,13 +24,14 @@
 </template>
 
 <script lang="ts" setup>
-	import { isTauri } from "@tauri-apps/api/core";
-
 	definePageMeta({
 		name: "pages.store.title",
 		icon: "carbon:data-base",
 		category: "storage",
-		description: "pages.store.description"
+		description: "pages.store.description",
+		sort: 3,
+		group: "platform",
+		tauriOnly: true
 	});
 
 	const { t } = useI18n();
@@ -51,21 +52,18 @@
 	});
 
 	const toast = useToast();
-	const store = isTauri()
-		? await useTauriStoreLoad("store.bin", {
-			defaults: {},
-			autoSave: false
-		})
-		: null;
+	const { store } = usePlatformStore();
 
 	const getStoreValue = async () => {
-		if (!store) {
+		const target = await store();
+
+		if (!target) {
 			outputState.value.content = t("common.unavailableInBrowser");
 			return;
 		}
 
 		try {
-			outputState.value.content = await store.get<string>("myData") || "";
+			outputState.value.content = await target.get<string>("myData") || "";
 		} catch (error) {
 			toast.add({
 				title: t("common.error"),
@@ -79,7 +77,9 @@
 	await getStoreValue();
 
 	const setStoreValue = async () => {
-		if (!store) {
+		const target = await store();
+
+		if (!target) {
 			toast.add({
 				title: t("common.error"),
 				description: t("pages.store.storeUnavailable"),
@@ -89,7 +89,7 @@
 		}
 
 		try {
-			await store.set("myData", inputState.value!.value);
+			await target.set("myData", inputState.value!.value);
 			await getStoreValue();
 			toast.add({
 				title: t("common.success"),

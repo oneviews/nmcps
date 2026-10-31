@@ -91,6 +91,9 @@
 		"recheckUpstream": "Check again"
 	},
 	"pages": {
+		"platform": {
+			"title": "Platform capabilities"
+		},
 		"index": {
 			"poweredBy": "Powered by",
 			"download": "Download",
@@ -120,14 +123,6 @@
 			"titleRequired": "Title is required",
 			"missingPermission": "Missing notifications permission"
 		},
-		"commands": {
-			"title": "Commands",
-			"description": "Access the system shell. Allows you to spawn child processes and manage files and URLs using their default application.",
-			"commandInput": "Command input",
-			"send": "Send command",
-			"commandOutput": "Command output",
-			"inputRequired": "Input is required"
-		},
 		"file": {
 			"title": "File System",
 			"description": "Access the file system. For this demo the only allowed permission is read/write to the Documents folder (no sub directories).",
@@ -138,14 +133,18 @@
 			"invalidFilename": "Invalid filename format",
 			"fileContentRequired": "File content is required",
 			"alreadyExists": "The file already exists",
-			"created": "The file has been created"
+			"created": "The file has been created",
+			"scopeDesktop": "Written to the system Documents folder",
+			"scopeMobile": "Written to the app-private Documents folder: on mobile it is not the shared system folder"
 		},
 		"webview": {
 			"title": "Webview window",
 			"description": "Create new webview in a detached window.",
 			"createExternal": "Create external Webview",
 			"createInternal": "Create internal Webview",
-			"created": "Webview created"
+			"created": "Webview created",
+			"failed": "Could not create the window: check the window permission or whether the id is already taken",
+			"desktopOnly": "Multi-window is desktop only: mobile needs OS-level split screen, so this probe stays single-window"
 		},
 		"store": {
 			"title": "Store",

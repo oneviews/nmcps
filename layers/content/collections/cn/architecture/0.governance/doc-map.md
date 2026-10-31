@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.18.0
+version: 0.19.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -74,6 +74,7 @@ tags:
 | `arch.datasource` | 1 | NMCPS-ARCH-002 | baseline |
 | `arch.iam` | 1 | NMCPS-ARCH-003 | baseline |
 | `arch.content` | 1 | NMCPS-ARCH-004 | baseline |
+| `arch.platform` | 1 | NMCPS-ARCH-005 | baseline |
 | `domain.topology` | 2 | NMCPS-DESIGN-001 | baseline |
 | `domain.spectrum` | 2 | NMCPS-DESIGN-002 | baseline |
 | `domain.transmission` | 2 | NMCPS-DESIGN-003 | baseline |
@@ -108,11 +109,13 @@ tags:
 | NMCPS-ADR-0012 | 新增 platform 分层 | 5 | informative | rec.adr.0012 | baseline | records/adr/adr-0012.md |
 | NMCPS-ADR-0013 | 登录页命名与种子预填 | 5 | informative | rec.adr.0013 | baseline | records/adr/adr-0013.md |
 | NMCPS-ADR-0014 | 强制改密页命名 | 5 | informative | rec.adr.0014 | baseline | records/adr/adr-0014.md |
+| NMCPS-ADR-0015 | 平台能力探针化 | 5 | informative | rec.adr.0015 | baseline | records/adr/adr-0015.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | baseline | records/defects/auth-upstream-defects.md |
 | NMCPS-ARCH-001 | 通信面架构 | 1 | normative | arch.transport | baseline | architecture/1.architecture/transport-architecture.md |
 | NMCPS-ARCH-002 | 数据源架构 | 1 | normative | arch.datasource | baseline | architecture/1.architecture/datasource-architecture.md |
 | NMCPS-ARCH-003 | IAM 架构 | 1 | normative | arch.iam | baseline | architecture/1.architecture/iam-architecture.md |
 | NMCPS-ARCH-004 | 内容中心架构 | 1 | normative | arch.content | baseline | architecture/1.architecture/content-center-architecture.md |
+| NMCPS-ARCH-005 | 平台能力架构 | 1 | normative | arch.platform | baseline | architecture/1.architecture/platform-architecture.md |
 | NMCPS-DESIGN-001 | 拓扑监控领域基准 | 2 | normative | domain.topology | baseline | architecture/2.domain/topology.md |
 | NMCPS-DESIGN-002 | 频谱管控领域基准 | 2 | normative | domain.spectrum | baseline | architecture/2.domain/spectrum.md |
 | NMCPS-DESIGN-003 | 传输管控领域基准 | 2 | normative | domain.transmission | baseline | architecture/2.domain/transmission.md |
@@ -149,3 +152,4 @@ tags:
 | 2026-10-31 | 0.16.0 | 登记记录层 ADR：0013 登录页命名统一为 `login` 与演示种子账号预填（Tier 5，informative）。 |
 | 2026-10-31 | 0.17.0 | 登记记录层缺陷清单：REC-001 上游 `/api/v1/auth` 缺陷与仓库内漂移（6 项上游 + 3 项已修，Tier 5，informative）。 |
 | 2026-10-31 | 0.18.0 | 登记记录层 ADR：0014 强制改密页命名为 `change-password`（`reset` 留给忘记口令流程，Tier 5，informative）。 |
+| 2026-10-31 | 0.19.0 | 登记 S1 架构层：ARCH-005 平台能力架构（`arch.platform`，Tier 1，normative：能力矩阵 / 权限分层 / 探针口径）与记录层 ADR-0015 平台能力探针化（删 `commands` 与 `shell:allow-execute`，Tier 5，informative）。 |

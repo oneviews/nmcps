@@ -84,7 +84,7 @@ tags:
 - `mustResetPassword: true` 建号 → 登录带标志 → `firstReset` 改密后标志清除；
 - 密码复杂度与历史重复两条策略。
 
-自查守卫（假上游，不依赖真上游可复现）：`check:bff` 81 项覆盖 `20203` / `20204` 双码透传与 `mustResetPassword` 标志透传；`check:ui` 自建模式 64 项（外部模式 49 项）覆盖 MFA 补码登录与强制改密全流程（落 `/auth/change-password` → 表单齐备 → 隐藏 `autocomplete="username"` 归属当前账号 → 三个内联校验态 → 旧口令错点名「当前密码不正确」→ 强制重登 → 报文带旧口令且不带 `firstReset` → 重登提示 → 新口令重登不再被弹回 → 改后旧口令被拒 `401 20201`），另含「未登录直进改密页回登录页并带回跳」守卫。假上游的口令按账号可变（改密落库、`whoami` 按令牌回账号、改密后清标志），后三条断言靠它才成立。
+自查守卫（假上游，不依赖真上游可复现）：`check:bff` 81 项覆盖 `20203` / `20204` 双码透传与 `mustResetPassword` 标志透传；`check:ui` 自建模式 68 项（外部模式 51 项）覆盖 MFA 补码登录与强制改密全流程（落 `/auth/change-password` → 表单齐备 → 隐藏 `autocomplete="username"` 归属当前账号 → 三个内联校验态 → 旧口令错点名「当前密码不正确」→ 强制重登 → 报文带旧口令且不带 `firstReset` → 重登提示 → 新口令重登不再被弹回 → 改后旧口令被拒 `401 20201`），另含「未登录直进改密页回登录页并带回跳」守卫。假上游的口令按账号可变（改密落库、`whoami` 按令牌回账号、改密后清标志），后三条断言靠它才成立。
 
 未闭环：AT 30 分钟 / RT 7 天自然过期；浏览器多标签页并发刷新的实际表现。
 
@@ -92,7 +92,7 @@ tags:
 
 1. 起 BFF：`PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`。
 2. 直连上游跑 UP-AUTH-01（并发刷新）、UP-AUTH-03/04（缺参与 Content-Type）——这三项只在上游侧可见，BFF 已吸收。
-3. 走 BFF 复验端到端：`pnpm check:bff`（假上游，81 项）与 `pnpm check:ui`（自建假上游 + 构建产物，64 项）各一轮，再补一次真上游手工登录。
+3. 走 BFF 复验端到端：`pnpm check:bff`（假上游，81 项）与 `pnpm check:ui`（自建假上游 + 构建产物，68 项）各一轮，再补一次真上游手工登录。
 4. 本地 curl 记得 `--noproxy '*'`（环境变量里有 `http_proxy`）。
 
 ## 六、工单文本（可直接提交）

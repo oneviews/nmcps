@@ -24,7 +24,10 @@
 		name: "pages.notifications.title",
 		icon: "carbon:chat",
 		category: "interface",
-		description: "pages.notifications.description"
+		description: "pages.notifications.description",
+		sort: 4,
+		group: "platform",
+		tauriOnly: true
 	});
 
 	const { t } = useI18n();
@@ -44,29 +47,21 @@
 	});
 
 	const toast = useToast();
-	const permissionGranted = ref(false);
+	const { notify } = usePlatformNotify();
 
 	const createNotification = async () => {
-		permissionGranted.value = await useTauriNotificationIsPermissionGranted();
+		const result = await notify(inputState.value.notificationTitle!, inputState.value.notificationBody);
 
-		if (!permissionGranted.value) {
-			const permission = await useTauriNotificationRequestPermission();
-			permissionGranted.value = permission === "granted";
-		}
-
-		if (permissionGranted.value) {
-			useTauriNotificationSendNotification({
-				title: inputState.value.notificationTitle!,
-				body: inputState.value.notificationBody
-			});
-
-			inputState.value.notificationTitle = inputState.value.notificationBody = undefined;
-		} else {
+		if (result !== "sent") {
 			toast.add({
 				title: t("common.error"),
-				description: t("pages.notifications.missingPermission"),
+				description: t(result === "denied" ? "pages.notifications.missingPermission" : "common.unavailableInBrowser"),
 				color: "error"
 			});
+
+			return;
 		}
+
+		inputState.value.notificationTitle = inputState.value.notificationBody = undefined;
 	};
 </script>

@@ -28,10 +28,11 @@
 		"tauri:build:ios": "tauri ios build",
 		"tauri:build:android": "tauri android build",
 		"check:ui": "node scripts/check-ui.mjs",
+		"check:platform": "node scripts/check-platform.mjs",
 		"check:bff": "node scripts/check-bff.mjs",
 		"check:rules": "node scripts/check-rules.mjs",
 		"check:doc-system": "tsx scripts/check-doc-system.ts",
-		"check:governance": "pnpm check:doc-system && pnpm check:rules"
+		"check:governance": "pnpm check:doc-system && pnpm check:rules && pnpm check:platform"
 	},
 	"dependencies": {
 		"@nuxt/content": "^3.16.2",

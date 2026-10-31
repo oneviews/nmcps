@@ -58,7 +58,8 @@ jobs:
           sh scripts/ci-summary.sh "typecheck" ci-logs/typecheck.log
           exit $status
 
-      # 治理门禁：文档体系（doc-map / docIds / frontmatter）与 `.clinerules` 自查合成一个入口。
+      # 治理门禁：文档体系（doc-map / docIds / frontmatter）、`.clinerules` 自查与平台能力面约定
+      # （`check:platform`：capabilities 不得出现 `shell:allow-execute`，探针页与组合式边界）合成一个入口。
       # `.clinerules` 是喂给 AI 的约定，改坏了不会报错、只会静默失效，所以同样进门禁。
       - name: Governance guard
         run: |
