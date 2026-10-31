@@ -18,6 +18,12 @@
 import { existsSync } from "node:fs";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
+// ── 前置自检：先说自己缺什么，而不是让第一条断言替我们报错 ──────────────
+if (!existsSync(SERVER_ENTRY)) {
+	console.error(`❌ 缺少构建产物 ${SERVER_ENTRY}：先跑 \`pnpm build:server\`，再重试 \`pnpm check:bff\`。`);
+	process.exit(1);
+}
+
 const results = [];
 
 function log(label, ok, detail) {
