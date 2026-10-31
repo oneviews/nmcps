@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   quality:
-    name: lint / typecheck / doc guard
+    name: lint / typecheck / governance
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
