@@ -58,21 +58,14 @@ jobs:
           sh scripts/ci-summary.sh "typecheck" ci-logs/typecheck.log
           exit $status
 
-      - name: Doc system guard
+      # 治理门禁：文档体系（doc-map / docIds / frontmatter）与 `.clinerules` 自查合成一个入口。
+      # `.clinerules` 是喂给 AI 的约定，改坏了不会报错、只会静默失效，所以同样进门禁。
+      - name: Governance guard
         run: |
           set +e
-          pnpm check:doc-system 2>&1 | tee ci-logs/doc-system.log
+          pnpm check:governance 2>&1 | tee ci-logs/governance.log
           status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "doc system guard" ci-logs/doc-system.log
-          exit $status
-
-      # `.clinerules` 是喂给 AI 的约定：改坏了不会报错，只会静默失效，所以同样进门禁。
-      - name: Rules guard
-        run: |
-          set +e
-          pnpm check:rules 2>&1 | tee ci-logs/rules.log
-          status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "rules guard" ci-logs/rules.log
+          sh scripts/ci-summary.sh "governance guard" ci-logs/governance.log
           exit $status
 
       - name: Upload quality check logs
@@ -83,7 +76,7 @@ jobs:
           path: |
             ci-logs/lint.log
             ci-logs/typecheck.log
-            ci-logs/doc-system.log
+            ci-logs/governance.log
           if-no-files-found: ignore
 
   runtime:

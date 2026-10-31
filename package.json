@@ -30,7 +30,8 @@
 		"check:ui": "node scripts/check-ui.mjs",
 		"check:bff": "node scripts/check-bff.mjs",
 		"check:rules": "node scripts/check-rules.mjs",
-		"check:doc-system": "tsx scripts/check-doc-system.ts"
+		"check:doc-system": "tsx scripts/check-doc-system.ts",
+		"check:governance": "pnpm check:doc-system && pnpm check:rules"
 	},
 	"dependencies": {
 		"@nuxt/content": "^3.16.2",
