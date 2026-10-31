@@ -13,7 +13,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.3.4
+version: 0.3.6
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -102,11 +102,11 @@ The new backend converges authentication onto `/api/v1/auth/*`: a login issues b
 
 | Upstream endpoint | Method | Input | Success `data` | Error codes |
 | :--- | :--- | :--- | :--- | :--- |
-| `/api/v1/auth/login` | POST | `accountName`, `password` required; `tenantCode`, `mfaCode` optional | `accessToken`, `refreshToken`, `expiresIn`, `sessionId`, `accountCode`, `tenantId`, `accountLevel`, `mfaRequired`, `mustResetPassword` | `20201` wrong account or password |
+| `/api/v1/auth/login` | POST | `accountName`, `password` required; `tenantCode`, `mfaCode` optional | `accessToken`, `refreshToken`, `expiresIn`, `sessionId`, `accountCode`, `tenantId`, `accountLevel`, `mfaRequired`, `mustResetPassword` | `20201` wrong account or password (also a disabled account); `20203` MFA code required; `20204` wrong MFA code |
 | `/api/v1/auth/token/refresh` | POST | `refreshToken` | `accessToken`, `refreshToken`, `expiresIn`, `sessionId` | `10201` unauthenticated; `20205` session expired |
 | `/api/v1/auth/logout` | POST | Empty body (`application/x-www-form-urlencoded`) + Bearer | `ok` | `10201` unauthenticated (**not idempotent**) |
 | `/api/v1/auth/whoami` | GET | Bearer | `accountCode`, `accountName`, `displayName`, `tenantId`, `accountLevel`, `mfaEnabled`, `sessionId` | `10201` unauthenticated |
-| `/api/v1/auth/mfa/bind` | POST | `mfaType` (1 = TOTP, 2 = biometric, reserved) | `otpauthUrl` (single use) | `10201` |
+| `/api/v1/auth/mfa/bind` | POST | `mfaType` (1 = TOTP, the default; 2 = biometric, reserved; `0` is undocumented yet accepted, see 7.2 item 8) | `otpauthUrl` (single use) | `10201`; `20109` unimplemented factor type |
 | `/api/v1/auth/mfa/confirm` | POST | `mfaCode` | `ok` | `20204` wrong MFA code |
 | `/api/v1/auth/password` | POST | `newPassword` required; `oldPassword`, `firstReset` optional | `ok` | `20201` wrong old password |
 
@@ -119,6 +119,15 @@ The new backend converges authentication onto `/api/v1/auth/*`: a login issues b
 3. **Multiple sessions coexist**: a second login for the same account does not evict the first (the first AT still returned 200).
 4. **Logout is not idempotent**: a second logout with the same token returns `401 10201`; the BFF absorbs it and always reports success.
 5. **Errors use `msg`**: the failure body is `{code,msg,traceId}` where `code` is a business code (> 999) rather than the HTTP status; the `ApiResponse` normalisation from `NMCPS-ADR-0007` must map `msg` to `message` and keep `code` as-is when it is > 599.
+6. **Missing input always yields `500 10509`** (probed 2026-10-31 with `login {}`, `login` without `password`, `refresh {}`, `password {}`, `password` without `newPassword`, `mfa/confirm {}`): upstream does not tell "client sent garbage" apart from "the service crashed". The zod pre-validation in the BFF is therefore a hard requirement, not fussiness (see 7.3).
+7. **Concurrent refreshes are not serialised**: three parallel `token/refresh` calls with the same RT all returned 200, each with a **different** `sessionId`, and all three access tokens passed `whoami`; logging one of them out left the others alive. Only a serial replay returns `401 20205`. Rotation is read-then-write, not an atomic consume — the consequence is session fragmentation plus a refresh-token replay window. The client must still go single-flight: that is an engineering choice that avoids orphan sessions, **not** a contract that concurrency is guaranteed.
+8. **`mfaType` defaults to TOTP**: `{}`, `{mfaType:0}` and `{mfaType:1}` are equivalent, and only `99` answers `400 20109`. Binding is two-phase: before `confirm` the `mfaEnabled` flag stays false and login asks for no OTP.
+9. **`Content-Type` is not validated**: a `application/x-www-form-urlencoded` login answers `500 10509`, while `logout` succeeds with no body at all. The BFF accepts JSON only and answers `400 bff_invalid_body` when parsing fails.
+10. **The MFA login branch is `401 20203`**, not "200 + `mfaRequired: true`": an MFA-enabled account without `mfaCode` gets `401 20203` (empty `data`), a wrong code gets `401 20204`, and a correct TOTP gets 200. Upstream never returns `mfaRequired`, so `login.post.ts` reports it as false unconditionally. The client opens the OTP field on `20203` (the gap was fixed on 2026-10-31, see row 7 in 7.8).
+11. **A disabled account shares the credential error code**: after `PUT /account/{code}/status` sets `status: 2`, login answers `401 20201` with no hint that the account is suspended.
+12. **Changing the password does not revoke tokens**: after a successful `password` call the old access token still answered `whoami` with 200 — which confirms the 7.5 rule of "notify only, never sign out", and means a leaked token cannot be stopped by a password change.
+13. **`firstReset: true` skips the old-password check** (probed 2026-10-31): a body carrying only `newPassword` returns `200`, so `oldPassword` may be omitted. The flag is meant to mark a forced first-login reset and must not become a way to bypass the old password — a hijacked session could otherwise take the account over. The BFF `authPasswordSchema` still requires `oldPassword`; do not relax it just because this field exists.
+14. **Forced reset is a client-side convention**: an account with `mustResetPassword: true` still gets 200 from `whoami` before changing anything, and every other endpoint keeps working; changing the password clears the flag (the next login reports `mustResetPassword: false`). The weak/reused password policy lives upstream: insufficient complexity answers `400 20101`, a recent duplicate answers `400 20302`, and the change takes effect immediately (old password answered `401 20201` at 0/200/1000/3000 ms), so there is no grace window.
 
 ### 7.3 BFF surface
 
@@ -133,7 +142,7 @@ The new backend converges authentication onto `/api/v1/auth/*`: a login issues b
 - Credential injection: the web turns `nmcps_at` into `Authorization: Bearer`; the desktop injects the token from `tauri-plugin-store` via `useApi`; both collapse into one upstream header in `server/utils/bff/proxy.ts` (explicit `Authorization` wins over the cookie).
 - Ownership: `/api/auth/*` are BFF routes and are **not** in `GATEWAY_RESOURCES`, so they never collide with the generic `server/api/[...slug].ts` proxy.
 - CSRF: cookie-mode unsafe verbs validate `Origin` — same origin (`Origin` host equals the request `Host`) or a `bff.allowedOrigins` entry passes, otherwise `403 bff_csrf_rejected`; `login` carries no cookie to abuse and skips the check.
-- Input validation: `login` / `refresh` / `mfa/*` / `password` are validated with zod first and answer `400 bff_invalid_body` when required fields are missing (upstream answers `500 10509` for missing input, which is not propagated).
+- Input validation: `login` / `refresh` / `mfa/*` / `password` are validated with zod first and answer `400 bff_invalid_body` when required fields are missing (upstream answers `500 10509` for missing input, which is not propagated); a non-JSON body (e.g. `form-urlencoded`) also answers `400 bff_invalid_body`, because upstream does not validate `Content-Type` (see 7.2 item 9).
 
 ### 7.4 Client conventions
 
@@ -179,11 +188,30 @@ This repository is a demo program, so the login page must be loggable out of the
 - Prerequisite: `NUXT_BFF_UPSTREAM_BASE` must be set (local `.env`, never committed). With an empty upstream every `/api/auth/*` route answers `503 bff_upstream_missing`, so no account — seed or otherwise — can log in; the prefill cannot compensate for a missing upstream.
 - Upstream probe: on mount the login page calls `GET /ready` through `useBffUpstream()` with an explicit `retry: false` (503 sits in ofetch's default retry list, so leaving it on means two requests per visit). Only an explicit `upstream.configured === false` triggers the warning; a failed probe (network outage, or desktop with no same-origin Nitro) draws no conclusion and defers to the login call.
 - Probe cache: `sessionStorage` under `bff.upstreamProbe`, 30s for "configured" and 5s for "not configured" (a to-fix state should heal quickly). The warning carries a "Check again" button that skips the cache, so fixing `.env` and restarting the BFF takes effect without waiting for the TTL.
-- CI shape: `check:ui` starts its own fake upstream plus the built artefact on random ports. Never point `CHECK_UI_BASE_URL` at an instance without `NUXT_BFF_UPSTREAM_BASE`; the login and upstream-ready cases fail by construction (observed in CI on 2026-10-31). In that external mode the script probes `/ready` first and aborts when no upstream is configured. Both modes report 48 assertions: the self-built one adds an "upstream dropped" case, the external one adds the preflight.
+- CI shape: `check:ui` starts its own fake upstream plus the built artefact on random ports. Never point `CHECK_UI_BASE_URL` at an instance without `NUXT_BFF_UPSTREAM_BASE`; the login and upstream-ready cases fail by construction (observed in CI on 2026-10-31). In that external mode the script probes `/ready` first and aborts when no upstream is configured. The self-built mode reports 50 assertions and the external one 48: self-built adds an "upstream dropped" and an "MFA one-time code" case (the latter needs the fake `mfa-user`), external adds the preflight.
 - Single vocabulary: `shared/constants/upstreamReasons.ts` holds `UPSTREAM_REASONS` (the `/ready` `upstream.reason` values) and `BFF_UPSTREAM_MESSAGES` (the `bff_upstream_*` API messages); server and client reference the constants. The self-check scripts are plain node ESM and do not import that file — they assert the wire strings, so changing a value turns the contract cases red. That is the drift guard.
 - Reuse: the MFA bind and password-change actions on `/user/security` share `upstreamHintKey()` (`app/utils/apiError.ts`) with the login page: `bff_upstream_missing` → the "set `.env`" hint, `bff_upstream_unreachable` / `bff_upstream_timeout` → the unreachable hint (`auth.bffUpstreamUnavailable`). Neither falls back to the raw message, so an ops problem is not read as "wrong password".
 - Drop drill: the fake upstream exposes `POST /__control/down|up|state`; while down it destroys sockets for every other path, which surfaces as 502 `bff_upstream_unreachable` on the BFF side. That makes "signed in → upstream dropped → change password" testable, which cannot be built any other way.
 - Flow unchanged: the prefill bypasses nothing — it still calls `POST /api/auth/login`, and the guard still judges by `GET /api/auth/session` (see 7.6).
+
+### 7.8 Upstream defects and in-repo drift (probed 2026-10-31)
+
+The `/api/v1/auth/*` surface is complete: all 7 endpoints answer, every unregistered path (`/auth/session`, `/auth/captcha`, `/auth/mfa/disable`, …) returns `404`, and there is no hidden capability. The BFF passes 10/10 end-to-end cases against the real upstream. What follows are the remaining upstream defects plus two **in-repo** drifts, ordered by impact. Until they are fixed, do not treat them as contract.
+
+| # | Symptom | Evidence | Impact | Owner |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | Missing input returns `500 10509` instead of `400 10101` | `login {}` / `login` without `password` / `refresh {}` / `password {}` / missing `newPassword` / `mfa/confirm {}` all answer 500 | A client mistake is reported as a crash; the BFF blocks all of them with zod | Upstream |
+| 2 | Rotation is not an atomic consume | The same RT fired three times in parallel returned 200 three times with three distinct `sessionId`s; all three ATs worked, and logging one out left the rest alive | Session fragmentation plus an RT replay window (a stolen token bypasses the single-use guard) | Upstream |
+| 3 | `Content-Type` is not validated | `form-urlencoded` login → `500 10509`; `logout` without a body → 200 | Fuzzy contract; the BFF accepts JSON only | Upstream |
+| 4 | `OPTIONS /api/v1/auth` returns `404` | Compare `/api/v1/account` → `405 + Allow` | No uniform preflight or capability discovery; harmless while same-origin | Upstream |
+| 5 | `mfaType` defaults to TOTP and `0` is undocumented | `{}` / `{mfaType:0}` / `{mfaType:1}` behave identically; only `99` → `400 20109` | A client that omits the field silently binds TOTP; binding is two-phase, so `mfaEnabled` stays false until `confirm` | Upstream |
+| 6 | The fake upstream's MFA rejection is the opposite of reality | `scripts/lib/bff-harness.mjs` answers `400 20205 mfa_required`; the real upstream answers `401 20203` with empty `data` | The self-check stays green and hides the next row | Repo (fake upstream) |
+| 7 | The login page only knows `20205` | `app/pages/auth/login.vue` branches on `20205` in both `submit` and `describeError` | **An MFA-enabled account cannot log in**: the user sees "MFA code required" but no OTP field ever appears | Repo (client) |
+| 8 | The fake upstream consumes refresh tokens once | After `usedRefresh.add` the second call always returns `401 10201`, even concurrently under Node's single thread | `check:bff` asserts semantics the real upstream does not have | Repo (fake upstream) |
+
+Rows 6, 7 and 8 were fixed together on 2026-10-31: the fake upstream's MFA branch now answers `401 20203`, the login page keys on `20203`, and the fake upstream gained a `POST /__control/auth-concurrency?allow=1` concurrency window whose "two parallel refreshes both return 200" case locks the real semantics (it will flip red once upstream consumes atomically, which is the signal to come back and update this table). The three must land together: patching the client alone leaves the self-check asserting `20205`, while patching the fake upstream alone turns the case red — which is exactly what a gate should do.
+
+The former blanks are now closed (the `AUTOTEST-*` probe account was disabled with `status: 2` afterwards): a successful password change returned `200` with the old password answering `401 20201` afterwards, while the **old access token still answered `200`**; `mfa/bind` followed by a `mfa/confirm` carrying a real TOTP returned `200` and flipped `whoami.mfaEnabled` to true; that MFA account then logged in with a correct `mfaCode` (200); login after disabling answered `20201`; creating with `mustResetPassword: true` → the flag comes back on login → a `firstReset` change clears it; both password rules (weak `20101`, recent duplicate `20302`). Still unverified: natural expiry (30-minute AT / 7-day RT) and concurrent refresh across multiple browser tabs. Defects and their reproduction steps live in `NMCPS-REC-001` (`layers/content/collections/cn/records/defects/auth-upstream-defects.md`).
 
 ---
 
@@ -200,3 +228,5 @@ This repository is a demo program, so the login page must be loggable out of the
 | 2026-10-31 | 0.3.2 | 7.7 now records the login-page upstream probe (`useBffUpstream()` + `/ready`), the probe cache TTLs (30s configured / 5s missing), the "Check again" action, and the CI rule that `CHECK_UI_BASE_URL` must point at an instance with an upstream. |
 | 2026-10-31 | 0.3.3 | 7.7 now records the `/ready` preflight of the `check:ui` external mode (aborts without an upstream, 48 assertions) and the shared 503 guidance reused by `/user/security`. |
 | 2026-10-31 | 0.3.4 | 7.7 now extracts `shared/constants/upstreamReasons.ts` (the `/ready` reasons and the `bff_upstream_*` messages), routes every upstream-side failure through `upstreamHintKey()` (unreachable/timeout get a hint too), and gives the fake upstream `/__control/down|up` so the "upstream dropped while signed in" case is covered (48 assertions). |
+| 2026-10-31 | 0.3.5 | 7.1 adds `20203` / `20204` and the disabled-account alias; 7.2 gains items 6–12 from the probe (missing input `500 10509`, non-serialised concurrent refresh, `mfaType` default, JSON-only, MFA login is `401 20203`, disabled shares `20201`, password change keeps old tokens); new 7.8 registers 5 upstream defects and 3 in-repo drifts. |
+| 2026-10-31 | 0.3.6 | 7.2 gains items 13–14 (`firstReset` skips the old-password check; forced reset is a client convention and a change applies immediately); 7.8 marks rows 6/7/8 fixed (fake upstream `401 20203`, client keys on `20203`, concurrency case) and records the closed `mustResetPassword` and password-policy findings; reproduction steps now live in `NMCPS-REC-001`. |
