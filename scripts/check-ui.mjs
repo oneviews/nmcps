@@ -3,7 +3,8 @@
 //
 // 基准地址：默认**自建** —— 拉起假上游（scripts/lib/bff-harness.mjs）+ `.output/server/index.mjs`，
 // 端口自动分配，跑完即关；因此先 `pnpm build:server`。
-// 需要测已有实例时用 CHECK_UI_BASE_URL 覆盖（此时不再拉起进程，改用下面两个变量登录）。
+// 需要测已有实例时用 CHECK_UI_BASE_URL 覆盖（此时不再拉起进程，改用下面两个变量登录）——
+// 该实例必须自己配好 `NUXT_BFF_UPSTREAM_BASE`，否则登录与「上游就绪」用例必然失败。
 // 环境变量：CHECK_UI_BASE_URL、CHECK_UI_ACCOUNT、CHECK_UI_PASSWORD、CHECK_UI_SCREENSHOT（截图输出路径）。
 import { chromium } from "playwright";
 import { closeUpstream, freePort, HOST, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
@@ -146,9 +147,21 @@ log("上游就绪时登录页不显示上游缺失提示", !upstreamAlertOnReady
 		await bare.waitForTimeout(600);
 		const reloadedText = await bare.evaluate(() => document.body.textContent ?? "");
 		log(
-			"探针结果 30s 内复用（重进登录页不再打 /ready）",
+			"探针结果在 TTL 内复用（重进登录页不再打 /ready）",
 			probesAfterFirstLoad === 1 && readyProbes === probesAfterFirstLoad && reloadedText.includes("BFF 未配置上游地址"),
 			`首次 ${probesAfterFirstLoad} 次 / 刷新后 ${readyProbes} 次`
+		);
+
+		// 「重新检测」必须绕过缓存：用户配好 .env 重启 BFF 后不必等 TTL 过期
+		const recheck = bare.getByRole("button", { name: "重新检测" });
+		const hasRecheck = await recheck.count() > 0;
+		if (hasRecheck)
+			await recheck.click();
+		await bare.waitForTimeout(600);
+		log(
+			"「重新检测」绕过缓存重新探测",
+			hasRecheck && readyProbes === probesAfterFirstLoad + 1,
+			hasRecheck ? `/ready 累计 ${readyProbes} 次` : "未找到按钮"
 		);
 		await isolated.close();
 	} finally {
