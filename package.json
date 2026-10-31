@@ -29,6 +29,7 @@
 		"tauri:build:android": "tauri android build",
 		"check:ui": "node scripts/check-ui.mjs",
 		"check:bff": "node scripts/check-bff.mjs",
+		"check:rules": "node scripts/check-rules.mjs",
 		"check:doc-system": "tsx scripts/check-doc-system.ts"
 	},
 	"dependencies": {

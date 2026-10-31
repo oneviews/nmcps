@@ -6,6 +6,7 @@ After completing any task, always proactively recommend the next action to the u
 - Based on the current context, proactively list 2-5 specific follow-up options labeled A, B, C…
 - Each option must be concrete and actionable; avoid vague wording.
 - Place the most recommended option as A (the default suggestion).
+- **Render each option on its own line** — one bullet per option (blank line between bullets if needed), never a single paragraph with soft line breaks, since Markdown collapses those into one line.
 - Do not wait for the user to ask — provide suggestions immediately when wrapping up a task.
 
 ## 收尾总结与响应语言

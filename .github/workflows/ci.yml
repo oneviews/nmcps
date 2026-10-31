@@ -66,6 +66,15 @@ jobs:
           sh scripts/ci-summary.sh "doc system guard" ci-logs/doc-system.log
           exit $status
 
+      # `.clinerules` 是喂给 AI 的约定：改坏了不会报错，只会静默失效，所以同样进门禁。
+      - name: Rules guard
+        run: |
+          set +e
+          pnpm check:rules 2>&1 | tee ci-logs/rules.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "rules guard" ci-logs/rules.log
+          exit $status
+
       - name: Upload quality check logs
         if: always()
         uses: actions/upload-artifact@v7
