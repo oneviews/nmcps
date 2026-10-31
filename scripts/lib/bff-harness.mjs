@@ -93,12 +93,35 @@ export async function startUpstream(port) {
 	/** 认证相关状态：验证刷新轮换、登出不幂等（第二次返回 401 10201） */
 	const authLog = { login: 0, refresh: 0, logout: [], mfaBind: [], mfaConfirm: [], password: [], issuedAccess: new Set(), revokedAccess: new Set(), usedRefresh: new Set(), seq: 0 };
 
+	/**
+	 * 「运行中掉线」开关：`POST /__control/down` 后除控制端点外的请求一律直接销毁 socket，
+	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
+	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
+	 */
+	const control = { down: false };
+
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
 		const send = (status, payload) => {
 			res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
 			res.end(JSON.stringify(payload));
 		};
+
+		if (url.pathname === "/__control/down") {
+			control.down = true;
+			return send(200, { down: true });
+		}
+		if (url.pathname === "/__control/up") {
+			control.down = false;
+			return send(200, { down: false });
+		}
+		if (url.pathname === "/__control/state")
+			return send(200, { down: control.down });
+
+		if (control.down) {
+			req.socket.destroy();
+			return;
+		}
 
 		if (url.pathname === "/health")
 			return send(200, { status: "ok" });
@@ -240,6 +263,7 @@ export async function startUpstream(port) {
 	});
 
 	server.authLog = authLog;
+	server.control = control;
 
 	return server;
 }

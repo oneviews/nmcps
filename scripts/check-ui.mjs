@@ -16,10 +16,12 @@ const SHOT_PATH = process.env.CHECK_UI_SCREENSHOT ?? "/tmp/ui-check.png";
 /** 自建环境：假上游 + 构建产物（没有 CHECK_UI_BASE_URL 时） */
 let upstreamServer = null;
 let bffChild = null;
+/** 假上游端口：外部实例模式下为 null（此时无法控制「运行中掉线」） */
+let upstreamPort = null;
 let BASE_URL = process.env.CHECK_UI_BASE_URL?.replace(/\/+$/, "");
 
 if (!BASE_URL) {
-	const upstreamPort = await freePort();
+	upstreamPort = await freePort();
 	upstreamServer = await startUpstream(upstreamPort);
 	const port = await freePort();
 	bffChild = await startBff(port, { NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}` });
@@ -402,6 +404,27 @@ log("已登录时 MFA 绑定与口令表单可操作", !securityPage.mfaBindDisa
 // 9. 控制台错误/告警
 log("控制台错误", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | ") || "无");
 log("控制台告警", consoleWarns.length === 0, consoleWarns.slice(0, 3).join(" | ") || "无");
+
+// 10. 上游「运行中掉线」：改密必须给修复指引，而不是把 502 抛给用户（NMCPS-ARCH-003 §7.7）
+// 只能自建环境构造：外部实例模式拿不到假上游的控制端点。
+if (upstreamPort) {
+	await fetch(`http://${HOST}:${upstreamPort}/__control/down`);
+	await page.getByTestId("old-password").fill(PASSWORD);
+	await page.getByTestId("new-password").fill("Newpass@123");
+	await page.getByTestId("confirm-password").fill("Newpass@123");
+	await page.getByRole("button", { name: "修改口令" }).click();
+	await page.waitForTimeout(1_200);
+
+	const toastText = await page.evaluate(() => document.body.textContent ?? "");
+	const hintShown = toastText.includes("上游服务暂时不可达");
+	log(
+		"上游掉线时改密给出修复指引（不把 502 抛给用户）",
+		hintShown && !toastText.includes("bff_upstream_unreachable"),
+		hintShown ? "已提示" : `未见提示：${toastText.slice(0, 120)}`
+	);
+
+	await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
+}
 
 await browser.close();
 
