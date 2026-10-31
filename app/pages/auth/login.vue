@@ -207,9 +207,10 @@
 				return t("auth.mfaRequired");
 			if (error.code === 403)
 				return t("auth.forbidden");
-			// 上游未配置是运维问题，不是凭据问题：给出可执行的修复指引
-			if (error.code === 503 && error.message === "bff_upstream_missing")
-				return t("auth.bffUpstreamMissing");
+			// 上游未配置 / 掉线 / 超时是运维问题，不是凭据问题：给出可执行的修复指引
+			const hint = upstreamHintKey(error);
+			if (hint)
+				return t(hint);
 			if (error.message)
 				return error.message;
 		}

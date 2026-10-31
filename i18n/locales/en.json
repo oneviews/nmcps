@@ -67,6 +67,7 @@
 		"logoutFailed": "Sign-out failed",
 		"bffNotConfigured": "BFF base URL is not configured, sign-in is unavailable",
 		"bffUpstreamMissing": "The BFF has no upstream configured: copy .env.example to .env, set NUXT_BFF_UPSTREAM_BASE and restart the service (NMCPS-ARCH-003 §7.7)",
+		"bffUpstreamUnavailable": "The upstream service is unreachable: make sure it is running and the network is open, then retry (NMCPS-ARCH-003 §7.7)",
 		"recheckUpstream": "Check again"
 	},
 	"pages": {

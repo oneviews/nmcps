@@ -67,6 +67,7 @@
 		"logoutFailed": "退出登录失败",
 		"bffNotConfigured": "未配置 BFF 地址，无法登录",
 		"bffUpstreamMissing": "BFF 未配置上游地址：请复制 .env.example 为 .env，填写 NUXT_BFF_UPSTREAM_BASE 后重启服务（NMCPS-ARCH-003 §7.7）",
+		"bffUpstreamUnavailable": "上游服务暂时不可达：请确认上游已启动、网络可通后重试；若刚重启过 BFF，可点「重新检测」（NMCPS-ARCH-003 §7.7）",
 		"recheckUpstream": "重新检测"
 	},
 	"pages": {
