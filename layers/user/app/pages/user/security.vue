@@ -279,6 +279,9 @@
 	/** 上游业务码 → 本地化文案（未知码回落上游 message，不吞信息） */
 	function describeError(error: unknown): string {
 		if (error instanceof ApiError) {
+			// 上游未配置是运维问题，不是口令问题：给与登录页同一条修复指引（NMCPS-ARCH-003 §7.7）
+			if (error.code === 503 && error.message === "bff_upstream_missing")
+				return t("auth.bffUpstreamMissing");
 			if (error.code === 20201 || error.code === 401)
 				return t("pages.user-security.oldPasswordInvalid");
 			if (error.code === 20204)
