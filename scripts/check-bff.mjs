@@ -482,6 +482,16 @@ try {
 		const mfaLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "mfa-user" }) });
 		log("上游 20203 需要动态口令 → 401 且业务码原样透传（不被压成 400）", mfaLogin.status === 401 && mfaLogin.json?.code === 20203, `${mfaLogin.status} ${describe(mfaLogin.json?.code)}`);
 		log("上游 msg 归一为 message 且不写 cookie", mfaLogin.json?.message === "需要多因子验证码" && !setCookies(mfaLogin).some((raw) => raw.startsWith("nmcps_at=")), describe(mfaLogin.json?.message));
+
+		// 9.1) 动态口令错误：上游 `401 20204` → BFF 原样透传业务码（与 `20203` 成对，别压成 400）
+		const mfaWrong = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "mfa-user", mfaCode: "000000" }) });
+		log("上游 20204 动态口令错误 → 401 且业务码原样透传", mfaWrong.status === 401 && mfaWrong.json?.code === 20204, `${mfaWrong.status} ${describe(mfaWrong.json?.code)}`);
+		log("20204 的 msg 归一为 message 且不写 cookie", mfaWrong.json?.message === "动态验证码错误" && !setCookies(mfaWrong).some((raw) => raw.startsWith("nmcps_at=")), describe(mfaWrong.json?.message));
+
+		// 9.2) 强制改密标志：上游 200 带 `mustResetPassword: true` → BFF 必须原样交给前端
+		//      （上游不拦接口，客户端得自己把人送去「安全设置」，故该标志不能丢）
+		const resetLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "reset-user" }) });
+		log("上游 mustResetPassword 标志透传给前端", resetLogin.status === 200 && resetLogin.json?.data?.mustResetPassword === true && resetLogin.json?.data?.mfaRequired === false, `${resetLogin.status} ${describe(resetLogin.json?.data)}`);
 	});
 } finally {
 	await closeUpstream(upstream);

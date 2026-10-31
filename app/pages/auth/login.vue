@@ -94,14 +94,6 @@
 				/>
 
 				<UAlert
-					v-if="mustResetPassword"
-					color="warning"
-					variant="subtle"
-					icon="carbon:password"
-					:description="$t('auth.resetRequired')"
-				/>
-
-				<UAlert
 					v-if="upstreamMissing"
 					color="warning"
 					variant="subtle"
@@ -151,6 +143,7 @@
 	const route = useRoute();
 	const { login, fetchSession } = useAuth();
 	const { isConfigured } = useApi();
+	const toast = useToast();
 
 	const schema = z.object({
 		accountName: z.string().min(1, t("auth.accountNameRequired")),
@@ -175,7 +168,6 @@
 	const submitting = ref(false);
 	const errorMessage = ref<string>();
 	const mfaRequired = ref(false);
-	const mustResetPassword = ref(false);
 	/**
 	 * 上游未配置 ⇒ 所有 `/api/auth/*` 都会 503（NMCPS-ARCH-003 §7.7）：进页面先探一次，
 	 * 别等到提交才报错；探针逻辑（缓存 / 重探 / 桌面端跳过）见 `useBffUpstream()`。
@@ -234,9 +226,21 @@
 			});
 
 			mfaRequired.value = result.mfaRequired;
-			mustResetPassword.value = result.mustResetPassword;
 
 			await fetchSession(true);
+
+			// 强制改密是纯前端约定：上游不拦接口（NMCPS-ARCH-003 §7.2 第 14 条），
+			// 客户端必须把人送去「安全设置」，否则初始口令可以一直用下去。
+			if (result.mustResetPassword) {
+				toast.add({
+					title: t("auth.resetRequiredTitle"),
+					description: t("auth.resetRequired"),
+					color: "warning",
+					duration: 0
+				});
+				await navigateTo("/user/security");
+				return;
+			}
 
 			// 只接受站内相对路径（`//host` 会被当成协议相对地址，必须排除）
 			const target = route.query.redirect;

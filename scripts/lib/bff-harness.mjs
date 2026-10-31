@@ -178,6 +178,10 @@ export async function startUpstream(port) {
 						? send(401, { code: 20204, msg: "动态验证码错误" })
 						: send(401, { code: 20203, msg: "需要多因子验证码" });
 				}
+				if (body.accountName === "reset-user") {
+					// 真实上游：`mustResetPassword: true` 的账号登录成功但带标志，接口不拦（强制改密是纯前端约定）
+					return send(200, { code: 0, msg: "success", data: { ...nextTokens(), mustResetPassword: true } });
+				}
 				return send(200, { code: 0, msg: "success", data: nextTokens() });
 			}
 

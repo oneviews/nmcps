@@ -228,6 +228,24 @@ if (upstreamPort) {
 	await mfaContext.close();
 }
 
+// 4.3 强制改密：上游 `mustResetPassword: true` 不拦接口（纯前端约定），客户端必须把人送去「安全设置」，
+//     否则初始口令能一直用下去。回归守卫：登录页此前只把标志塞进 ref 后立刻跳看板，警告永远不显示。
+if (upstreamPort) {
+	const resetContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const resetPage = await resetContext.newPage();
+	await resetPage.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
+	await resetPage.locator("input[autocomplete='username']").fill("reset-user");
+	await resetPage.locator("input[type='password']").fill(PASSWORD);
+	await resetPage.locator("button[type='submit']").first().click();
+	await resetPage.waitForURL((url) => url.pathname === "/user/security", { timeout: 20_000 }).catch(() => {});
+	const resetLanding = new URL(resetPage.url()).pathname;
+	log("mustResetPassword 登录后落到「安全设置」而不是看板", resetLanding === "/user/security", resetLanding);
+
+	const resetText = await resetPage.evaluate(() => document.body.textContent ?? "");
+	log("强制改密给出提示（toast 含「请先修改初始密码」）", resetText.includes("请先修改初始密码"), resetText.includes("请先修改初始密码") ? "已提示" : "无提示");
+	await resetContext.close();
+}
+
 // 4.5 已登录再访问登录页 → 直接回跳，不再展示登录表单
 await page.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
 await page.waitForTimeout(500);
