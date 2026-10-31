@@ -10,6 +10,7 @@
 //      散文式写法在渲染后就读不出「每条分行」）
 //   ④ 语言与引用：收尾总结用中文；文档清单只引用 NMCPS-GOV-003，不手写清单
 //   ⑤ 工程约定：typecheck / lint / Rust 校验命令仍在规则里
+//   ⑥ CI 自查用例：`check:ui` / `check:bff` 的被测实例必须自带上游配置（否则用例误报）
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
@@ -103,6 +104,12 @@ log("Rust 约定仍要求 cargo build 校验", rust.includes("cargo build") && r
 
 const git = texts.get("03-git-workflow.md") ?? "";
 log("Git 约定仍要求「未明确要求不提交」", git.includes("Do not commit") && git.includes("Conventional Commit"));
+
+// ── ⑥ CI 自查用例的环境前提 ──────────────────────────
+log(
+	"编码约定记录了 UI / 集成自查步骤必须给被测实例配上游（否则用例误报）",
+	bulletLines(coding, ["NUXT_BFF_UPSTREAM_BASE"]).length === 1 && coding.includes("check:ui") && coding.includes("check:bff")
+);
 
 const passed = results.filter((item) => item.ok).length;
 console.log(`\n${passed}/${results.length} 项通过`);
