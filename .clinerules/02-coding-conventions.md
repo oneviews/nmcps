@@ -24,7 +24,7 @@ Follow the project's existing conventions at all times:
 
 ## Platform capability conventions
 
-- Never grant `shell:allow-execute` in `src-tauri/capabilities/*.json`; that validator is arbitrary command execution. Run `pnpm check:platform` after touching `layers/platform` or any capability file.
+- Never grant `shell:allow-execute` in `src-tauri/capabilities/*.json`; that validator is arbitrary command execution. The `shell` plugin itself is removed too (Rust dependency/registration, npm dependency, `modules/tauri.ts` auto-import) and `check:platform` asserts that zero residue — do not re-introduce it; use a dedicated `#[tauri::command]` instead. Run `pnpm check:platform` after touching `layers/platform` or any capability file.
 - Probe pages (`/os`, `/file`, `/store`, `/notifications`, `/webview`) are capability probes, not product features: keep `meta.group = "platform"` plus `meta.tauriOnly`, and call `layers/platform/app/composables` instead of Tauri plugins directly.
 - The capability matrix lives in `NMCPS-ARCH-005`; state mobile behaviour as fact only after running the probe on a real device.
 - `pnpm check:ui` covers both navigation branches (browser: no group; injected `globalThis.isTauri` plus an IPC stub: the group with five entries), but native windows and mobile need a real display / device.

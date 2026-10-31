@@ -37,6 +37,20 @@ for (const file of CAPABILITIES) {
 	log(`${file} 不含 shell:allow-execute`, src !== "" && !src.includes("shell:allow-execute"));
 }
 
+// shell 插件本身也不存在：不注册、不依赖、不导出自动导入，
+// 避免「注册留着、等以后放开」的回头路（裁决见 NMCPS-ADR-0015 及其后续记录）。
+const SHELL_RESIDUE = [
+	["src-tauri/src/lib.rs 不注册 tauri_plugin_shell", "src-tauri/src/lib.rs", "tauri_plugin_shell"],
+	["src-tauri/Cargo.toml 不声明 tauri-plugin-shell", "src-tauri/Cargo.toml", "tauri-plugin-shell"],
+	["package.json 不依赖 @tauri-apps/plugin-shell", "package.json", "@tauri-apps/plugin-shell"],
+	["modules/tauri.ts 不导出 shell 自动导入", "modules/tauri.ts", "plugin-shell"]
+];
+
+for (const [label, file, needle] of SHELL_RESIDUE) {
+	const src = existsSync(file) ? read(file) : "";
+	log(label, src !== "" && !src.includes(needle));
+}
+
 // ── ② 探针页 ──────────────────────────────────────────
 log(`${PAGES_DIR}/commands.vue 已下线`, !existsSync(`${PAGES_DIR}/commands.vue`));
 
