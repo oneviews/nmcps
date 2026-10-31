@@ -126,6 +126,12 @@ log("上游就绪时登录页不显示上游缺失提示", !upstreamAlertOnReady
 	try {
 		const isolated = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const bare = await isolated.newPage();
+		// 探针结果缓存（30s）：同一会话内重进登录页不该再打 `/ready`
+		let readyProbes = 0;
+		bare.on("request", (request) => {
+			if (new URL(request.url()).pathname === "/ready")
+				readyProbes += 1;
+		});
 		await bare.goto(`http://${HOST}:${barePort}/auth/login`, { waitUntil: "networkidle" });
 		await bare.waitForTimeout(600);
 		const bareText = await bare.evaluate(() => document.body.textContent ?? "");
@@ -133,6 +139,16 @@ log("上游就绪时登录页不显示上游缺失提示", !upstreamAlertOnReady
 			"上游未配置时登录页给出可执行的修复指引",
 			bareText.includes("BFF 未配置上游地址") && bareText.includes("NUXT_BFF_UPSTREAM_BASE"),
 			bareText.includes("BFF 未配置上游地址") ? "已提示" : "无提示"
+		);
+
+		const probesAfterFirstLoad = readyProbes;
+		await bare.reload({ waitUntil: "networkidle" });
+		await bare.waitForTimeout(600);
+		const reloadedText = await bare.evaluate(() => document.body.textContent ?? "");
+		log(
+			"探针结果 30s 内复用（重进登录页不再打 /ready）",
+			probesAfterFirstLoad === 1 && readyProbes === probesAfterFirstLoad && reloadedText.includes("BFF 未配置上游地址"),
+			`首次 ${probesAfterFirstLoad} 次 / 刷新后 ${readyProbes} 次`
 		);
 		await isolated.close();
 	} finally {

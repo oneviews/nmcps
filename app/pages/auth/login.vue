@@ -174,20 +174,68 @@
 	/** 上游未配置 ⇒ 所有 `/api/auth/*` 都会 503（NMCPS-ARCH-003 §7.7）：进页面先探一次，别等到提交才报错 */
 	const upstreamMissing = ref(false);
 
+	/** 探针结果缓存（session 级 + 30s TTL）：来回切登录页不必每次都打 BFF */
+	const UPSTREAM_PROBE_KEY = "auth.upstreamProbe";
+	const UPSTREAM_PROBE_TTL_MS = 30_000;
+
+	interface UpstreamProbeCache {
+		configured: boolean
+		at: number
+	}
+
+	function readProbeCache(): UpstreamProbeCache | undefined {
+		try {
+			const raw = sessionStorage.getItem(UPSTREAM_PROBE_KEY);
+			if (!raw)
+				return undefined;
+
+			const cached = JSON.parse(raw) as UpstreamProbeCache;
+			if (typeof cached?.configured !== "boolean" || typeof cached.at !== "number")
+				return undefined;
+
+			return Date.now() - cached.at < UPSTREAM_PROBE_TTL_MS ? cached : undefined;
+		} catch {
+			// 隐私模式 / 存储被禁用：当作无缓存，退化成每次探测
+			return undefined;
+		}
+	}
+
+	function writeProbeCache(configured: boolean): void {
+		try {
+			sessionStorage.setItem(UPSTREAM_PROBE_KEY, JSON.stringify({ configured, at: Date.now() } satisfies UpstreamProbeCache));
+		} catch {
+			// 写不进去不影响本次判定
+		}
+	}
+
 	/**
 	 * 用 `/ready` 探上游配置：无上游时 BFF 返回 503 + `upstream.configured:false`。
-	 * 探针失败（网络中断、桌面端无同源 Nitro）不作为结论 —— 保持 false，交给登录动作报错。
+	 * 只信 BFF 明确给出的布尔值；探针失败（网络中断、桌面端无同源 Nitro）保持 false，
+	 * 交给登录动作报错。结果缓存 30s，避免反复进出登录页重复探测。
 	 */
 	async function probeUpstream(): Promise<void> {
 		if (isTauri())
 			return;
 
+		const cached = readProbeCache();
+		if (cached) {
+			upstreamMissing.value = !cached.configured;
+			return;
+		}
+
 		try {
-			await $fetch("/ready", { baseURL: bffBase, credentials: "include" });
+			// `503` 在 ofetch 默认重试列表内，探针必须关掉重试，否则无上游时一次进页打两次
+			await $fetch("/ready", { baseURL: bffBase, credentials: "include", retry: false });
 			upstreamMissing.value = false;
+			writeProbeCache(true);
 		} catch (error) {
 			const report = (error as { data?: { upstream?: { configured?: boolean } } }).data;
-			upstreamMissing.value = report?.upstream?.configured === false;
+			const configured = report?.upstream?.configured;
+
+			if (typeof configured === "boolean") {
+				upstreamMissing.value = !configured;
+				writeProbeCache(configured);
+			}
 		}
 	}
 
