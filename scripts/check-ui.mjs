@@ -38,6 +38,20 @@ function log(label, ok, detail) {
 	console.log(`${ok ? "✅" : "❌"} ${label}${detail ? ` — ${detail}` : ""}`);
 }
 
+// 外部实例模式（CHECK_UI_BASE_URL）：该实例必须自己配好 `NUXT_BFF_UPSTREAM_BASE`，否则登录与
+// 「上游就绪」用例会以失败形式误报（2026-10-31 CI 实证）。先探一次，配错就直接停，
+// 别让人顺着「登录失败」去翻错方向。
+if (process.env.CHECK_UI_BASE_URL) {
+	const ready = await fetch(`${BASE_URL}/ready`).catch(() => null);
+	const payload = ready ? await ready.json().catch(() => undefined) : undefined;
+	const configured = payload?.upstream?.configured === true;
+	log("外部实例（CHECK_UI_BASE_URL）已配上游 NUXT_BFF_UPSTREAM_BASE", configured, payload ? `configured=${payload.upstream?.configured} reason=${payload.upstream?.reason ?? "无"}` : "实例无响应");
+	if (!configured) {
+		console.error(`\n❌ ${BASE_URL} 没有可用上游：登录与「上游就绪」用例会整体误报，先给实例配上 NUXT_BFF_UPSTREAM_BASE 再跑。`);
+		process.exit(1);
+	}
+}
+
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
