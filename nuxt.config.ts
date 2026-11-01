@@ -21,6 +21,11 @@ export default defineNuxtConfig({
 	],
 	ssr: false,
 	ignore: ["**/src-tauri/**"],
+	// 根路径没有页面（见 NMCPS-ADR-0016）：冷启动直接 302 到登录页；
+	// 站内跳回 `/` 由 app/middleware/auth.global.ts 按登录态分流。
+	routeRules: {
+		"/": { redirect: "/auth/login" }
+	},
 	i18n: {
 		defaultLocale: "cn",
 		detectBrowserLanguage: false,

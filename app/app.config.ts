@@ -4,33 +4,12 @@ export default defineAppConfig({
 	app: {
 		name: "nmcps",
 		version: "2.0.0",
-		author: "Nicola Spadari",
-		repo: "https://github.com/NicolaSpadari/nmcps",
-		tauriSite: "https://tauri.app",
-		nuxtSite: "https://nuxt.com",
-		nuxtUiSite: "https://ui4.nuxt.dev"
-	},
-	pageCategories: {
-		system: {
-			label: "nav.categories.system",
-			icon: "carbon:terminal"
-		},
-		storage: {
-			label: "nav.categories.storage",
-			icon: "carbon:archive"
-		},
-		interface: {
-			label: "nav.categories.interface",
-			icon: "carbon:application"
-		},
-		other: {
-			label: "nav.categories.other",
-			icon: "carbon:folder"
-		}
+		repo: "https://github.com/NicolaSpadari/nmcps"
 	},
 	downloads: {
 		version: "2.0.0",
 		basePath: "https://github.com/oneviews/nmcps/releases/download/nmcps-v2.0.0",
+		releaseUrl: "https://github.com/oneviews/nmcps/releases/tag/nmcps-v2.0.0",
 		assets: {
 			windows: {
 				label: "Windows",
@@ -69,6 +48,24 @@ export default defineAppConfig({
 					{ label: ".aab (Universal)", file: "nmcps_2.0.0_universal.aab" }
 				]
 			}
+		}
+	},
+	pageCategories: {
+		system: {
+			label: "nav.categories.system",
+			icon: "carbon:terminal"
+		},
+		storage: {
+			label: "nav.categories.storage",
+			icon: "carbon:archive"
+		},
+		interface: {
+			label: "nav.categories.interface",
+			icon: "carbon:application"
+		},
+		other: {
+			label: "nav.categories.other",
+			icon: "carbon:folder"
 		}
 	},
 	ui: {

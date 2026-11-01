@@ -15,7 +15,7 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.6.1
+version: 0.8.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -150,7 +150,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 
 - 组合式函数：`useAuth()`（登录 / 登出 / 会话恢复 / 改密 / MFA 绑定与确认）+ `useAuthTokens()`（桌面令牌持久化）；所有 BFF 调用走 `useApi()`。
 - `useApi` 命中 401 且有刷新令牌时单飞刷新一次并重放原请求；刷新失败即清会话。`login` 以 `auth: false` 跳过注入与重试；`refresh` 由 `useAuth` 直接 `$fetch`（不经 `useApi`），避免递归刷新。
-- 登录页 `/auth/login`（`hide`，不进侧栏）；除落地页与 `/auth/**` 外，所有页面由全局守卫强制登录（见 7.6），页面无需逐条声明中间件。认证动作在源码与路由上统一用 `login`（不写 `sign-in`），裁决见 `NMCPS-ADR-0013`。
+- 登录页 `/auth/login`（`hide`，不进侧栏）；除 `/auth/**` 外，所有页面由全局守卫强制登录（见 7.6），页面无需逐条声明中间件。认证动作在源码与路由上统一用 `login`（不写 `sign-in`），裁决见 `NMCPS-ADR-0013`。
 - 强制改密页 `/auth/change-password`（`hide` + `layout: false`，与登录页同壳）：一屏给齐「当前密码 / 新密码 / 确认新密码」，提交后提示并强制重登。它落在 `/auth/**` 白名单里，全局守卫不判登录态，所以页面自己在 `onMounted` 用 `fetchSession(true)` 兜底，未登录即带着 `redirect` 回登录页。**命名用 `change-password` 而不是 `reset-password`**：`reset` 在行业里专指「忘记口令」的匿名令牌流程（Auth0 `password-reset`、Keycloak `reset-credentials`、Django `reset/<uid>/<token>/`），上游接口设计表也把 `ResetPassword` 定为管理员重置、`ChangePassword` 定为自助改密；本页是已认证 + 需旧口令的**自助改密**，与 `useAuth().changePassword()` / `POST /api/auth/password` 取同一个词。裁决与备选见 `NMCPS-ADR-0014`（`layers/content/collections/cn/records/adr/adr-0014.md`），`reset` 一词保留给未来的忘记口令流程。页面另带一个隐藏的 `<input autocomplete="username">`（只读、`tabindex="-1"`、`aria-hidden`，值取会话里的 `accountName`）：密码管理器要靠表单里的「用户名」把新口令记到对应账号下，缺了它会新建一条永远登不进去的重复记录；`check:ui` 断言它恰好一个、不可见、且值等于当前账号。
 
 ### 7.5 自助安全设置页
@@ -172,7 +172,8 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 
 系统不提供匿名浏览：除公开路径外，未登录访问一律送回登录页。
 
-- 实现：`app/middleware/auth.global.ts`（全局路由中间件）；白名单仅 `/`（下载落地页）与 `/auth/**`（登录页）。
+- 实现：`app/middleware/auth.global.ts`（全局路由中间件）；白名单仅 `/auth/**`（登录页与改密页）。
+- 根路径 `/` 没有页面：冷启动由 `nuxt.config.ts` 的 `routeRules` 直接 `302` 到 `/auth/login`，站内跳回 `/`（如 404 页的「返回首页」）由守卫按登录态分流 —— 已登录去 `/dashboard/overview`，未登录去登录页。原下载落地页不再占 `/`，而是迁到系统管理的子路由 `/system/download`（「系统管理 → 下载中心」，`layers/system/app/pages/system/download.vue`），受本守卫保护；`home` / `blank` 布局、`SiteNavbar` / `LanguageSwitch` 删除，`useOS()` 与 `app.config.downloads` 随页面迁入 `layers/system`，`pages.index.*` 改为 `pages.system-download.*`（裁决见 `NMCPS-ADR-0016`，取代 `NMCPS-ADR-0008`）。
 - 未登录：`navigateTo('/auth/login?redirect=<完整路径>')`；登录成功后按 `redirect` 回跳，缺省 `/dashboard/overview`。
 - 已登录访问 `/auth/login`：直接回跳（`redirect` 优先，其次 `/dashboard/overview`），避免二次登录。
 - 白名单内的非登录页（如 `/auth/change-password`）自己兜底：页面挂载时用 `fetchSession(true)` 判态，未登录即带 `redirect` 回登录页。`check:ui` 有专门用例锁这条（外部模式也跑）。
@@ -193,7 +194,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
-- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 68 项、外部模式 51 项：自建多 17 项（MFA 动态口令 2、强制改密 13、上游掉线 1、Tauri 宿主模拟 2，前两者依赖假上游的 `mfa-user` / `reset-user` 与 `__control/down`），外部模式多前置校验 1 项（登录与自检用例在两种模式下都在跑，含「未登录直进 `/auth/change-password`」这条守卫与平台能力面 2 条浏览器断言）。假上游的口令是**按账号可变**的（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），否则「新口令重登不再被弹回」「旧口令 `401 20201`」这两条断言写不出来。
+- CI 形态：`check:ui` 自建假上游 + 构建产物（随机端口）。不要用 `CHECK_UI_BASE_URL` 指向没有 `NUXT_BFF_UPSTREAM_BASE` 的实例，否则登录与「上游就绪」用例必然失败（2026-10-31 CI 实证）；脚本已在该模式下先探 `/ready`，未配置即报错退出。自建模式 70 项、外部模式 53 项：自建多 17 项（MFA 动态口令 2、强制改密 13、上游掉线 1、Tauri 宿主模拟 2，前两者依赖假上游的 `mfa-user` / `reset-user` 与 `__control/down`），外部模式多前置校验 1 项（登录与自检用例在两种模式下都在跑，含「未登录直进 `/auth/change-password`」与「未登录直进 `/system/download`」两条守卫、下载中心 3 条与平台能力面 2 条浏览器断言）。假上游的口令是**按账号可变**的（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），否则「新口令重登不再被弹回」「旧口令 `401 20201`」这两条断言写不出来。
 - 词汇表单一事实源：`shared/constants/upstreamReasons.ts` 的 `UPSTREAM_REASONS`（`/ready` 的 `upstream.reason`）与 `BFF_UPSTREAM_MESSAGES`（API 层 `bff_upstream_*` message），server 与前端一律引用常量。自查脚本是纯 node ESM，不 import 该文件，而是按**线上字符串**断言 —— 改取值会让契约用例变红，这本身就是防漂移守卫。
 - 复用口径：`/user/security` 的绑定 MFA / 改密与登录页共用 `upstreamHintKey()`（`app/utils/apiError.ts`）：`bff_upstream_missing` → 配 `.env` 指引，`bff_upstream_unreachable` / `bff_upstream_timeout` → 上游不可达指引（`auth.bffUpstreamUnavailable`），都不再回落原始 message，避免用户把运维问题读成「口令错误」。
 - 掉线演练：假上游带控制端点 `POST /__control/down|up|state`；`down` 后除控制端点外的请求直接销毁 socket，BFF 侧表现为 502 `bff_upstream_unreachable`，因此「已登录 → 上游掉线 → 改密」这种只能运行中构造的场景也进了自查。
@@ -244,3 +245,4 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.5.0 | 改密页补密码管理器语义与闭环断言：页面加隐藏 `<input autocomplete="username">`（值取会话账号）；假上游口令改为**按账号可变**（改密真的落库、`whoami` 按令牌回账号、改密后清 `mustResetPassword`），`check:ui` 补三条用例（新口令重登不再被弹回 / 改后旧口令被拒 `401 20201` / 隐藏用户名归属当前账号），7.7 计数改为自建 64 / 外部 49；`check:bff` 的第二次改密改用上一次设的新口令。 |
 | 2026-10-31 | 0.6.0 | 平台能力面引入 2 条浏览器断言（侧栏不出现「平台能力」分组 / `/os` 只显示降级提示），守卫用例由 `/commands` 改判 `/os`，7.7 计数改为自建 66 / 外部 51；能力矩阵与探针口径见 `NMCPS-ARCH-005`（layers/content/collections/cn/architecture/1.architecture/platform-architecture.md），裁决见 `NMCPS-ADR-0015`（layers/content/collections/cn/records/adr/adr-0015.md）。 |
 | 2026-10-31 | 0.6.1 | 平台能力面补「显示」分支：`check:ui` 末尾用宿主模拟（注入 `globalThis.isTauri` + 最小 IPC 桩，另起一个带 `NUXT_PUBLIC_BFF_BASE` 的实例）断言分组出现且含 5 个入口，7.7 计数改为自建 68 / 外部 51；无头环境无 `DISPLAY`，原生窗口与移动端仍为手验项（`NMCPS-ARCH-005` §7）。 |
+| 2026-10-31 | 0.8.0 | 下载落地页迁入系统配置：`/` 不再是页面（`routeRules` 冷启动 `302` 到 `/auth/login`，站内跳回 `/` 由守卫分流到 `/dashboard/overview` 或登录页），下载页改为系统管理子路由 `/system/download`（「系统管理 → 下载中心」，`layers/system/app/pages/system/download.vue`，迁入 `useOS()` 与 `app.config.downloads`）；7.6 白名单只留 `/auth/**`。原 4 条落地页断言改为 2 条根路径断言 + 1 条下载中心守卫断言 + 3 条下载中心断言，7.7 计数改为自建 70 / 外部 53。裁决见 `NMCPS-ADR-0016`（取代 `NMCPS-ADR-0008`），领域口径见 `NMCPS-DESIGN-005`。 |
