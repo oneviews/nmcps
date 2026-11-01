@@ -893,6 +893,68 @@ if (upstreamPort) {
 	await page.keyboard.press("Escape");
 	await page.waitForTimeout(600);
 
+	// 3.7e 无动作页（`/dashboard/overview`）的其余模式（NMCPS-ARCH-006 §4.4 / §7 第 15 行）：
+	// `mobile` 与 `bigscreen` 一样整条收起；`topbar` 是**例外** —— 面包屑常驻左区最左，
+	// 收起就没地方放它，所以留一条 49px，但左区挂载点必须为空（否则等于给空页面白留一条）。
+	await page.goto(`${BASE_URL}/dashboard/overview`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(400);
+	const readBarState = () => page.evaluate(() => {
+		const el = document.querySelector("[data-toolbar='page']");
+		if (!el) return null;
+		const s = getComputedStyle(el);
+		const nav = el.querySelector("nav");
+		return {
+			mode: document.querySelector("[data-layout-mode]")?.getAttribute("data-layout-mode") ?? null,
+			height: Math.round(el.getBoundingClientRect().height),
+			backdropFilter: s.backdropFilter,
+			borderBottomWidth: s.borderBottomWidth,
+			segments: Array.from(nav?.querySelectorAll("li") ?? [])
+				.map((li) => (li.textContent ?? "").replace(/\s+/g, " ").trim())
+				.filter((text) => text.length > 0),
+			leftKids: document.querySelector("#app-toolbar-left")?.childElementCount ?? -1
+		};
+	});
+
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("顶栏", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+	const topbarEmptyPage = await readBarState();
+	log(
+		"无动作页在顶栏模式不收起：只留面包屑，左区挂载点为空（§4.4）",
+		topbarEmptyPage?.mode === "topbar"
+		&& topbarEmptyPage.height >= 44
+		&& topbarEmptyPage.segments.length >= 1
+		&& topbarEmptyPage.leftKids === 0,
+		`mode=${topbarEmptyPage?.mode} h=${topbarEmptyPage?.height} 面包屑=[${topbarEmptyPage?.segments.join(" / ")}] 左区子节点=${topbarEmptyPage?.leftKids}`
+	);
+
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("手机", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+	const mobileEmptyPage = await readBarState();
+	log(
+		"无动作页在手机模式同样整条收起（§4.4）",
+		mobileEmptyPage?.mode === "mobile"
+		&& mobileEmptyPage.height === 0
+		&& mobileEmptyPage.backdropFilter === "none"
+		&& mobileEmptyPage.borderBottomWidth === "0px",
+		`mode=${mobileEmptyPage?.mode} h=${mobileEmptyPage?.height} backdrop=${mobileEmptyPage?.backdropFilter} border-b=${mobileEmptyPage?.borderBottomWidth}`
+	);
+
+	// 切回大屏（默认模式），后续用例都按默认口径
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("大屏", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+
 	// 3.8 覆盖式：同一层工具栏跟随当前面板（列表态给集合域动作，详情态给「返回」）
 	await page.setViewportSize({ width: 480, height: 900 });
 	await openUserPage();

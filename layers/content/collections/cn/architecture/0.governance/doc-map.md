@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.31.0
+version: 0.32.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -171,3 +171,4 @@ tags:
 | 2026-11-01 | 0.30.0 | **ARCH-006 → 0.2.7（工具栏改为单一渲染点，修「侧栏模式下动作全丢」）**：`default.vue` 原先按模式写了两处 `<AppToolbar>`（大屏模式在滚动容器内、其余模式在外），切模式时旧挂载点被销毁重建，页面 `Teleport` 的内容留在已脱离文档的子树里（实测侧栏模式 `leftKids=0`、h=0）。改为全模式只渲染一次且位于滚动容器之外；§4.3 新增「单一渲染点」规则，§3.3 措辞同步；§7 新增第 13 行，`check:ui` 增至 85 项（切「侧栏」后断言动作仍在）。 |
 
 | 2026-11-01 | 0.31.0 | **ARCH-006 → 0.2.8（`topbar` 模式补 `check:ui` 用例）**：§7 第 5 行「面包屑记录段」由待补转已覆盖（1920 视口切「顶栏」→ `[系统管理 / 用户管理 / Alice]`，点记录段去掉 `?id`）；新增第 14 行验收「工具栏与页头对齐的是限宽容器（同为 `left=240` / `width=1440`），内边距各保持 12px / 32px、20px 差为有意保留」，§4.1 同步写明该口径；`check:ui` 85 → 88 项。 |
+| 2026-11-01 | 0.32.0 | **ARCH-006 → 0.2.9（无动作页的三模式收起口径）**：§4.4 补 `mobile` 与 `bigscreen` 同口径、`topbar` 不收起（面包屑常驻，左区 0 子节点，判空为 `!isTopbarMode && !hasPageActions`）；§7 新增第 15 行（`/dashboard/overview`：大屏 `h=0` / 顶栏 `h=49` / 手机 `h=0`），`check:ui` 88 → 90 项。 |
