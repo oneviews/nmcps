@@ -68,20 +68,22 @@ page.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
 await page.goto(`${BASE_URL}/`, { waitUntil: "networkidle" });
 
-// 1. 落地页（官网下载页）：平台检测 + 下载链接指向 GitHub Release
-const landing = await page.evaluate(() => {
-	const links = Array.from(document.querySelectorAll("a[href*='/releases/download/']"))
-		.map((a) => a.getAttribute("href"));
-	return {
-		heading: document.querySelector("h1")?.textContent?.trim() ?? null,
-		links,
-		body: document.body.textContent ?? ""
-	};
-});
-log("落地页标题 = NMCPS", landing.heading === "NMCPS", landing.heading ?? "未找到 h1");
-log("落地页检测到 Linux 平台（默认中文文案）", landing.body.includes("检测到您正在使用") && landing.body.includes("Linux"));
-log("落地页主下载链接指向 GitHub Release", !!landing.links[0]?.startsWith("https://github.com/oneviews/nmcps/releases/download/nmcps-v2.0.0/"), landing.links[0] ?? "未找到");
-log("落地页下载链接数为 4（主按钮 + 3 个其他平台）", landing.links.length === 4, `${landing.links.length} 个`);
+// 1. 根路径：没有落地页（NMCPS-ADR-0016）—— 冷启动 302 到登录页，站内跳转由全局守卫分流
+const rootResponse = await fetch(`${BASE_URL}/`, { redirect: "manual" });
+const rootLocation = rootResponse.headers.get("location");
+log(
+	"/ 未登录访问直接 302 到 /auth/login",
+	rootResponse.status >= 300 && rootResponse.status < 400 && rootLocation === "/auth/login",
+	`status=${rootResponse.status} location=${rootLocation ?? "无"}`
+);
+
+const rootPage = new URL(page.url());
+const rootText = await page.evaluate(() => document.body.textContent ?? "");
+log(
+	"/ 落地后呈现登录页（下载落地页已移除）",
+	rootPage.pathname === "/auth/login" && rootText.includes("登录 NMCPS"),
+	`${rootPage.pathname}${rootPage.search}`
+);
 
 // 2. 登录守卫（NMCPS-ARCH-003 §7.6）：未登录访问业务页面一律送回登录页
 async function guardOf(path) {
@@ -103,6 +105,10 @@ log("未登录访问平台探针页同样被拦截", guardProbe.path === "/auth/
 // `/auth/**` 在守卫白名单里，改密页只能自己判登录态：未登录直接进也要回登录页并带回跳
 const guardChange = await guardOf("/auth/change-password");
 log("未登录访问改密页被送回登录页并带回跳目标", guardChange.path === "/auth/login" && guardChange.redirect === "/auth/change-password", guardChange.landing);
+
+// 下载中心在系统管理下，同样受守卫保护（NMCPS-ADR-0016）
+const guardDownload = await guardOf("/system/download");
+log("未登录访问下载中心被送回登录页并带回跳目标", guardDownload.path === "/auth/login" && guardDownload.redirect === "/system/download", guardDownload.landing);
 
 // 3. 登录页：独立布局 + 表单校验 + 导航不暴露入口
 const loginPage = await page.evaluate(() => ({
@@ -377,25 +383,34 @@ if (!headerStyle) {
 	log("header 底框(border-bottom)", headerStyle.borderBottomWidth !== "0px", headerStyle.borderBottomWidth);
 }
 
-// 2.5 toolbar：磨砂玻璃
+// 2.5 预留工具栏（AppToolbar）：本页没有注入任何动作、也非 `topbar` 模式 → 整条收起（NMCPS-ARCH-006 §4.4）
 const toolbarStyle = await page.evaluate(() => {
-	const el = document.querySelector(".app-toolbar");
+	const el = document.querySelector("[data-toolbar='page']");
 	if (!el) return null;
 	const s = getComputedStyle(el);
-	return { backdropFilter: s.backdropFilter };
+	const rect = el.getBoundingClientRect();
+	return {
+		height: Math.round(rect.height),
+		backdropFilter: s.backdropFilter,
+		borderBottomWidth: s.borderBottomWidth
+	};
 });
 if (!toolbarStyle) {
-	log("toolbar(.app-toolbar) 存在", false, "未找到 toolbar");
+	log("预留工具栏(data-toolbar='page') 存在", false, "未找到 [data-toolbar='page']");
 } else {
-	log("toolbar 磨砂玻璃(backdrop-filter)", toolbarStyle.backdropFilter !== "none", toolbarStyle.backdropFilter);
+	log(
+		"没有页面动作时预留工具栏整条收起（§4.4）",
+		toolbarStyle.height === 0 && toolbarStyle.backdropFilter === "none" && toolbarStyle.borderBottomWidth === "0px",
+		`h=${toolbarStyle.height} backdrop=${toolbarStyle.backdropFilter} border-b=${toolbarStyle.borderBottomWidth}`
+	);
 }
 
-// 2.6 大屏模式：内容卡片（圆角 + 边框）与 header 有间隔；toolbar 位于卡片顶部
+// 2.6 大屏模式：内容卡片（圆角 + 边框）与 header 有间隔；工具栏收起后内容贴合卡片顶部
 const contentCard = await page.evaluate(() => {
 	const el = document.querySelector("[data-layout-metrics='content']");
 	if (!el) return null;
 	const s = getComputedStyle(el);
-	const toolbar = document.querySelector(".app-toolbar");
+	const toolbar = document.querySelector("[data-toolbar='page']");
 	const header = document.querySelector("header[data-slot='root']");
 	const tr = toolbar?.getBoundingClientRect();
 	const er = el.getBoundingClientRect();
@@ -538,6 +553,287 @@ log("用户菜单提供「退出登录」", userMenu.items.includes("退出登�
 log("用户菜单「安全设置」指向 /user/security", userMenu.securityLink, userMenu.securityLink ? "/user/security" : "无入口");
 await page.keyboard.press("Escape");
 await page.waitForTimeout(200);
+
+// 7.2 下载中心（NMCPS-ADR-0016）：落地页迁入「系统管理 → 下载中心」，侧栏有入口，按平台给默认安装包
+await page.goto(`${BASE_URL}/system/download`, { waitUntil: "networkidle" });
+// 侧栏是手风琴：只有当前路由所在分组展开，所以先落到该页再找入口
+const downloadNav = await page.evaluate(() => Array.from(document.querySelectorAll("[data-layout-metrics='sidebar'] a[href]"))
+	.some((a) => (a.getAttribute("href") ?? "") === "/system/download"));
+log("侧栏出现「下载中心」入口", downloadNav, downloadNav ? "/system/download" : "无入口");
+
+const downloadPage = await page.evaluate(() => {
+	const text = document.body.textContent ?? "";
+	const links = Array.from(document.querySelectorAll("a[href]")).map((a) => a.getAttribute("href") ?? "");
+	return {
+		hasHeading: text.includes("下载中心"),
+		release: links.filter((href) => href.startsWith("https://github.com/oneviews/nmcps/releases/download/"))
+	};
+});
+// 自查浏览器 UA 是 Linux（Playwright chromium 默认），主按钮应指向该平台主推格式
+const primaryDownload = downloadPage.release.find((href) => href.endsWith("nmcps_2.0.0_amd64.deb"));
+log(
+	"下载中心按平台给出主安装包（Linux → .deb）",
+	downloadPage.hasHeading && !!primaryDownload,
+	primaryDownload ?? `未见主安装包：${downloadPage.release.join(" / ") || "无链接"}`
+);
+log(
+	"下载中心列出其他平台安装包（Windows / macOS / Android）",
+	downloadPage.release.filter((href) => href !== primaryDownload).length === 3,
+	`${downloadPage.release.length} 个 Release 链接`
+);
+
+// 7.3 用户管理两栏（NMCPS-ARCH-006 §3 / NMCPS-ADR-0017）：`?id` 选择契约 + 两栏 / 覆盖式两种形态。
+// 只在自建模式跑：用例依赖假上游的固定账号集（ACC-1001…）与可控的窄视口。
+if (upstreamPort) {
+	const readUserPage = () => page.evaluate(() => {
+		const root = document.querySelector("[data-split='user']");
+		return {
+			shape: root?.getAttribute("data-split-shape") ?? null,
+			search: location.search,
+			rows: Array.from(root?.querySelectorAll("[role='option']") ?? []).map((el) => ({
+				// 行 `title` 形如「Alice · ACC-1001」：取末段作为记录标识
+				code: (el.getAttribute("title") ?? "").split("·").pop()?.trim() ?? "",
+				selected: el.getAttribute("aria-selected") === "true"
+			})),
+			panes: Array.from(root?.querySelectorAll("[data-pane]") ?? []).map((el) => ({
+				pane: el.getAttribute("data-pane"),
+				visible: el.checkVisibility?.() ?? false
+			})),
+			overflow: document.documentElement.scrollWidth > window.innerWidth,
+			text: root?.textContent ?? ""
+		};
+	});
+
+	const openUserPage = async (search = "") => {
+		await page.goto(`${BASE_URL}/system/user${search}`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(400);
+		return readUserPage();
+	};
+
+	// 3.1 默认选中：两栏形态落第一行，`?id` 用 `replace` 写入（点选是「查看」，不污染历史）
+	const firstLoad = await openUserPage();
+	log(
+		"用户管理两栏形态默认选中第一行并 `replace` `?id`",
+		firstLoad.shape === "two" && firstLoad.search.includes("id=ACC-1001") && firstLoad.rows[0]?.selected === true,
+		`shape=${firstLoad.shape} url="${firstLoad.search}" 选中首行=${firstLoad.rows[0]?.selected ?? "无行"}`
+	);
+
+	// 3.2 深链：`?id` 直接命中当前页行 —— 不重新拉列表、也不发详情请求（命中判定只在 `rows` 里做）
+	const deepLink = await openUserPage("?id=ACC-1002");
+	const deepRow = deepLink.rows.find((row) => row.code === "ACC-1002");
+	log(
+		"深链 `?id` 命中列表行并渲染右栏详情",
+		deepLink.shape === "two" && deepRow?.selected === true && deepLink.text.includes("ACC-1002") && deepLink.text.includes("Bob"),
+		`url="${deepLink.search}" 命中=${deepRow?.selected ?? "无此行"}`
+	);
+
+	// 3.3 `?id` 不在当前结果内：只出空态提示，不清 URL、不静默翻页去捞、不发详情请求
+	const detailRequests = [];
+	const recordDetailRequest = (request) => {
+		if (/^\/api\/account\/[^/]+$/.test(new URL(request.url()).pathname))
+			detailRequests.push(request.url());
+	};
+	page.on("request", recordDetailRequest);
+	const missing = await openUserPage("?id=ACC-9999");
+	page.off("request", recordDetailRequest);
+	log(
+		"`?id` 不在当前结果内时给出空态提示且保留 URL",
+		missing.search.includes("id=ACC-9999")
+		&& missing.text.includes("不在当前结果内")
+		&& missing.text.includes("ACC-9999")
+		&& detailRequests.length === 0,
+		`url="${missing.search}" 详情请求=${detailRequests.length}`
+	);
+
+	// 3.4 `?id=new`：新建是右栏的一个视图态，不再套一层弹窗（ARCH-006 §3.2 禁止项）
+	const creating = await openUserPage("?id=new");
+	const createDialogs = await page.locator("[role='dialog']").count();
+	log(
+		"`?id=new` 落右栏内联建号态（不弹窗）",
+		creating.search.includes("id=new")
+		&& creating.text.includes("新建账号")
+		&& creating.text.includes("账号名")
+		&& createDialogs === 0,
+		`弹窗=${createDialogs} 表单=${creating.text.includes("账号名")}`
+	);
+
+	// 3.5 形态切换：容器窄了落覆盖式，点选 `push` 一条历史，浏览器返回回列表
+	await page.setViewportSize({ width: 480, height: 900 });
+	const overlayList = await openUserPage();
+	const visiblePanes = (state) => state.panes.filter((pane) => pane.visible).map((pane) => pane.pane).join(",");
+	log(
+		"窄容器落覆盖式且首屏停在列表（不自动选中）",
+		overlayList.shape === "overlay" && !overlayList.search.includes("id=") && visiblePanes(overlayList) === "list",
+		`shape=${overlayList.shape} url="${overlayList.search}" 可见=${visiblePanes(overlayList)}`
+	);
+
+	await page.locator("[data-split='user'] [role='option']").first().click();
+	await page.waitForTimeout(400);
+	const overlayDetail = await readUserPage();
+	log(
+		"覆盖式点选写入 `?id` 并显示详情面板",
+		overlayDetail.search.includes("id=ACC-1001") && visiblePanes(overlayDetail) === "detail",
+		`url="${overlayDetail.search}" 可见=${visiblePanes(overlayDetail)}`
+	);
+
+	await page.goBack();
+	await page.waitForTimeout(500);
+	const overlayBack = await readUserPage();
+	log(
+		"覆盖式下浏览器返回回到列表（点选走 `push`）",
+		!overlayBack.search.includes("id=") && visiblePanes(overlayBack) === "list",
+		`url="${overlayBack.search}" 可见=${visiblePanes(overlayBack)}`
+	);
+
+	// 3.6 六个宽度：形态单调、面板可见性正确、320px 无横向溢出
+	const widthStates = [];
+	for (const width of [320, 768, 1024, 1366, 1440, 1920]) {
+		await page.setViewportSize({ width, height: 900 });
+		widthStates.push({ width, ...(await openUserPage()) });
+	}
+
+	const firstTwo = widthStates.find((state) => state.shape === "two");
+	const monotonic = !!firstTwo && widthStates.filter((state) => state.width >= firstTwo.width).every((state) => state.shape === "two");
+	log(
+		"两栏 / 覆盖式按容器宽度切换且单调（窄了不回退）",
+		widthStates[0]?.shape === "overlay" && widthStates.at(-1)?.shape === "two" && monotonic,
+		widthStates.map((state) => `${state.width}:${state.shape}`).join(" ")
+	);
+
+	const paneVisibleOk = widthStates.every((state) => state.shape === "two"
+		? state.panes.filter((pane) => pane.visible).length === 2
+		: state.panes.filter((pane) => pane.visible).length === 1);
+	log("两栏形态双 `[data-pane]` 同显，覆盖式只显当前面板", paneVisibleOk, widthStates.map((state) => `${state.width}:${visiblePanes(state)}`).join(" "));
+
+	const narrowest = widthStates.find((state) => state.width === 320);
+	log("320px 宽度下用户管理页无横向溢出", !!narrowest && !narrowest.overflow, `overflow=${narrowest?.overflow}`);
+
+	// 3.7 工具栏单层（NMCPS-ARCH-006 §4）：动作全在内容页预留工具栏里，栏内不再有第二条
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await openUserPage();
+	const toolbarState = await page.evaluate(() => {
+		const bar = document.querySelector("[data-toolbar='page']");
+		const left = document.querySelector("#app-toolbar-left");
+		const right = document.querySelector("#app-toolbar-right");
+		const rect = bar?.getBoundingClientRect();
+		return {
+			height: rect ? Math.round(rect.height) : 0,
+			leftButtons: Array.from(left?.querySelectorAll("button") ?? []).map((el) => el.getAttribute("aria-label") ?? ""),
+			leftInputs: left?.querySelectorAll("input").length ?? 0,
+			rightText: (right?.textContent ?? "").replace(/\s+/g, " ").trim(),
+			paneBars: document.querySelectorAll("[data-split='user'] [data-toolbar], [data-split='user'] [data-pane] > div.min-h-\\(--app-toolbar-h\\)").length
+		};
+	});
+	log(
+		"操作用户管理页时动作落在预留工具栏（左区搜索 / 筛选 / 刷新，右区新建与禁用）",
+		toolbarState.height >= 44
+		&& toolbarState.leftInputs === 1
+		&& toolbarState.leftButtons.includes("筛选条件")
+		&& toolbarState.leftButtons.includes("刷新")
+		&& toolbarState.rightText.includes("新建账号")
+		&& toolbarState.rightText.includes("禁用"),
+		`h=${toolbarState.height} 左区按钮=${toolbarState.leftButtons.join("/")} 右区="${toolbarState.rightText}"`
+	);
+	log("用户管理页只有一层工具栏（栏内不再起 header）", toolbarState.paneBars === 0, `栏内工具栏=${toolbarState.paneBars}`);
+
+	// 3.7b 工具栏左右留白与栏内内容对齐（NMCPS-ARCH-006 §4.1）：两侧 12px，别按 header 的 lg:px-8 撑成 32px
+	const toolbarPadding = await page.evaluate(() => {
+		const bar = document.querySelector("[data-toolbar='page']");
+		const left = document.querySelector("#app-toolbar-left");
+		const right = document.querySelector("#app-toolbar-right");
+		const row = document.querySelector("[data-split='user'] [role='option']");
+		const pane = row?.closest("[data-pane]");
+		if (!bar || !left || !right) {
+			return null;
+		}
+		const barRect = bar.getBoundingClientRect();
+		// 行首内容坐标 = 行盒子左缘 + 行内左边距 + 左边框（行本身带 `px-3`，量盒子会恒等于 0）
+		const rowContentLeft = row && pane
+			? Math.round(row.getBoundingClientRect().left + Number.parseFloat(getComputedStyle(row).paddingLeft) + Number.parseFloat(getComputedStyle(row).borderLeftWidth) - pane.getBoundingClientRect().left)
+			: null;
+		return {
+			leftInset: Math.round(left.getBoundingClientRect().left - barRect.left),
+			rightInset: Math.round(barRect.right - right.getBoundingClientRect().right),
+			rowInset: rowContentLeft
+		};
+	});
+	log(
+		"工具栏左右留白 12px 且与栏内内容对齐（§4.1）",
+		!!toolbarPadding
+		&& Math.abs(toolbarPadding.leftInset - 12) <= 2
+		&& Math.abs(toolbarPadding.rightInset - 12) <= 2
+		&& (toolbarPadding.rowInset === null || Math.abs(toolbarPadding.leftInset - toolbarPadding.rowInset) <= 2),
+		toolbarPadding
+			? `左=${toolbarPadding.leftInset}px 右=${toolbarPadding.rightInset}px 列表行首=${toolbarPadding.rowInset}px`
+			: "未取到测量值"
+	);
+
+	// 3.7c 切换布局模式后工具栏动作不丢（NMCPS-ARCH-006 §4.3）：挂载点必须单一渲染点，
+	// 否则模式切换会销毁旧挂载点，页面 `Teleport` 的内容留在已脱离文档的子树里（侧栏模式实测过）
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("侧栏", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+	const sidebarBar = await page.evaluate(() => {
+		const bar = document.querySelector("[data-toolbar='page']");
+		const left = document.querySelector("#app-toolbar-left");
+		const right = document.querySelector("#app-toolbar-right");
+		return {
+			mode: document.querySelector("[data-layout-mode]")?.getAttribute("data-layout-mode") ?? null,
+			bars: document.querySelectorAll("[data-toolbar='page']").length,
+			height: bar ? Math.round(bar.getBoundingClientRect().height) : 0,
+			leftKids: left?.childElementCount ?? 0,
+			rightText: (right?.textContent ?? "").replace(/\s+/g, " ").trim()
+		};
+	});
+	log(
+		"切到侧栏模式后工具栏动作仍在（挂载点未被重建）",
+		sidebarBar.mode === "sidebar"
+		&& sidebarBar.bars === 1
+		&& sidebarBar.height >= 44
+		&& sidebarBar.leftKids > 0
+		&& sidebarBar.rightText.includes("新建账号"),
+		`mode=${sidebarBar.mode} 条数=${sidebarBar.bars} h=${sidebarBar.height} 左区子节点=${sidebarBar.leftKids} 右区="${sidebarBar.rightText}"`
+	);
+
+	// 切回大屏（默认模式），后续用例按默认口径跑
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("大屏", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+
+	// 3.8 覆盖式：同一层工具栏跟随当前面板（列表态给集合域动作，详情态给「返回」）
+	await page.setViewportSize({ width: 480, height: 900 });
+	await openUserPage();
+	const overlayListBar = await page.evaluate(() => ({
+		inputs: document.querySelector("#app-toolbar-left")?.querySelectorAll("input").length ?? 0,
+		buttons: Array.from(document.querySelector("#app-toolbar-left")?.querySelectorAll("button") ?? []).map((el) => el.getAttribute("aria-label") ?? "")
+	}));
+	await page.locator("[data-split='user'] [role='option']").first().click();
+	await page.waitForTimeout(400);
+	const overlayDetailBar = await page.evaluate(() => ({
+		inputs: document.querySelector("#app-toolbar-left")?.querySelectorAll("input").length ?? 0,
+		buttons: Array.from(document.querySelector("#app-toolbar-left")?.querySelectorAll("button") ?? []).map((el) => el.getAttribute("aria-label") ?? ""),
+		rightText: (document.querySelector("#app-toolbar-right")?.textContent ?? "").replace(/\s+/g, " ").trim()
+	}));
+	log(
+		"覆盖式工具栏跟随当前面板（列表态搜索 / 详情态返回）",
+		overlayListBar.inputs === 1
+		&& overlayListBar.buttons.includes("筛选条件")
+		&& overlayDetailBar.inputs === 0
+		&& overlayDetailBar.buttons.includes("返回列表")
+		&& overlayDetailBar.rightText.includes("禁用"),
+		`列表态 input=${overlayListBar.inputs} 按钮=${overlayListBar.buttons.join("/")}；详情态 input=${overlayDetailBar.inputs} 按钮=${overlayDetailBar.buttons.join("/")} 右区="${overlayDetailBar.rightText}"`
+	);
+	await page.goBack();
+	await page.waitForTimeout(400);
+
+	await page.setViewportSize({ width: 1440, height: 900 });
+}
 
 // 8. 自助安全设置（NMCPS-ARCH-003 §7.5）：已登录后两个表单可操作
 await page.goto(`${BASE_URL}/user/security`, { waitUntil: "networkidle" });

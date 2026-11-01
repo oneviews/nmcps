@@ -120,6 +120,30 @@ export async function startUpstream(port) {
 	const tokenAccount = new Map();
 
 	/**
+	 * 账号域假数据（`GET /account`、`POST /account`、`PUT /account/{code}/status`）：给
+	 * `/system/user` 两栏自查（NMCPS-ARCH-006 §3 / NMCPS-ADR-0017）用 —— 列表要对 `keyword` /
+	 * `status` / `accountLevel` 真有筛选效果、`total` 要能分页，否则「深链选中 `?id`」与
+	 * 「`?id` 不在当前结果内」两条用例都测不出真伪。
+	 */
+	const accountRecords = [
+		{ accountId: 1, accountCode: "ACC-1001", accountName: "alice", displayName: "Alice", accountLevel: 1, status: 1, mfaEnabled: true, createdAt: "2026-10-01 09:00:00" },
+		{ accountId: 2, accountCode: "ACC-1002", accountName: "bob", displayName: "Bob", accountLevel: 1, status: 2, mfaEnabled: false, createdAt: "2026-10-02 10:00:00" },
+		{ accountId: 3, accountCode: "ACC-1003", accountName: "carol", displayName: "Carol", accountLevel: 1, status: 3, mfaEnabled: false, createdAt: "2026-10-03 11:00:00" }
+	];
+
+	/** 读并解析请求体（每个请求只能读一次：账号域与 `/auth/*` 各自在分支内调用） */
+	async function readJsonBody(req) {
+		let raw = "";
+		for await (const chunk of req)
+			raw += chunk;
+		try {
+			return raw ? JSON.parse(raw) : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
 	 * 「运行中掉线」开关：`POST /__control/down` 后除控制端点外的请求一律直接销毁 socket，
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
@@ -161,6 +185,79 @@ export async function startUpstream(port) {
 			// 就绪探针超时用例：永远拖到客户端超时
 			await delay(5_000);
 			return send(200, { status: "ok" });
+		}
+
+		// ── /account*：账号域（`/system/user` 两栏自查；BFF 网关透传路径可能带 `/api/v1` 前缀） ──
+		const accountPath = url.pathname.match(/^\/(?:api\/v1\/)?account(\/.*)?$/);
+		if (accountPath) {
+			const rest = accountPath[1] ?? "";
+			const statusMatch = rest.match(/^\/([^/]+)\/status$/);
+
+			if (statusMatch && req.method === "PUT") {
+				const body = await readJsonBody(req);
+				const record = accountRecords.find((item) => item.accountCode === decodeURIComponent(statusMatch[1]));
+
+				if (!record)
+					return send(404, { code: 10404, msg: "account_not_found" });
+				// 与真实上游一致：`0` / `5` 等非法值报 10101
+				if (![1, 2, 3, 4].includes(body?.status))
+					return send(400, { code: 10101, msg: "status_invalid" });
+
+				record.status = body.status;
+				return send(200, { code: 0, msg: "success", data: { ok: true } });
+			}
+
+			if (rest === "" && req.method === "GET") {
+				const keyword = (url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+				const status = Number(url.searchParams.get("status") ?? 0);
+				const level = url.searchParams.get("accountLevel");
+				const page = Math.max(1, Number(url.searchParams.get("page") ?? 1));
+				const pageSize = Math.max(1, Number(url.searchParams.get("pageSize") ?? 20));
+
+				const filtered = accountRecords.filter((item) => {
+					const matchedKeyword = !keyword
+						|| item.accountName.toLowerCase().includes(keyword)
+						|| item.displayName.toLowerCase().includes(keyword);
+
+					// `status: 0` 与 `accountLevel: 0` 上游会当「未提供」（NMCPS-REC-002 UP-ACC-02）
+					return matchedKeyword
+						&& (!status || item.status === status)
+						&& (level === null || item.accountLevel === Number(level));
+				});
+
+				const start = (page - 1) * pageSize;
+				return send(200, {
+					code: 0,
+					msg: "success",
+					data: { list: filtered.slice(start, start + pageSize), total: filtered.length, page, pageSize }
+				});
+			}
+
+			if (rest === "" && req.method === "POST") {
+				const body = await readJsonBody(req);
+
+				// 与真实上游一致：缺必填字段直接 500 / 10509（UP-ACC-03）
+				if (!body?.accountName || !body?.displayName || !body?.password || body?.accountLevel === undefined)
+					return send(500, { code: 10509, msg: "invalid request" });
+				if (accountRecords.some((item) => item.accountName === body.accountName))
+					return send(400, { code: 10302, msg: "account_name_duplicated" });
+
+				const record = {
+					accountId: accountRecords.length + 1,
+					accountCode: `ACC-${1001 + accountRecords.length}`,
+					accountName: body.accountName,
+					displayName: body.displayName,
+					accountLevel: body.accountLevel,
+					// 带 `mustResetPassword` 的建号落「待激活」，与上游一致
+					status: body.mustResetPassword ? 4 : 1,
+					mfaEnabled: !!body.mfaEnabled,
+					createdAt: new Date().toISOString().slice(0, 19).replace("T", " ")
+				};
+				accountRecords.push(record);
+				return send(200, { code: 0, msg: "success", data: record });
+			}
+
+			return send(404, { code: 10404, msg: "account_path_not_found" });
 		}
 
 		// ── /auth/*：模拟新建 iam 服务（信封为 `{ code, msg, data }`） ──
