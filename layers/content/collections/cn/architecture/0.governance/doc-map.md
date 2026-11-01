@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.32.0
+version: 0.33.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -172,3 +172,4 @@ tags:
 
 | 2026-11-01 | 0.31.0 | **ARCH-006 → 0.2.8（`topbar` 模式补 `check:ui` 用例）**：§7 第 5 行「面包屑记录段」由待补转已覆盖（1920 视口切「顶栏」→ `[系统管理 / 用户管理 / Alice]`，点记录段去掉 `?id`）；新增第 14 行验收「工具栏与页头对齐的是限宽容器（同为 `left=240` / `width=1440`），内边距各保持 12px / 32px、20px 差为有意保留」，§4.1 同步写明该口径；`check:ui` 85 → 88 项。 |
 | 2026-11-01 | 0.32.0 | **ARCH-006 → 0.2.9（无动作页的三模式收起口径）**：§4.4 补 `mobile` 与 `bigscreen` 同口径、`topbar` 不收起（面包屑常驻，左区 0 子节点，判空为 `!isTopbarMode && !hasPageActions`）；§7 新增第 15 行（`/dashboard/overview`：大屏 `h=0` / 顶栏 `h=49` / 手机 `h=0`），`check:ui` 88 → 90 项。 |
+| 2026-11-01 | 0.33.0 | **ARCH-006 → 0.2.10（面包屑路由段的结构）**：§5.1 新增「父段链接落点是默认子页（`defaultChildPath()`，不是无页面的 `m.path`）」；§7 新增第 16 行（`/system/user`：`[系统管理(a → /system/user) / 用户管理(span)]`，选中记录后末位加 `Alice(button)` 且前两段不变），`check:ui` 90 → 92 项（`/system/user` 18 → 20 项）。 |

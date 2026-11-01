@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.30.0
+version: 0.31.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -163,3 +163,4 @@ tags:
 
 | 2026-11-01 | 0.29.0 | **ARCH-006 → 0.2.8 (`topbar` mode gains `check:ui` cases)**: row 5 of §7 (the breadcrumb record segment) moves from pending to covered — switching to "Topbar" at a 1920 viewport yields `[System / Users / Alice]` and clicking that segment drops `?id`; new row 14 records that the toolbar and the header align on the constrained container (both `left=240` / `width=1440`) while each keeps its own padding, 12px vs 32px, with the 20px difference intentional; §4.1 states the same rule. `check:ui` 85 → 88 assertions. |
 | 2026-11-01 | 0.30.0 | **ARCH-006 → 0.2.9 (no-action page collapse across modes)**: §4.4 states that `mobile` matches `bigscreen` and that `topbar` never collapses (persistent breadcrumb, zero left-mount children, emptiness reads `!isTopbarMode && !hasPageActions`); §7 gains row 15 (`/dashboard/overview`: bigscreen `h=0` / topbar `h=49` / mobile `h=0`) and `check:ui` grows 88 → 90 assertions. |
+| 2026-11-01 | 0.31.0 | **ARCH-006 → 0.2.10 (breadcrumb route segments)**: §5.1 records that ancestor segments link to the default child page (`defaultChildPath()`, not the page-less `m.path`); §7 gains row 16 (`/system/user`: `[System(a → /system/user) / Users(span)]`, plus `Alice(button)` in last position with the first two unchanged once a record is selected). `check:ui` 90 → 92 assertions (`/system/user` 18 → 20). |

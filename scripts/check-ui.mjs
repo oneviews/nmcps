@@ -860,12 +860,21 @@ if (upstreamPort) {
 
 	const readBreadcrumb = () => page.evaluate(() => {
 		const nav = document.querySelector("[data-toolbar='page'] nav");
-		const items = Array.from(nav?.querySelectorAll("li") ?? [])
-			.map((li) => (li.textContent ?? "").replace(/\s+/g, " ").trim())
-			.filter((text) => text.length > 0);
+		const segments = Array.from(nav?.querySelectorAll("li") ?? [])
+			.map((li) => {
+				const anchor = li.querySelector("a");
+				const button = li.querySelector("button");
+				return {
+					text: (li.textContent ?? "").replace(/\s+/g, " ").trim(),
+					href: anchor?.getAttribute("href") ?? null,
+					tag: anchor ? "a" : button ? "button" : "span"
+				};
+			})
+			.filter((seg) => seg.text.length > 0);
 		const record = nav?.querySelector("button");
 		return {
-			items,
+			segments,
+			items: segments.map((seg) => seg.text),
 			recordText: record ? (record.textContent ?? "").replace(/\s+/g, " ").trim() : null,
 			search: `${location.pathname}${location.search}`
 		};
@@ -883,6 +892,33 @@ if (upstreamPort) {
 		&& breadcrumbCleared.items.length === breadcrumbWithRecord.items.length - 1
 		&& !breadcrumbCleared.search.includes("id="),
 		`选中时=[${breadcrumbWithRecord.items.join(" / ")}] 记录段="${breadcrumbWithRecord.recordText}"；点击后=[${breadcrumbCleared.items.join(" / ")}] url="${breadcrumbCleared.search}"`
+	);
+
+	// 路由段的结构（§5.1 表格「中间段可跳转；末段不可点」）：两段都来自路由表，父段不是路由本身的 path，
+	// 而是 `defaultChildPath()` —— 根路由 `/system` 没有页面，链接必须落到它的默认子页 `/system/user`，
+	// 否则点父段会 404。这条只写在 `useNavigation` 的注释里，现在钉成断言。
+	const renderSegment = (seg) => `${seg.text}(${seg.tag}${seg.href ? ` → ${seg.href}` : ""})`;
+	const routeSegs = breadcrumbCleared.segments;
+	log(
+		"面包屑路由段按路由层级生成：父段可点且指向默认子页，当前页无链接（§5.1）",
+		routeSegs.length === 2
+		&& routeSegs[0].text.includes("系统管理")
+		&& routeSegs[0].tag === "a"
+		&& routeSegs[0].href === "/system/user"
+		&& routeSegs[1].text.includes("用户管理")
+		&& routeSegs[1].href === null,
+		`[${routeSegs.map(renderSegment).join(" / ")}]`
+	);
+	// 记录段只在末位追加，且**不改动**前面的路由段（文字与 href 都不变）：这才能说明两段来源不同、
+	// 不是一个页面手写的数组（§5.1 开头「禁止合并为一个由页面手写的数组」）。
+	log(
+		"记录段只在末位追加：路由段文字与链接不变，记录段是按钮且无 href（§5.1）",
+		breadcrumbWithRecord.segments.length === 3
+		&& routeSegs.length === breadcrumbCleared.segments.length
+		&& breadcrumbWithRecord.segments.slice(0, 2).every((seg, i) => seg.text === routeSegs[i].text && seg.href === routeSegs[i].href)
+		&& breadcrumbWithRecord.segments[2].tag === "button"
+		&& breadcrumbWithRecord.segments[2].href === null,
+		`路由段=[${routeSegs.map(renderSegment).join(" / ")}] 记录态=[${breadcrumbWithRecord.segments.map(renderSegment).join(" / ")}]`
 	);
 
 	// 切回大屏（默认模式）再继续，后续用例都按默认口径
