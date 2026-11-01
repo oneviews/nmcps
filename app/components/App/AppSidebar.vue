@@ -1,7 +1,7 @@
 <template>
 	<div class="flex h-full w-full flex-col overflow-hidden">
-		<!-- 第一层：路由搜索（收起态：连同外边距总高 49px 对齐工具栏）+ 菜单展开/收起（仅展开态显示） -->
-		<div class="flex items-center border-b border-(--ui-border)" :class="collapsed ? 'h-[49px] justify-center' : 'gap-2 p-2'">
+		<!-- 第一层：路由搜索（收起态：高度对齐工具栏 `--app-toolbar-h`）+ 菜单展开/收起（仅展开态显示） -->
+		<div class="flex items-center border-b border-(--ui-border)" :class="collapsed ? 'h-(--app-toolbar-h) justify-center' : 'gap-2 p-2'">
 			<UDashboardSearchButton
 				:collapsed="collapsed"
 				:tooltip="collapsed"

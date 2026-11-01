@@ -39,6 +39,9 @@ export type GatewayMethod = (typeof GATEWAY_METHODS)[number];
  * 新增资源须显式修改本表，而不是放开为通配。
  */
 export const GATEWAY_RESOURCES = [
+	// 账号域：`/system/user` 的 `GET /api/account`、`POST /api/account`、
+	// `PUT /api/account/{accountCode}/status`（NMCPS-DESIGN-005 §6.1）
+	"account",
 	"ai",
 	"alarm",
 	"alerts",

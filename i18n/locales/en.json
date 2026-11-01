@@ -94,18 +94,6 @@
 		"platform": {
 			"title": "Platform capabilities"
 		},
-		"index": {
-			"poweredBy": "Powered by",
-			"download": "Download",
-			"detectedUsing": "Detected you are using",
-			"noPackage": "No installer is available for your system, please select another platform below",
-			"downloadVersion": "Download {label} version",
-			"otherFormats": "Other formats ({count})",
-			"version": "Version {version}",
-			"otherPlatforms": "Other platforms",
-			"starOnGithub": "Star on GitHub",
-			"madeBy": "Made by"
-		},
 		"os": {
 			"title": "OS Information",
 			"description": "Read information about the operating system using the OS Information plugin.",
@@ -356,8 +344,127 @@
 			"title": "System"
 		},
 		"system-user": {
-			"description": "Manage system users.",
-			"title": "Users"
+			"title": "Users",
+			"description": "Account list, creation and enable/disable. The upstream only exposes these three endpoints, so this page creates accounts and changes status — no profile edit, no delete.",
+			"scopeSuperAdminTitle": "Signed in as super admin",
+			"scopeSuperAdmin": "The list covers every account on the platform and you may create both super admins and tenant admins. Authorisation stays upstream: this page merely avoids entry points that hit known gaps (NMCPS-REC-002).",
+			"scopeTenantAdminTitle": "Signed in as tenant admin",
+			"scopeTenantAdmin": "The upstream limits the list to your tenant, and you may only create tenant admins; cross-tenant operations are rejected upstream (10301).",
+			"scopeUnknownTitle": "Signed in with an undefined level",
+			"scopeUnknown": "The session's accountLevel is neither 0 nor 1 (the upstream accepts 2–4 without defining them). This page assumes least privilege: only tenant admins can be created, and the list scope is whatever the upstream returns.",
+			"listTitle": "Accounts",
+			"refresh": "Refresh",
+			"create": "New account",
+			"keywordPlaceholder": "Search account or display name",
+			"resetFilters": "Reset",
+			"total": "{total} accounts",
+			"empty": "No accounts match these filters",
+			"detailEmpty": "Select an account on the left to see its details",
+			"detailEmptyHint": "The list and the details are the two panes of this page; on narrow screens picking an account opens the details and Back returns to the list.",
+			"immutableHint": "The upstream has no profile update endpoint: account name, display name and level are fixed once created, so the right pane is read-only.",
+			"selectionMissingTitle": "That account is not in the current results",
+			"selectionMissing": "“{id}” from the link is not in the current filter / page of results. To keep the filters and the address bar consistent, this page will not page around to find it.",
+			"selectionClear": "Clear selection",
+			"loadFailed": "Could not load the account list",
+			"retry": "Retry",
+			"mfaOn": "Enabled",
+			"mfaOff": "Disabled",
+			"changeStatus": "Change status",
+			"changeStatusHint": "Change this account's status (disabling is the stand-in for deletion)",
+			"selfHint": "Your own account cannot be changed: disabling it locks you out immediately",
+			"filter": {
+				"title": "Filters",
+				"status": "Account status",
+				"level": "Account level",
+				"anyStatus": "Any status",
+				"anyLevel": "Any level"
+			},
+			"level": {
+				"superAdmin": "Super admin",
+				"tenantAdmin": "Tenant admin",
+				"undefined": "Undefined level ({level})"
+			},
+			"status": {
+				"enabled": "Enabled",
+				"disabled": "Disabled",
+				"locked": "Locked",
+				"pending": "Pending",
+				"unknown": "Unknown status ({status})"
+			},
+			"columns": {
+				"accountName": "Account name",
+				"accountCode": "Account code",
+				"displayName": "Display name",
+				"accountLevel": "Level",
+				"status": "Status",
+				"mfa": "Two-factor",
+				"createdAt": "Created"
+			},
+			"createForm": {
+				"title": "New account",
+				"description": "The upstream has no profile update endpoint: name, display name and level are fixed once created, so fill them in carefully.",
+				"accountName": "Account name",
+				"accountNameHint": "4–32 characters: letters, digits, underscore, dot and hyphen",
+				"accountNamePlaceholder": "e.g. ops-east-01",
+				"displayName": "Display name",
+				"displayNamePlaceholder": "e.g. East region ops",
+				"password": "Initial password",
+				"passwordHint": "At least 8 characters; the upstream also enforces complexity and history",
+				"passwordPlaceholder": "Set an initial password",
+				"accountLevel": "Account level",
+				"levelHintSuperAdmin": "Super admins manage every account; tenant admins act only within their tenant",
+				"levelHintTenantAdmin": "Tenant admins can only create tenant admins; any higher level is rejected upstream",
+				"mfaEnabled": "Require two-factor",
+				"mfaEnabledHint": "Binds TOTP at creation: the first sign-in asks for a code",
+				"mustResetPassword": "Force a password change on first sign-in",
+				"mustResetPasswordHint": "The initial password only covers the first sign-in and must then be replaced (not enforced upstream, this is a client-side convention)",
+				"failed": "Creation failed",
+				"success": "Account created",
+				"cancel": "Cancel",
+				"submit": "Create"
+			},
+			"statusModal": {
+				"disableTitle": "Disable account",
+				"disableDescription": "Once {name} is disabled, the account cannot sign in.",
+				"disableSubmit": "Disable",
+				"enableTitle": "Enable account",
+				"enableDescription": "Once {name} is enabled, the account can sign in again.",
+				"enableSubmit": "Enable",
+				"current": "Current status",
+				"disableHint": "A disabled account cannot sign in; the upstream has no delete endpoint, so disabling is the stand-in for deletion.",
+				"failed": "Change failed",
+				"success": "Status updated",
+				"cancel": "Cancel"
+			},
+			"errors": {
+				"failed": "The operation failed. Please try again later.",
+				"nameTooShort": "The account name needs at least 4 characters",
+				"nameTooLong": "The account name allows at most 32 characters",
+				"namePattern": "The account name may only contain letters, digits, underscore, dot and hyphen",
+				"displayNameRequired": "The display name cannot be empty",
+				"displayNameTooLong": "The display name allows at most 64 characters",
+				"passwordTooShort": "The password needs at least 8 characters",
+				"duplicateName": "That account name already exists",
+				"weakPassword": "The password fails the complexity rules or repeats a previous one",
+				"invalidParam": "Invalid parameter: the status or level is out of range",
+				"notFound": "No such account, or it is outside your scope",
+				"forbidden": "You are not allowed to perform this operation",
+				"internal": "Upstream internal error: usually a missing required field or an out-of-range level (NMCPS-REC-002 UP-ACC-03)",
+				"network": "Network error. Please try again later."
+			}
+		},
+		"system-download": {
+			"title": "Downloads",
+			"description": "Client installers for every platform, all served from GitHub Releases.",
+			"download": "Download",
+			"detectedUsing": "We detected you are on",
+			"noPackage": "No installer for this system yet — pick another platform below",
+			"downloadFor": "Download for {label}",
+			"otherFormats": "Other formats ({count})",
+			"version": "Version {version}",
+			"otherPlatforms": "Other platforms",
+			"allReleases": "All installers",
+			"starOnGithub": "Star on GitHub"
 		},
 		"system-log": {
 			"title": "Logs"
@@ -535,11 +642,17 @@
 			}
 		}
 	},
+	"split": {
+		"back": "Back to list",
+		"resize": "Resize the list pane",
+		"resizeHint": "Drag to resize, double-click to reset"
+	},
 	"layout": {
 		"toggleSidebar": "Toggle sidebar",
 		"searchPlaceholder": "Search routes...",
 		"toggleMenu": "Expand/collapse menu",
 		"search": "Search",
-		"searchDocs": "Docs"
+		"searchDocs": "Docs",
+		"recordClear": "Clear selection (back to list)"
 	}
 }

@@ -31,25 +31,25 @@
 				</USidebar>
 
 				<!-- 主内容区 -->
-				<main
-					class="relative min-w-0 flex-1"
-					:class="isBigscreenMode ? '' : 'overflow-y-auto overflow-x-clip'"
-				>
-					<!-- 大屏模式：页面内容为固定边框盒（absolute 定位不随滚动，圆角 + 边框），滚动发生在内容页内部（滚动条在边框内，toolbar 在滚动容器内 sticky 使磨砂玻璃生效）；左侧 0，上/右/下 16px 间距一致；其余模式由 main 整体滚动 -->
+				<main class="relative flex min-w-0 flex-1 flex-col">
+					<!-- 大屏模式：页面内容为固定边框盒（absolute 定位不随滚动，圆角 + 边框），滚动发生在内容页内部（滚动条在边框内）；左侧 0，上/右/下 16px 间距一致；其余模式同构（页面在框内滚动）——「确定高度链」见 NMCPS-ARCH-006 §3.3 -->
 					<div
 						data-layout-metrics="content"
 						:class="isBigscreenMode
 							? 'absolute inset-y-4 left-0 right-4 flex flex-col overflow-hidden rounded-lg border border-(--ui-border)'
-							: 'min-h-full'"
+							: 'flex min-h-0 flex-1 flex-col overflow-hidden'"
 					>
-						<AppToolbar v-if="!isBigscreenMode" />
+						<!--
+							内容页工具栏：**全模式单一渲染点，且在滚动容器之外**（NMCPS-ARCH-006 §3.3 / §4）。
+							不要按模式分成两处渲染 —— 切换布局模式时旧的挂载点被销毁重建，页面 `<Teleport>` 会
+							连着旧节点一起留在已脱离文档的子树里，表现为「工具栏还在、动作全丢」（侧栏模式实测）。
+						-->
+						<AppToolbar />
 						<div
-							:class="[
-								isBigscreenMode ? 'min-h-0 flex-1 overflow-y-auto overflow-x-clip' : '',
-								isTopbarMode ? `${topbarMaxWidthClass} mx-auto` : '',
-							]"
+							data-layout-scroll
+							class="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-clip"
+							:class="isTopbarMode ? `${topbarMaxWidthClass} mx-auto w-full` : ''"
 						>
-							<AppToolbar v-if="isBigscreenMode" />
 							<slot />
 						</div>
 					</div>
@@ -82,19 +82,18 @@
 		void silentCheckForUpdates();
 	});
 
-	// 文档内容区（左文件树 / 右目录）sticky 偏移：对齐 toolbar 下沿。
-	// - bigscreen 模式：滚动容器顶部已在 toolbar 下沿 → 0；
-	// - 其余模式（sidebar/topbar）：滚动容器顶部在 header 下沿、toolbar 在其中 sticky，
-	//   需让位一个 toolbar 高度（@nuxt/ui DashboardToolbar min-h-[49px]）。
-	const contentStickyTop = computed(() => (isBigscreenMode.value ? "0px" : "49px"));
+	// 文档内容区（左文件树 / 右目录）sticky 偏移：滚动容器顶部已固定在 toolbar 下沿
+	// （两种模式的 toolbar 都在滚动容器之外，见 NMCPS-ARCH-006 §3.3），故偏移恒为 0。
+	const contentStickyTop = "0px";
 
 	// 文档内容区（左文件树 / 右目录）sticky 最大高度：跟随各自滚动容器可见高度。
-	// - bigscreen 模式：100svh - header(64) - toolbar(49) - 边框盒上下内缩(inset-y-4=2rem) - 边框(2px)；
-	// - 其余模式：100svh - header(64) - toolbar(49)。
+	// - bigscreen 模式：100svh - header - toolbar - 边框盒上下内缩(inset-y-4=2rem) - 边框(2px)；
+	// - 其余模式：100svh - header - toolbar。
+	// 工具栏高度一律读 `--app-toolbar-h`（单一来源，NMCPS-ADR-0017 D5），不得写死 49px。
 	const contentMaxH = computed(() =>
 		isBigscreenMode.value
-			? "calc(100svh - var(--ui-header-height) - 49px - 2rem - 2px)"
-			: "calc(100svh - var(--ui-header-height) - 49px)");
+			? "calc(100svh - var(--ui-header-height) - var(--app-toolbar-h) - 2rem - 2px)"
+			: "calc(100svh - var(--ui-header-height) - var(--app-toolbar-h))");
 
 	// 侧栏搜索：内容中心文档分组（keywords 并入 description 参与 fuse 分词检索；集合随 locale 切换）
 	const collection = useContentCollection();

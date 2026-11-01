@@ -20,6 +20,22 @@
 		font-size: calc(1rem * var(--app-font-scale, 1));
 	}
 
+	/* 布局常量单一来源（NMCPS-ARCH-006 §3.1 / §4.4，NMCPS-ADR-0017 D1 / D5）。
+	   所有读取工具栏高度、分栏门槛的样式与脚本一律引用以下变量，不得写死 px 值；
+	   根字号可被 --app-font-scale 放大，故 px 口径的下限在此一次性折成 rem。 */
+	:root {
+		/* 工具栏高度（L0 页级 / L1 栏级共用；@nuxt/ui DashboardToolbar 最小高的等值 rem） */
+		--app-toolbar-h: 3.0625rem; /* 49px @ 16px 根字号 */
+		/* 分栏最小宽度常量 */
+		--page-min-w: 20rem; /* 320px：单栏 / 覆盖式最低可用宽 */
+		--split-min-w: 56rem; /* 896px：两栏门槛 = 左栏上限 24rem + 右栏下限 32rem */
+		--split-detail-min-w: 32rem; /* 512px：两栏时右栏最小宽 */
+		/* 左栏（列表栏）宽度：默认 22rem，可被 usePaneResize 写到容器上覆盖 */
+		--split-list-w: 22rem;
+		--split-list-min-w: 18rem;
+		--split-list-max-w: 28rem;
+	}
+
 	/* 细滚动条：跨平台统一视觉，减小桌面端占用（Tauri WebView 为 Chromium） */
 	* {
 		scrollbar-width: thin;

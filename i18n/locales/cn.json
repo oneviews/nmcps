@@ -94,18 +94,6 @@
 		"platform": {
 			"title": "平台能力"
 		},
-		"index": {
-			"poweredBy": "Powered by",
-			"download": "下载",
-			"detectedUsing": "检测到您正在使用",
-			"noPackage": "当前系统暂未提供安装包，请在下方选择其他平台",
-			"downloadVersion": "下载 {label} 版",
-			"otherFormats": "其他格式（{count}）",
-			"version": "版本 {version}",
-			"otherPlatforms": "其他平台",
-			"starOnGithub": "Star on GitHub",
-			"madeBy": "Made by"
-		},
 		"os": {
 			"title": "操作系统信息",
 			"description": "使用 OS 信息插件读取操作系统信息。",
@@ -356,8 +344,127 @@
 			"title": "系统管理"
 		},
 		"system-user": {
-			"description": "管理系统用户。",
-			"title": "用户管理"
+			"title": "用户管理",
+			"description": "账号列表、建号与启用/禁用。上游只开放这三个接口，因此本页只做「建号 + 改状态」，没有改资料与删除。",
+			"scopeSuperAdminTitle": "当前身份：超级管理员",
+			"scopeSuperAdmin": "列表覆盖全平台账号，可建超级管理员与租户管理员。越权判定仍在上游：本页只是不提供会踩上游缺口的入口（NMCPS-REC-002）。",
+			"scopeTenantAdminTitle": "当前身份：租户管理员",
+			"scopeTenantAdmin": "列表由上游限定在本租户，只能建租户管理员；跨租户操作会被上游拒绝（10301）。",
+			"scopeUnknownTitle": "当前身份：未定义等级",
+			"scopeUnknown": "会话里的 accountLevel 不是 0 / 1（上游接受 2–4 但没有语义定义）。本页按最小权限处理：只能建租户管理员，列表范围以上游返回为准。",
+			"listTitle": "账号列表",
+			"refresh": "刷新",
+			"create": "新建账号",
+			"keywordPlaceholder": "搜索账号名 / 显示名",
+			"resetFilters": "重置",
+			"total": "共 {total} 个账号",
+			"empty": "没有符合条件的账号",
+			"detailEmpty": "从左侧选择一条账号查看详情",
+			"detailEmptyHint": "左栏列表与右栏详情是同一页的两栏；窄屏下选中账号后进入详情，返回即回列表。",
+			"immutableHint": "上游没有「改资料」接口：账号名、显示名、等级创建后不可修改，因此右栏只读。",
+			"selectionMissingTitle": "该账号不在当前结果内",
+			"selectionMissing": "链接里的「{id}」不在当前筛选 / 分页结果内。为避免筛选状态与地址栏不一致，这里不会自动翻页去找。",
+			"selectionClear": "清除选择",
+			"loadFailed": "加载账号列表失败",
+			"retry": "重试",
+			"mfaOn": "已启用",
+			"mfaOff": "未启用",
+			"changeStatus": "改状态",
+			"changeStatusHint": "变更该账号的状态（禁用即等同于删号）",
+			"selfHint": "不能变更本人账号状态：禁用自己会立即失去登录能力",
+			"filter": {
+				"title": "筛选条件",
+				"status": "账号状态",
+				"level": "账号等级",
+				"anyStatus": "全部状态",
+				"anyLevel": "全部等级"
+			},
+			"level": {
+				"superAdmin": "超级管理员",
+				"tenantAdmin": "租户管理员",
+				"undefined": "未定义等级（{level}）"
+			},
+			"status": {
+				"enabled": "启用",
+				"disabled": "禁用",
+				"locked": "锁定",
+				"pending": "待激活",
+				"unknown": "未知状态（{status}）"
+			},
+			"columns": {
+				"accountName": "账号名",
+				"accountCode": "账号编号",
+				"displayName": "显示名",
+				"accountLevel": "等级",
+				"status": "状态",
+				"mfa": "两步验证",
+				"createdAt": "创建时间"
+			},
+			"createForm": {
+				"title": "新建账号",
+				"description": "上游缺少「改资料」接口：账号名、显示名、等级创建后不可改，请一次填对。",
+				"accountName": "账号名",
+				"accountNameHint": "4–32 位，仅字母、数字、下划线、点、连字符",
+				"accountNamePlaceholder": "例如 ops-east-01",
+				"displayName": "显示名",
+				"displayNamePlaceholder": "例如 华东运维",
+				"password": "初始口令",
+				"passwordHint": "至少 8 位；上游会校验复杂度与历史重复",
+				"passwordPlaceholder": "设置初始口令",
+				"accountLevel": "账号等级",
+				"levelHintSuperAdmin": "超级管理员可管理全平台账号；租户管理员只在本租户内生效",
+				"levelHintTenantAdmin": "租户管理员只能创建租户管理员，超出范围的等级会被上游拒绝",
+				"mfaEnabled": "要求两步验证",
+				"mfaEnabledHint": "建号即绑定 TOTP：首次登录需录入动态口令",
+				"mustResetPassword": "首次登录强制改密",
+				"mustResetPasswordHint": "初始口令只用于首次登录，登录后必须替换（上游不强制，靠客户端约定）",
+				"failed": "创建失败",
+				"success": "账号已创建",
+				"cancel": "取消",
+				"submit": "创建"
+			},
+			"statusModal": {
+				"disableTitle": "禁用账号",
+				"disableDescription": "禁用 {name} 后该账号无法登录。",
+				"disableSubmit": "确认禁用",
+				"enableTitle": "启用账号",
+				"enableDescription": "启用 {name} 后该账号可以重新登录。",
+				"enableSubmit": "确认启用",
+				"current": "当前状态",
+				"disableHint": "禁用后该账号无法登录；上游没有删除接口，「禁用」就是删号的替代方案。",
+				"failed": "变更失败",
+				"success": "状态已变更",
+				"cancel": "取消"
+			},
+			"errors": {
+				"failed": "操作失败，请稍后重试。",
+				"nameTooShort": "账号名至少 4 位",
+				"nameTooLong": "账号名最多 32 位",
+				"namePattern": "账号名只能包含字母、数字、下划线、点与连字符",
+				"displayNameRequired": "显示名不能为空",
+				"displayNameTooLong": "显示名最多 64 位",
+				"passwordTooShort": "口令至少 8 位",
+				"duplicateName": "账号名已存在，请换一个",
+				"weakPassword": "口令不符合复杂度要求，或与历史口令重复",
+				"invalidParam": "参数不合法：状态或等级超出允许范围",
+				"notFound": "账号不存在，或不在你的管理范围内",
+				"forbidden": "没有权限执行该操作",
+				"internal": "上游内部错误：常见原因是必填项缺失或等级越界（NMCPS-REC-002 UP-ACC-03）",
+				"network": "网络异常，请稍后重试"
+			}
+		},
+		"system-download": {
+			"title": "下载中心",
+			"description": "各平台客户端安装包，全部来自 GitHub Release。",
+			"download": "下载",
+			"detectedUsing": "检测到您正在使用",
+			"noPackage": "当前系统暂未提供安装包，请在下方选择其他平台",
+			"downloadFor": "下载 {label} 版",
+			"otherFormats": "其他格式（{count}）",
+			"version": "版本 {version}",
+			"otherPlatforms": "其他平台",
+			"allReleases": "全部安装包",
+			"starOnGithub": "Star on GitHub"
 		},
 		"system-log": {
 			"title": "日志记录"
@@ -535,11 +642,17 @@
 			}
 		}
 	},
+	"split": {
+		"back": "返回列表",
+		"resize": "调整列表栏宽度",
+		"resizeHint": "拖动调整宽度，双击复位默认宽度"
+	},
 	"layout": {
 		"toggleSidebar": "展开/收起侧边栏",
 		"searchPlaceholder": "搜索路由...",
 		"toggleMenu": "展开/收起菜单",
 		"search": "搜索",
-		"searchDocs": "文档"
+		"searchDocs": "文档",
+		"recordClear": "清除选择（返回列表）"
 	}
 }
