@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.28.0
+version: 0.29.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -161,3 +161,4 @@ tags:
 | 2026-11-01 | 0.27.0 | **ARCH-006 → 0.2.6 (toolbar horizontal padding aligned with the content)**: §4.1 gains a rule — the toolbar uses `px-3` (12px) on both sides, the same coordinate as the panes `p-3` and the page-level alert `mx-3`, so the first left-area action lines up with the list pane content edge and the primary CTA with the detail pane right content edge; `UDashboardToolbar` root padding is cleared as well (`px-0 sm:px-0`, since `px-0` alone loses to the default `sm:px-6` and adds another 24px from 640px up) and `UHeader` `px-4 sm:px-6 lg:px-8` is ruled out because the toolbar sits inside the content box and the `lg` 32px step left a 20px offset. §7 gains acceptance row 12 and `check:ui` goes to 84 assertions (12px per side measured, row content at 14px). |
 | 2026-11-01 | 0.28.0 | **ARCH-006 → 0.2.7 (single render site for the toolbar, fixes "actions vanish in sidebar mode")**: `default.vue` used to render `<AppToolbar>` twice — inside the scroll container for `bigscreen`, outside for the rest — so a mode switch destroyed and recreated the mount point and left the page's teleported content in a detached subtree (measured: sidebar mode `leftKids=0`, h=0). It now renders once, outside the scroll container, for every mode; §4.3 gains the "single render site" rule, §3.3 wording follows, §7 gains row 13 and `check:ui` grows to 85 assertions (switch to "Sidebar", then assert the actions survive). |
 
+| 2026-11-01 | 0.29.0 | **ARCH-006 → 0.2.8 (`topbar` mode gains `check:ui` cases)**: row 5 of §7 (the breadcrumb record segment) moves from pending to covered — switching to "Topbar" at a 1920 viewport yields `[System / Users / Alice]` and clicking that segment drops `?id`; new row 14 records that the toolbar and the header align on the constrained container (both `left=240` / `width=1440`) while each keeps its own padding, 12px vs 32px, with the 20px difference intentional; §4.1 states the same rule. `check:ui` 85 → 88 assertions. |

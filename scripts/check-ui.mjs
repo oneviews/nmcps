@@ -806,6 +806,93 @@ if (upstreamPort) {
 	await page.keyboard.press("Escape");
 	await page.waitForTimeout(600);
 
+	// 3.7d 顶栏模式（NMCPS-ARCH-006 §4.1 / §5.1 / §7 第 14 行）：工具栏与页头共用限宽容器并同居中，
+	// 但内边距仍是 12px —— 与页头 `lg:px-8`（32px）的 20px 差是「工具栏对齐内容、不对齐页头」的有意保留。
+	// 视口要开到 1920 才看得出「居中」：默认 `wide` 限宽 1440px，1440 视口下两边都撑满，量不出区别。
+	// 布局模式只存 `useState`、不落持久化，所以这一段不能 `openUserPage()`（整页重载会退回默认大屏）。
+	await page.setViewportSize({ width: 1920, height: 900 });
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("顶栏", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+
+	const topbarMetrics = await page.evaluate(() => {
+		const headerContainer = document.querySelector("header [data-slot='container']");
+		const bar = document.querySelector("[data-toolbar='page']");
+		const barContainer = bar?.firstElementChild;
+		// 左区起点取容纳「面包屑 + `#app-toolbar-left`」的那个 flex 盒：
+		// `topbar` 模式下面包屑排在挂载点前面，量挂载点会把面包屑宽度算成内边距。
+		const leftGroup = barContainer?.firstElementChild;
+		const scroll = document.querySelector("[data-layout-scroll]");
+		const box = (el) => el
+			? { left: Math.round(el.getBoundingClientRect().left), width: Math.round(el.getBoundingClientRect().width) }
+			: null;
+		return {
+			mode: document.querySelector("[data-layout-mode]")?.getAttribute("data-layout-mode") ?? null,
+			bars: document.querySelectorAll("[data-toolbar='page']").length,
+			headerContainer: box(headerContainer),
+			barContainer: box(barContainer),
+			headerInset: headerContainer ? Math.round(Number.parseFloat(getComputedStyle(headerContainer).paddingLeft)) : null,
+			barInset: barContainer && leftGroup ? Math.round(leftGroup.getBoundingClientRect().left - barContainer.getBoundingClientRect().left) : null,
+			contentInset: barContainer && scroll ? Math.round(scroll.getBoundingClientRect().left - barContainer.getBoundingClientRect().left) : null
+		};
+	});
+	log(
+		"顶栏模式工具栏与页头限宽容器同宽同居中",
+		topbarMetrics.mode === "topbar"
+		&& topbarMetrics.bars === 1
+		&& !!topbarMetrics.headerContainer
+		&& !!topbarMetrics.barContainer
+		&& Math.abs(topbarMetrics.headerContainer.left - topbarMetrics.barContainer.left) <= 1
+		&& Math.abs(topbarMetrics.headerContainer.width - topbarMetrics.barContainer.width) <= 1,
+		`mode=${topbarMetrics.mode} 页头容器=${topbarMetrics.headerContainer?.left}/${topbarMetrics.headerContainer?.width} 工具栏容器=${topbarMetrics.barContainer?.left}/${topbarMetrics.barContainer?.width}`
+	);
+	log(
+		"顶栏模式工具栏内边距仍 12px（页头 lg:px-8 为 32px，20px 差为有意保留）",
+		topbarMetrics.barInset === 12
+		&& topbarMetrics.headerInset === 32
+		&& topbarMetrics.headerInset - topbarMetrics.barInset === 20
+		&& topbarMetrics.contentInset === 0,
+		`工具栏=${topbarMetrics.barInset}px 页头=${topbarMetrics.headerInset}px 与内容左缘=+${topbarMetrics.contentInset}px`
+	);
+
+	const readBreadcrumb = () => page.evaluate(() => {
+		const nav = document.querySelector("[data-toolbar='page'] nav");
+		const items = Array.from(nav?.querySelectorAll("li") ?? [])
+			.map((li) => (li.textContent ?? "").replace(/\s+/g, " ").trim())
+			.filter((text) => text.length > 0);
+		const record = nav?.querySelector("button");
+		return {
+			items,
+			recordText: record ? (record.textContent ?? "").replace(/\s+/g, " ").trim() : null,
+			search: `${location.pathname}${location.search}`
+		};
+	});
+
+	const breadcrumbWithRecord = await readBreadcrumb();
+	await page.locator("[data-toolbar='page'] nav button").click();
+	await page.waitForTimeout(500);
+	const breadcrumbCleared = await readBreadcrumb();
+	log(
+		"顶栏模式面包屑在选中记录后多出一段，点击记录段清除选择",
+		breadcrumbWithRecord.items.length >= 2
+		&& breadcrumbWithRecord.recordText?.includes("Alice") === true
+		&& breadcrumbCleared.recordText === null
+		&& breadcrumbCleared.items.length === breadcrumbWithRecord.items.length - 1
+		&& !breadcrumbCleared.search.includes("id="),
+		`选中时=[${breadcrumbWithRecord.items.join(" / ")}] 记录段="${breadcrumbWithRecord.recordText}"；点击后=[${breadcrumbCleared.items.join(" / ")}] url="${breadcrumbCleared.search}"`
+	);
+
+	// 切回大屏（默认模式）再继续，后续用例都按默认口径
+	await page.getByRole("button", { name: "偏好设置" }).click();
+	await page.waitForTimeout(400);
+	await page.getByText("大屏", { exact: true }).click();
+	await page.waitForTimeout(500);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(600);
+
 	// 3.8 覆盖式：同一层工具栏跟随当前面板（列表态给集合域动作，详情态给「返回」）
 	await page.setViewportSize({ width: 480, height: 900 });
 	await openUserPage();
