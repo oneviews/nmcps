@@ -1,0 +1,26 @@
+{
+	"bff": {
+		"sha256": "9d695f968d4b14d797e61864b46afc2130fa031488af408da1e9923adcd70a92",
+		"source": "CI run 41914867017 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）日志尾部"
+	},
+	"governance": {
+		"sha256": "c047af3457817741f8c315b7c0cb6e04c9b79232211eea8a11a6c12507fb6b11",
+		"source": "本地 `pnpm check:governance` 真实输出尾部（2026-11-04 重采）"
+	},
+	"i18n": {
+		"sha256": "c1b44cd1bd5216beb73219a1b4e61e70c34a8bbb1cfe8ae3c755512a6f73e043",
+		"source": "本地 `pnpm check:i18n` 真实输出尾部（2026-11-04 重采）"
+	},
+	"lint": {
+		"sha256": "4124935543303d2c6e6454d204e36173cc108d3e43bd8edb783ffceedccde2ae",
+		"source": "本地 `pnpm lint` 真实输出尾部（2026-11-04 重采）"
+	},
+	"typecheck": {
+		"sha256": "0091711b9da6cd6379dc62ff2c5c88d9f1f4a1eaee1845c713d0c6dafe288059",
+		"source": "本地 `pnpm typecheck` 真实输出尾部（2026-11-04 重采）"
+	},
+	"ui": {
+		"sha256": "2fadb5007c9a350ac440a595fb6cdea30b5d0a381947edc408d7e76f8238de65",
+		"source": "CI run 41914867017 步骤 \"Build & run UI self-check\"（job: BFF contract / page UI）日志尾部"
+	}
+}

@@ -26,10 +26,17 @@
 //   ⑬ 每条正则在对应样本上用 `grep -aE` 命中（与 ci-summary.sh 同工具同参数）
 //   ⑭ 每份样本都带 `# source:` 出处行（防止编造样本冒充真实输出）
 //
+// 三个清单断言（SHA256 + source 双源互证，手改样本不重新封存就红）：
+//   ⑮ 样本清单 `scripts/fixtures/ci-logs/.manifest.json` 与样本文件双向一致
+//   ⑯ 清单里每条 sha256 与样本字节一致
+//   ⑰ 清单里的 source 与样本 `# source:` 行一致（两个来源互相印证）
+//
 // 重采样：`node scripts/check-ci-summary.mjs --write-fixtures` 会重跑 lint / typecheck /
-// i18n / governance 四步并把真实输出尾部写回样本；bff / ui 需要构建产物 + 真浏览器，
-// 只能从 `gh run view <id> --log` 里取对应步骤尾部手工替换（样本头部已写明出处）。
+// i18n / governance 四步并把真实输出尾部写回样本，随后自动封存清单；bff / ui 需要构建
+// 产物 + 真浏览器，只能从 `gh run view <id> --log` 里取对应步骤尾部手工替换，替换后跑
+// `node scripts/check-ci-summary.mjs --seal` 重新封存清单。
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -41,6 +48,31 @@ const SCRIPT = "scripts/ci-summary.sh";
 const OK_LOG = "结果：967 通过 / 0 失败 / 0 告警\n文档体系自测 4/4 通过\n";
 const PLAIN_LOG = "$ vue-tsc -b --pretty\n▎ TNB ACTIVE — tsconfig ok\n";
 const FIXTURE_DIR = "scripts/fixtures/ci-logs";
+const MANIFEST = `${FIXTURE_DIR}/.manifest.json`;
+const fixturePath = (key) => `${FIXTURE_DIR}/${key}.log`;
+const fixtureKeysOnDisk = () =>
+	readdirSync(join(ROOT, FIXTURE_DIR))
+		.filter((f) => f.endsWith(".log"))
+		.map((f) => f.replace(/\.log$/, ""))
+		.sort();
+const sha256 = (p) => createHash("sha256").update(readFileSync(join(ROOT, p))).digest("hex");
+const sourceOf = (p) => (readFileSync(join(ROOT, p), "utf8").match(/^# source: (.*)$/m) ?? ["", ""])[1];
+
+/** 把当前样本的 sha256 + source 封存进清单；样本任何字节改动都会与清单对不上 */
+function seal() {
+	const keys = fixtureKeysOnDisk();
+	const rows = {};
+	for (const key of keys)
+		rows[key] = { sha256: sha256(fixturePath(key)), source: sourceOf(fixturePath(key)) };
+	writeFileSync(join(ROOT, MANIFEST), `${JSON.stringify(rows, null, "\t")}\n`);
+	console.log(`✅ 已封存 ${MANIFEST}（${keys.length} 条：${keys.join(" / ")}）`);
+}
+
+// `--seal`：只重封清单、不跑任何命令（手工替换 bff / ui 样本后用）
+if (process.argv.includes("--seal")) {
+	seal();
+	process.exit(0);
+}
 
 // `--write-fixtures`：重采样本后退出，不跑断言（断言要求样本非空且最新）
 if (process.argv.includes("--write-fixtures")) {
@@ -71,7 +103,8 @@ if (process.argv.includes("--write-fixtures")) {
 		writeFileSync(join(ROOT, FIXTURE_DIR, `${key}.log`), `${header.join("\n")}\n${body.join("\n")}\n`);
 		console.log(`✅ 已刷新 ${FIXTURE_DIR}/${key}.log（${cmd} exit ${status}，${body.length} 行）`);
 	}
-	console.log("\n⚠️  bff / ui 需构建产物 + 真浏览器，无法本地重采：从 `gh run view <id> --log` 取对应步骤尾部手工替换。");
+	console.log("\n⚠️  bff / ui 需构建产物 + 真浏览器，无法本地重采：从 `gh run view <id> --log` 取对应步骤尾部手工替换后跑 --seal。");
+	seal();
 	process.exit(0);
 }
 
@@ -267,11 +300,7 @@ wiring(
 // 为什么还不够：⑦～⑪ 只保证接线对，正则可以写对形式却匹配不上今天的措辞
 // （例如小结从「N/N 项通过」改成「N/N cases passed」）。fixtures 是各步骤真实日志尾部，
 // 用 `grep -E`（与 ci-summary.sh 用的同一工具、同一选项）回放，措辞一变这里就红。
-const fixturePath = (key) => `${FIXTURE_DIR}/${key}.log`;
-const fixtureKeys = readdirSync(join(ROOT, FIXTURE_DIR))
-	.filter((f) => f.endsWith(".log"))
-	.map((f) => f.replace(/\.log$/, ""))
-	.sort();
+const fixtureKeys = fixtureKeysOnDisk();
 const missingFixture = tableKeys.filter((k) => !fixtureKeys.includes(k));
 const orphanFixture = fixtureKeys.filter((k) => !tableKeys.includes(k));
 
@@ -299,6 +328,45 @@ wiring(
 	"每份样本都带 `# source:` 出处（防止凭空编造的样本冒充真实输出）",
 	fixtureKeys.length > 0 && noSource.length === 0,
 	noSource.map((k) => `${fixturePath(k)} 缺 \`# source:\` 行`).join("\n")
+);
+
+// ── 清单断言：SHA256 与 source 双源互证 ──
+// 为什么还要清单：⑭ 的 `# source:` 只是样本里的一行文字，改样本的人顺手也能改它。
+// 清单独立记录「样本字节的 sha256 + 它声称的出处」，任何不经过 --seal 的样本改动都会
+// 让哈希对不上，任何只改头部不改正文的操作也会让两处 source 打架。
+let manifest = {};
+try {
+	manifest = JSON.parse(readFileSync(join(ROOT, MANIFEST), "utf8"));
+} catch {
+	manifest = {};
+}
+const manifestKeys = Object.keys(manifest).sort();
+
+wiring(
+	`样本清单 ${MANIFEST} 与样本文件双向一致（${manifestKeys.length} 条）`,
+	manifestKeys.length > 0 && fixtureKeys.length === manifestKeys.length && fixtureKeys.every((k) => manifestKeys.includes(k)),
+	[
+		...fixtureKeys.filter((k) => !manifestKeys.includes(k)).map((k) => `缺清单记录: ${k}（修复：node scripts/check-ci-summary.mjs --seal）`),
+		...manifestKeys.filter((k) => !fixtureKeys.includes(k)).map((k) => `清单多出记录: ${k}（样本已删，修复：--seal）`)
+	].join("\n")
+);
+
+const hashDrift = fixtureKeys.filter((k) => manifest[k]?.sha256 !== sha256(fixturePath(k)));
+wiring(
+	"清单里每条 sha256 与样本字节一致（手改样本未重新封存即红）",
+	manifestKeys.length > 0 && hashDrift.length === 0,
+	hashDrift
+		.map((k) => `${k}: 清单 ${String(manifest[k]?.sha256 ?? "(无)").slice(0, 12)}… ≠ 实际 ${sha256(fixturePath(k)).slice(0, 12)}…（改完样本请跑 --seal）`)
+		.join("\n")
+);
+
+const sourceDrift = fixtureKeys.filter((k) => (manifest[k]?.source ?? "") !== sourceOf(fixturePath(k)));
+wiring(
+	"清单里的 source 与样本 `# source:` 行互证一致",
+	manifestKeys.length > 0 && sourceDrift.length === 0,
+	sourceDrift
+		.map((k) => `${k}: 清单「${manifest[k]?.source ?? "(无)"}」≠ 样本「${sourceOf(fixturePath(k))}」`)
+		.join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);
