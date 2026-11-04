@@ -1,24 +1,29 @@
 #!/bin/sh
 # scripts/ci-doctor.sh
-# CI 运行排查助手（只读：不触发 workflow、不改仓库）。
+# CI 运行排查助手（除 fixtures 外只读：不触发 workflow、不改仓库）。
 #
 # 用法（在仓库根目录执行，需本机已 `gh auth login`，scope 至少 repo）：
 #   sh scripts/ci-doctor.sh                    # 概览：最近一次运行、各 job 结论、失败步骤
 #   sh scripts/ci-doctor.sh status [run-id]
 #   sh scripts/ci-doctor.sh logs [run-id]      # 全量日志 → ci-logs/runs/<id>/full.log，并统计 ✅/❌
 #   sh scripts/ci-doctor.sh artifacts [run-id] # 产物 → ci-logs/downloads/<id>/
+#   sh scripts/ci-doctor.sh fixtures [run-id]  # 产物回填成 scripts/fixtures/ci-logs/ 六份样本
 #   sh scripts/ci-doctor.sh all [run-id]
 #
 # 省略 run-id 时取最近一次运行。产物与日志目录已被 .gitignore 忽略。
+# fixtures 是唯一会写仓库子目录的子命令：它转调 node scripts/check-ci-summary.mjs --from-ci，
+# 只回填该次运行里结论为 success 的步骤（失败步骤的日志同样在产物里，绝不当样本）。
 set -eu
 
 usage() {
 	cat <<'EOF'
-用法：sh scripts/ci-doctor.sh [status|logs|artifacts|all] [run-id]
+用法：sh scripts/ci-doctor.sh [status|logs|artifacts|fixtures|all] [run-id]
 
   status     最近运行的结论、每个 job 的结论与失败步骤（默认子命令）
   logs       拉全量日志到 ci-logs/runs/<id>/，统计 ✅/❌ 与「N/N 项通过」小结
   artifacts  下载全部产物到 ci-logs/downloads/<id>/，列出文件与大小
+  fixtures   把产物回填成 scripts/fixtures/ci-logs/ 的六份样本（会改仓库里的样本与 sha256 清单；
+             只取结论为 success 的步骤，等价于 node scripts/check-ci-summary.mjs --from-ci）
   all        status + logs + artifacts
 
 需要：gh CLI 已登录（gh auth login），且当前目录是仓库根。
@@ -138,9 +143,19 @@ cmd_artifacts() {
 	echo
 }
 
+cmd_fixtures() {
+	run_id=$1
+
+	echo "── 样本回填 #$run_id"
+	echo "  只回填该运行里结论为 success 的步骤；出处、样本与 sha256 清单由 node 脚本写入"
+	echo
+	# exec 让 node 的退出码直接成为本脚本的退出码（有跳过项时是 1）
+	exec node scripts/check-ci-summary.mjs --from-ci "$run_id"
+}
+
 cmd=${1:-status}
 case "$cmd" in
-	status | logs | artifacts | all)
+	status | logs | artifacts | fixtures | all)
 		if [ "$#" -gt 0 ]; then
 			shift
 		fi
@@ -169,6 +184,9 @@ case "$cmd" in
 		;;
 	artifacts)
 		cmd_artifacts "$run_id"
+		;;
+	fixtures)
+		cmd_fixtures "$run_id"
 		;;
 	all)
 		cmd_status "$run_id"

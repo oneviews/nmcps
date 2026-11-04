@@ -261,7 +261,10 @@ if (process.argv.includes("--from-ci")) {
 	}
 	const stepToJob = new Map();
 	for (const job of jobsMeta) {
-		for (const step of job.steps ?? []) stepToJob.set(step.name, job.name);
+		// 结论也记下来：失败步骤的日志同样被 ci.yml 的 tee 落盘并上传，直接回填就等于把红输出
+		// 固化成「真实日志样本」——和 --write-fixtures 的「不绿不写」对着干
+		for (const step of job.steps ?? [])
+			stepToJob.set(step.name, { job: job.name, conclusion: step.conclusion ?? step.status });
 	}
 
 	const dir = join(ROOT, "ci-logs/downloads", runId);
@@ -296,10 +299,16 @@ if (process.argv.includes("--from-ci")) {
 
 	let problems = 0;
 	for (const { key, artifact, file, step, tail, keep, keepBanner } of CI_ARTIFACTS) {
-		const jobName = stepToJob.get(step);
-		if (!jobName) {
+		const meta = stepToJob.get(step);
+		if (!meta) {
 			problems++;
 			console.log(`❌ 跳过 ${fixturePath(key)}：run ${runId} 里找不到名为「${step}」的步骤（步骤改名了？同步 CI_ARTIFACTS）`);
+			continue;
+		}
+		// 与 --write-fixtures 同一条规矩：失败的输出绝不当样本。产物里那份 log 是真的，但它是红的
+		if (meta.conclusion !== "success") {
+			problems++;
+			console.log(`❌ 跳过 ${fixturePath(key)}：run ${runId} 里「${step}」的结论是 ${meta.conclusion}，不把失败输出固化成样本（换一次该步骤 success 的运行）`);
 			continue;
 		}
 		const path = findArtifactFile(artifact, file);
@@ -309,7 +318,7 @@ if (process.argv.includes("--from-ci")) {
 			continue;
 		}
 		const body = pickTail(readFileSync(path, "utf8"), { tail, keep, keepBanner });
-		const source = `CI run ${runId} 步骤 "${step}"（job: ${jobName}）产物 ${artifact}/${file} 尾部（${new Date().toISOString().slice(0, 10)} 回填）`;
+		const source = `CI run ${runId} 步骤 "${step}"（job: ${meta.job}）产物 ${artifact}/${file} 尾部（${new Date().toISOString().slice(0, 10)} 回填）`;
 		writeFixture(key, source, "node scripts/check-ci-summary.mjs --from-ci [run-id]", body);
 		console.log(`✅ 已回填 ${fixturePath(key)}（run ${runId} / ${step}，${body.length} 行）`);
 		const { re, hit } = replayFixture(key);
