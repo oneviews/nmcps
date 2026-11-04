@@ -14,6 +14,8 @@
 //   ⑤ 占位符：同一个键在两份里的 `{name}` 集合一致
 //   ⑥ 使用：`layers/system` 里引用的 `pages.system-*` 键必须在两份里都存在（否则界面露键名）
 //   ⑦ 模板：`.vue` 的 `<template>` 段不得硬编码中文（可见文案只能来自 i18n；注释剥离后判定）
+//   ⑧ 全站：`app` 与 `layers/*/app` 里 `t()` / `$t()` / `tm()` 的字面量键必须在两份里都存在
+//      —— ⑥ 只看系统管理页的 `pages.system-*`（含命名空间常量），⑧ 把同一口径铺到全部域
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
@@ -22,6 +24,15 @@ const LOCALES_DIR = "i18n/locales";
 const LOCALES = ["cn", "en"];
 /** 引用面：这些目录里的 `t()` / `$t()` 用到 `pages.system-*` 键 */
 const USAGE_DIRS = ["layers/system/app"];
+/** 全站引用面：`app` 与每个 `layers/<layer>/app` 都要查（⑧） */
+const USAGE_ALL_DIRS = [
+	"app",
+	...(existsSync("layers")
+		? readdirSync("layers", { withFileTypes: true })
+			.filter((entry) => entry.isDirectory() && existsSync(join("layers", entry.name, "app")))
+			.map((entry) => join("layers", entry.name, "app"))
+		: [])
+];
 /** 模板面：这些目录里的 `.vue` 的 `<template>` 段不得写死中文 */
 const TEMPLATE_DIRS = ["app", "layers"];
 const CJK = /[\u4E00-\u9FFF]/;
@@ -239,6 +250,60 @@ if (messages.size === LOCALES.length) {
 		`${TEMPLATE_DIRS.join(", ")} 下 ${files.length} 个 .vue 的 <template> 无硬编码中文`,
 		hardcoded.length === 0,
 		hardcoded.slice(0, 8).join("；") || "全部走 i18n"
+	);
+}
+
+// ── ⑧ 全站引用面 ──────────────────────────────────────
+if (messages.size === LOCALES.length) {
+	const sources = USAGE_ALL_DIRS.flatMap(walk);
+	const exact = new Set();
+	/** 动态拼接（`t(\`pages.content-${section}.title\`)` / `t("a.b.")`）只能断言「该前缀下两侧都有键」 */
+	const prefixes = new Set();
+
+	for (const path of sources) {
+		const source = readFileSync(path, "utf8");
+		// 只认 `t(` / `$t(` / `tm(` / `$tm(` 的第一个实参为字面量；其余（变量、函数返回值）无从静态判定。
+		// 前置 `(?<![\w$])` 是为了排除 `split(` / `format(` / `parseInt(` 这类以 t 结尾的其它函数名
+		for (const match of source.matchAll(/(?<![\w$])\$?(?:tm|t)\(\s*(["'`])([^"'`\n]{1,160})\1/g)) {
+			const raw = match[2];
+			const dynamicAt = raw.indexOf("${");
+
+			if (dynamicAt >= 0)
+				prefixes.add(raw.slice(0, dynamicAt).replace(/\.$/, ""));
+			else if (raw.endsWith("."))
+				prefixes.add(raw.replace(/\.$/, ""));
+			else
+				exact.add(raw);
+		}
+	}
+
+	const localesWith = (key) => LOCALES.filter((locale) => messages.get(locale).has(key));
+	// 动态前缀的静态部分可能落在键名中间（`pages.content-` + `${section}`），
+	// 所以既认 `prefix.` 也认 `prefix` 本身，否则「前缀合法但换段」会被误判为缺键
+	const hasPrefix = (locale, prefix) => [...messages.get(locale).keys()].some((key) => key.startsWith(prefix));
+	const missingKeys = [];
+	const namespacePrefixes = new Set(prefixes);
+
+	for (const key of exact) {
+		if (localesWith(key).length === LOCALES.length)
+			continue;
+		// 命名空间（`t("pages.system-policy")` 这种指向子树的常量）不是叶子键
+		if (LOCALES.every((locale) => hasPrefix(locale, key))) {
+			namespacePrefixes.add(key);
+			continue;
+		}
+		missingKeys.push(key);
+	}
+
+	const missing = missingKeys.sort();
+	const emptyPrefixes = [...namespacePrefixes].filter((prefix) => {
+		return LOCALES.some((locale) => !hasPrefix(locale, prefix));
+	}).sort();
+
+	log(
+		`${USAGE_ALL_DIRS.length} 个域的 ${sources.length} 个文件里 t() 字面量 ${exact.size} 个完整键 / ${namespacePrefixes.size} 个动态前缀两份都在`,
+		missing.length === 0 && emptyPrefixes.length === 0,
+		[...missing, ...emptyPrefixes.map((prefix) => `${prefix}*`)].slice(0, 8).join(", ") || `${exact.size} / ${namespacePrefixes.size}`
 	);
 }
 
