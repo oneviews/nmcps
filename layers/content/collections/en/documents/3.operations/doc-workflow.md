@@ -18,7 +18,7 @@ Governed directories: `architecture/` (Tier 0~3), `records/` (Tier 5).
 1. Write the doc with `docId` / `tier` / `authority` / `scope` / `status` / `owner` / `reviewBy` / `icon` in frontmatter.
 2. Register the `docId ↔ path` mapping in `shared/constants/docIds.ts`.
 3. Register the domain map and document table in `doc-map.md` (NMCPS-GOV-003), and append a changelog entry.
-4. Run `pnpm check:doc-system`; all seven assertions must pass.
+4. Run `pnpm check:governance`; the seven assertions plus the guard self-test must pass.
 
 ## Add a Plain Doc
 

@@ -77,7 +77,7 @@ layers/content/collections/{cn,en}/
 
 - **权威金字塔**：Tier 0~5（定义见 `NMCPS-GOV-001` §二）。
 - **docId 契约**：受治理文档（`architecture/`、`records/`）frontmatter 携带 `docId` / `tier` / `authority` / `scope` / `status`；`docId ↔ 路径` 唯一映射见 `shared/constants/docIds.ts`。
-- **守卫**：`pnpm check:doc-system`（七组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警 / 中英对齐）。
+- **守卫**：`pnpm check:doc-system`（七组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警 / 中英对齐），另有 `pnpm check:doc-system:selftest` 在临时副本上制造漂移、断言守卫必须变红。
 - **单一事实源**：权威清单以 `NMCPS-GOV-003`（doc-map）为准，`.clinerules` 不手写清单，只做指针。
 
 ---

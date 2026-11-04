@@ -36,6 +36,7 @@ Listens on `http://localhost:3000` (strictPort).
 pnpm typecheck        # type check
 pnpm lint             # ESLint (including i18n key order)
 pnpm check:doc-system # doc-system guard (seven assertions: uniqueness / completeness / closure / acyclicity / tier validity / staleness / CN-EN parity)
+pnpm check:doc-system:selftest # guard self-test: plant four kinds of drift on a temp copy and assert the guard goes red (so an assertion cannot be silently neutered)
 pnpm check:i18n       # copy self-check (ten assertion groups: key sets / no CJK in en values / value shape / placeholders / system-page references / site-wide t() references / no CJK in templates)
 pnpm build:server     # build the BFF artifact first; check:bff consumes .output/server
 pnpm check:bff        # BFF gateway contract (allowlists / verbs / traversal / CORS / envelope / readiness probe / SSE, per NMCPS-ADR-0007 and NMCPS-ADR-0010)

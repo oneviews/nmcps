@@ -123,4 +123,5 @@ log(
 
 const passed = results.filter((item) => item.ok).length;
 console.log(`\n${passed}/${results.length} 项通过`);
-process.exit(passed === results.length ? 0 : 1);
+// exitCode 而非 process.exit()：避免截断尚未刷出的 stdout（大输出 + 管道时）
+process.exitCode = passed === results.length ? 0 : 1;

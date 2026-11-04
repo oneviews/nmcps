@@ -18,7 +18,7 @@ icon: "carbon:book"
 1. 写文档，frontmatter 携带 `docId` / `tier` / `authority` / `scope` / `status` / `owner` / `reviewBy` / `icon`。
 2. 在 `shared/constants/docIds.ts` 登记 `docId ↔ 路径` 唯一映射。
 3. 在 `doc-map.md`（NMCPS-GOV-003）登记域级地图与文档总表，并追加变更记录。
-4. 运行 `pnpm check:doc-system`，七组断言全部通过。
+4. 运行 `pnpm check:governance`，七组断言 + 守卫自测全部通过。
 
 ## 新增普通文档
 

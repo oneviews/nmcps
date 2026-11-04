@@ -634,4 +634,5 @@ try {
 
 const passed = results.filter((item) => item.ok).length;
 console.log(`\n${passed}/${results.length} 项通过`);
+// 这里保留 process.exit()：脚本持有 socket / 上游句柄，需要强制终止，避免 event loop 挂着不退
 process.exit(passed === results.length ? 0 : 1);

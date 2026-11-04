@@ -307,4 +307,5 @@ console.log("\n⑦ 中英对齐");
 }
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败 / ${warn} 告警`);
-process.exit(fail > 0 ? 1 : 0);
+// 用 exitCode 而非 process.exit()：后者可能截断尚未刷出的 stdout（管道缓冲区写满时尤其明显）
+process.exitCode = fail > 0 ? 1 : 0;

@@ -331,4 +331,4 @@ const failed = results.filter((item) => !item.ok);
 console.log(`\n${failed.length === 0 ? "✅" : "❌"} 文案自查 ${results.length - failed.length}/${results.length} 通过`);
 
 if (failed.length)
-	process.exit(1);
+	process.exitCode = 1;

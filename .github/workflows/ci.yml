@@ -3,6 +3,7 @@ name: ci
 # 回归门禁：静态检查 + 文档守卫 + BFF 网关契约 + 页面 UI 自查。
 # 本地复跑同一套命令：
 #   pnpm lint && pnpm typecheck && pnpm check:doc-system && pnpm check:i18n
+#   pnpm check:doc-system:selftest（守卫自测，随 check:governance 一起跑）
 #   pnpm build:server && pnpm check:bff
 #   CHECK_UI_BASE_URL=http://127.0.0.1:3000 pnpm check:ui（需先起服务）
 # 运行排查：sh scripts/ci-doctor.sh（概览 / logs / artifacts）
@@ -68,7 +69,8 @@ jobs:
           sh scripts/ci-summary.sh "i18n guard" ci-logs/i18n.log
           exit $status
 
-      # 治理门禁：文档体系（doc-map / docIds / frontmatter）、`.clinerules` 自查与平台能力面约定
+      # 治理门禁：文档体系（doc-map / docIds / frontmatter）、守卫自测（⑦ 中英对齐的四个负例）、
+      # `.clinerules` 自查与平台能力面约定
       # （`check:platform`：capabilities 不得出现 `shell:allow-execute`，探针页与组合式边界）合成一个入口。
       # `.clinerules` 是喂给 AI 的约定，改坏了不会报错、只会静默失效，所以同样进门禁。
       - name: Governance guard

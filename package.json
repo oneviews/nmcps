@@ -33,7 +33,8 @@
 		"check:i18n": "node scripts/check-i18n.mjs",
 		"check:rules": "node scripts/check-rules.mjs",
 		"check:doc-system": "tsx scripts/check-doc-system.ts",
-		"check:governance": "pnpm check:doc-system && pnpm check:rules && pnpm check:platform"
+		"check:doc-system:selftest": "node scripts/check-doc-system.selftest.mjs",
+		"check:governance": "pnpm check:doc-system && pnpm check:doc-system:selftest && pnpm check:rules && pnpm check:platform"
 	},
 	"dependencies": {
 		"@internationalized/date": "^3.12.4",
