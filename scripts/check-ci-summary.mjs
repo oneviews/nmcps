@@ -40,7 +40,9 @@
 //   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部六个 key，
 //                        包含本地跑不了的 bff / ui；步骤名与 job 名取自这次的 `gh run view`。
 // 两条路都会在写回后立刻把正则回放一遍，措辞漂移当场就报；任一不过退出码 1。
-// `--seal` 只重封清单、不碰样本（手工改过样本时用）。
+// `--seal` 是应急入口（只重封清单、不碰样本）：它能给任意字节盖章，所以正常流程里不该用它——
+// 一旦手工封存，必须在 commit message 里写明改了哪一份、为什么走不了上面两条路。它会把
+// 「本次封存改动了什么」逐条打印出来（字节变了 / 出处变了 / 新封 / 移除），没有任何变化就说没有。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -104,19 +106,60 @@ const CI_ARTIFACTS = [
 	{ key: "ui", artifact: "check-logs-runtime", file: "check-ui.log", step: "Page UI checks", tail: 8 }
 ];
 
+/** 读当前清单（文件缺失 / JSON 坏掉都当空清单：断言层会把「清单为空」判红） */
+function readManifest() {
+	try {
+		return JSON.parse(readFileSync(join(ROOT, MANIFEST), "utf8"));
+	} catch {
+		return {};
+	}
+}
+
+/** 新旧清单的差异，说人话（谁新封、谁被删、谁的字节或出处变了） */
+function manifestDiff(before, after) {
+	const out = [];
+	for (const key of Object.keys(after).sort()) {
+		const old = before[key];
+		if (!old) {
+			out.push(`${key}: 新封存（清单里原先没有这条）`);
+			continue;
+		}
+		if (old.sha256 !== after[key].sha256)
+			out.push(`${key}: 字节变了 ${String(old.sha256 ?? "(无)").slice(0, 12)}… → ${after[key].sha256.slice(0, 12)}…`);
+		if (old.source !== after[key].source)
+			out.push(`${key}: 出处变了\n     旧「${old.source ?? "(无)"}」\n     新「${after[key].source}」`);
+	}
+	for (const key of Object.keys(before).sort()) {
+		if (!after[key])
+			out.push(`${key}: 已从清单移除（样本文件不在了）`);
+	}
+	return out;
+}
+
 /** 把当前样本的 sha256 + source 封存进清单；样本任何字节改动都会与清单对不上 */
 function seal() {
 	const keys = fixtureKeysOnDisk();
 	const rows = {};
 	for (const key of keys)
 		rows[key] = { sha256: sha256(fixturePath(key)), source: sourceOf(fixturePath(key)) };
+	const changes = manifestDiff(readManifest(), rows);
 	writeFileSync(join(ROOT, MANIFEST), `${JSON.stringify(rows, null, "\t")}\n`);
 	console.log(`✅ 已封存 ${MANIFEST}（${keys.length} 条：${keys.join(" / ")}）`);
+	if (changes.length === 0)
+		console.log("   清单无变化（样本字节与出处都与原清单一致）");
+	else
+		console.log(`   本次封存改动 ${changes.length} 处：\n${changes.map((c) => `   · ${c}`).join("\n")}`);
+	return changes;
 }
 
-// `--seal`：只重封清单、不跑任何命令（手工替换 bff / ui 样本后用）
+// `--seal`：只重封清单、不跑任何命令 —— 应急入口，样本正常不该由人来写
 if (process.argv.includes("--seal")) {
-	seal();
+	console.log("⚠️  --seal 是应急入口：正常重采请用 --write-fixtures（本地四步）或 --from-ci [run-id]（全部六份）。");
+	console.log("    它能给任何字节盖章，也就能把篡改合法化，所以手工封存必须在 commit message 里写明理由");
+	console.log("    （改了哪一份、为什么走不了机器回填）。");
+	const changes = seal();
+	if (changes.length === 0)
+		console.log("\n😐 样本本来就和清单一致：这次 --seal 没改变任何东西，不需要提交。");
 	process.exit(0);
 }
 
@@ -493,12 +536,7 @@ wiring(
 // 为什么还要清单：⑭ 的 `# source:` 只是样本里的一行文字，改样本的人顺手也能改它。
 // 清单独立记录「样本字节的 sha256 + 它声称的出处」，任何不经过 --seal 的样本改动都会
 // 让哈希对不上，任何只改头部不改正文的操作也会让两处 source 打架。
-let manifest = {};
-try {
-	manifest = JSON.parse(readFileSync(join(ROOT, MANIFEST), "utf8"));
-} catch {
-	manifest = {};
-}
+const manifest = readManifest();
 const manifestKeys = Object.keys(manifest).sort();
 
 wiring(
