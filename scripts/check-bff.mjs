@@ -509,6 +509,43 @@ try {
 		const emptyUsers = await request(exitPort, "/api/iam/users?page=1&page_size=2&keyword=nobody");
 		log("iam/users 空结果同样归一为 []（消费面可直接 .map）", Array.isArray(emptyUsers.json?.data?.list) && emptyUsers.json.data.list.length === 0, describe(emptyUsers.json?.data?.list));
 
+		// ── iam/policies（NMCPS-DESIGN-005 §7）：/system/policy 的唯一数据源 ──
+		const policies = await request(exitPort, "/api/iam/policies?page=1&page_size=2");
+		log("iam/policies 放行并透传 snake_case（id / page_size 不被改写）", policies.status === 200 && policies.json?.data?.list?.[0]?.id === "pol_platform_full" && policies.json?.data?.page_size === 2, `${policies.status} ${describe(policies.json?.data?.page_size)}`);
+
+		const policyKeyword = await request(exitPort, "/api/iam/policies?page=1&page_size=10&keyword=tenant.readonly");
+		log("iam/policies 的 keyword 在服务端生效（页面才能走服务端分页）", policyKeyword.json?.data?.total === 1 && policyKeyword.json?.data?.list?.[0]?.code === "tenant.readonly", `total=${describe(policyKeyword.json?.data?.total)}`);
+
+		const policyIgnoredFilter = await request(exitPort, "/api/iam/policies?page=1&page_size=10&code=tenant.readonly");
+		log("iam/policies 的 code 过滤被上游静默忽略（页面不提供该筛选项）", policyIgnoredFilter.json?.data?.total === 3, `total=${describe(policyIgnoredFilter.json?.data?.total)}`);
+
+		const policyBadDocument = await request(exitPort, "/api/iam/policies", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "bad", code: "probe.bad_doc", policy_type: "custom", document: "not-json" })
+		});
+		log("非法 document → 上游 400 纯文本，BFF 归一为 400 信封（不判成功）", policyBadDocument.status === 400 && policyBadDocument.json?.status === "warning" && String(policyBadDocument.json?.message).includes("SQLSTATE 22P02"), `${policyBadDocument.status} ${describe(policyBadDocument.json?.message).slice(0, 80)}`);
+
+		const policyDuplicate = await request(exitPort, "/api/iam/policies", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "dup", code: "tenant.readonly", policy_type: "custom", document: "[]" })
+		});
+		log("重复 code → 400，报错原文保留在 message（脱敏由页面按 SQLSTATE 判定）", policyDuplicate.status === 400 && String(policyDuplicate.json?.message).includes("SQLSTATE 23505"), `${policyDuplicate.status} ${describe(policyDuplicate.json?.message).slice(0, 80)}`);
+
+		const policyCreated = await request(exitPort, "/api/iam/policies", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "自查策略", code: "probe.c4c_ok", policy_type: "custom", document: "[]" })
+		});
+		log("建策略 200 且新主键在信封顶层（上游 iam_IdResp，无 data）", policyCreated.status === 200 && policyCreated.json?.code === 0 && String(policyCreated.json?.id).startsWith("pol_"), `${policyCreated.status} ${describe(policyCreated.json?.id)}`);
+
+		const policyDeleteRejected = await request(exitPort, "/api/iam/policies/pol_role_reader_isp_a", { method: "DELETE" });
+		log("删除失败走 200 + code 400 → 出口仍是 code 400（消费面按失败处理）", policyDeleteRejected.status === 200 && policyDeleteRejected.json?.code === 400 && policyDeleteRejected.json?.status === "warning", `${policyDeleteRejected.status} ${describe(policyDeleteRejected.json?.code)}`);
+
+		const policyDeleted = await request(exitPort, "/api/iam/policies/pol_tenant_reader", { method: "DELETE" });
+		log("删策略成功 200 code 0", policyDeleted.status === 200 && policyDeleted.json?.code === 0, `${policyDeleted.status} ${describe(policyDeleted.json?.code)}`);
+
 		const systemNamespace = await request(exitPort, "/api/system/overview");
 
 		const transmissionNamespace = await request(exitPort, "/api/transmission/sites");

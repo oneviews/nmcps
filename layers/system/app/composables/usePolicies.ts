@@ -1,37 +1,92 @@
 // layers/system/app/composables/usePolicies.ts
-// 策略数据面（`/system/policy`）：当前只有 ABAC 规则巡检一条读路径。
+// 策略数据面（`/system/policy`）：新代 `iam/policies` 的列表 / 详情 / 建 / 改 / 删。
 //
-// 设计基准：NMCPS-DESIGN-005 §七（layers/content/collections/cn/architecture/2.domain/system.md）
-// 上游缺陷：NMCPS-REC-003（layers/content/collections/cn/records/defects/policy-upstream-defects.md）
-//   - `PUT` / `PATCH` / `DELETE /abac/rule/{id}` **不存在**（实测 `404`，swagger 也没有登记）：
-//     规则一旦创建既不能改也不能删，`status` 只能由上游改库 → 本页只做只读巡检，不提供创建入口（UP-POL-01）；
-//   - `conditionDsl` 不做语法校验（写错也 `200`），且 `ruleCode` 重复回 `409 10302`（UP-POL-02）；
-//   - `GET /abac/rule` 没有 `keyword` 参数：搜索只能在客户端做（UP-POL-04 的邻接现象，非缺陷）。
+// 设计基准：NMCPS-DESIGN-005 §七（layers/content/collections/cn/architecture/2.domain/system.md）、
+// NMCPS-ADR-0018 §4.3（旧代 `/abac/rule` → 新代 `iam/policies`）。
+// 上游缺陷：NMCPS-REC-005（layers/content/collections/cn/records/defects/iam-policy-upstream-defects.md）
+//   - 列表只认 `page` / `page_size` / `keyword`，`code` / `policy_type` / `enabled` 传了被静默忽略（UP-RBAC-06）；
+//   - 建策略把新主键放在**信封顶层**（`{ code, message, id }`，没有 `data`），因此建完要按 `code` 回读；
+//   - `PUT` 的 `enabled` 被忽略（UP-RBAC-03）→ 这里只写 `name` / `document` / `description`；
+//   - `DELETE` 失败走 **HTTP 200 + `code: 400`**（UP-RBAC-05），由 `useApi` 的 `code === 0` 判定成失败。
 //
-// 新代注记：`/abac/rule` 与 `POST /access/dryrun` 在新代**都没有上游**（NMCPS-ADR-0018 缺口 G4 / G5）。
-// 试算已随 C4 下线（入口、弹窗、composable 方法、类型一并移除）；ABAC 段整段下线在 C4c。
-import type { AbacRule, AbacRuleListResult } from "~~/shared/types/policy";
+// 鉴权口径：新代没有业务级鉴权（UP-RBAC-01），BFF 只做白名单透传；
+// 可见范围由**会话租户**决定，因此这里不做任何「客户端先拦一道」的假设。
+import type {
+	IamPolicy,
+	IamPolicyCreatePayload,
+	IamPolicyListQuery,
+	IamPolicyListResult,
+	IamPolicyUpdatePayload
+} from "~~/shared/types/policy";
 
-/** 上游 `pageSize` 有上限，超出会被静默截断，客户端先夹一次再说 */
+/** 上游 `page_size` 无显式上限（UP-RBAC-06），客户端仍夹一次，避免一次拉回整库 */
 const MAX_PAGE_SIZE = 100;
 
 export function usePolicies() {
 	const api = useApi();
 
-	/** 规则列表：上游只认 `page` / `pageSize`（没有 keyword） */
-	function listRules(page = 1, pageSize = 20): Promise<AbacRuleListResult> {
-		return api.get<AbacRuleListResult>("/api/abac/rule", {
+	/** 列表：空串 / `undefined` 参数一律不发（上游对空串不过滤） */
+	function list(query: IamPolicyListQuery): Promise<IamPolicyListResult> {
+		const page = Math.max(1, Math.trunc(query.page) || 1);
+		const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.page_size) || 15));
+		const keyword = query.keyword?.trim();
+
+		return api.get<IamPolicyListResult>("/api/iam/policies", {
 			query: {
-				page: Math.max(1, Math.trunc(page) || 1),
-				pageSize: Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(pageSize) || 20))
+				page,
+				page_size: pageSize,
+				keyword: keyword || undefined
 			}
 		});
 	}
 
-	return { listRules };
-}
+	/** 详情：不存在时上游回 `400` + 纯文本 `记录不存在`（不是 envelope） */
+	function get(id: string): Promise<IamPolicy> {
+		return api.get<IamPolicy>(`/api/iam/policies/${encodeURIComponent(id)}`);
+	}
 
-/** 规则展示顺序：优先级升序（上游语义「越小越先匹配」），同优先级按 `ruleId` 稳定排序 */
-export function byAbacPriority(rules: AbacRule[]): AbacRule[] {
-	return [...rules].sort((a, b) => (a.priority - b.priority) || (a.ruleId - b.ruleId));
+	/**
+	 * 建策略：上游把新主键放在信封顶层（`{ code, message, id }`），`useApi` 解包后拿不到 id，
+	 * 因此用 `keyword` 精确回读刚建好的那一行（`code` 同租户唯一，命中即是它）。
+	 *
+	 * 回读不到（列表尚未反映）时返回 `undefined`，由页面回落到整表刷新。
+	 */
+	async function create(payload: IamPolicyCreatePayload): Promise<IamPolicy | undefined> {
+		const code = payload.code.trim();
+
+		await api.post<unknown>("/api/iam/policies", {
+			name: payload.name.trim(),
+			code,
+			policy_type: payload.policy_type.trim(),
+			document: payload.document,
+			description: payload.description?.trim() || undefined
+		});
+
+		const result = await list({ page: 1, page_size: 5, keyword: code });
+		return result.list.find((item) => item.code === code);
+	}
+
+	/**
+	 * 改策略：只发实测生效的三个字段。
+	 *
+	 * `document` 必须带上**当前值**：本页不提供文档编辑（NMCPS-DESIGN-005 §7.2），
+	 * 原样回传既满足上游语义，也不会把文档写坏。
+	 */
+	function update(payload: IamPolicyUpdatePayload): Promise<void> {
+		const { id, ...rest } = payload;
+
+		return api.put<void>(`/api/iam/policies/${encodeURIComponent(id)}`, {
+			id,
+			name: rest.name?.trim(),
+			document: rest.document,
+			description: rest.description?.trim()
+		});
+	}
+
+	/** 删策略：系统策略同样可删（UP-RBAC-02），因此这里不做任何客户端的「保护」拦阻 */
+	function remove(id: string): Promise<void> {
+		return api.del<void>(`/api/iam/policies/${encodeURIComponent(id)}`);
+	}
+
+	return { list, get, create, update, remove };
 }

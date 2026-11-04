@@ -1027,6 +1027,112 @@ if (upstreamPort) {
 
 	await page.setViewportSize({ width: 1440, height: 900 });
 }
+// 7.3b 策略管理两栏（NMCPS-DESIGN-005 §7 / NMCPS-ADR-0018 §4.3）：新代 `iam/policies` 的
+// 服务端分页 / 服务端 `keyword` / 文档只读预览。断言只盯「页面依赖的契约」，不测样式：
+// 旧代是「全量拉取 + 客户端过滤 + 客户端分页」，任何一条回退都会在这里变红。
+// 依赖假上游的三条策略（`pol_platform_full` / `pol_tenant_reader` / `pol_role_reader_isp_a`，
+// 见 `scripts/lib/bff-harness.mjs`；最后一条的删除固定回 `200 {code:400}`，验 UP-RBAC-05）。
+if (upstreamPort) {
+	const readPolicyPage = () => page.evaluate(() => {
+		const root = document.querySelector("[data-split='policy']");
+		return {
+			shape: root?.getAttribute("data-split-shape") ?? null,
+			search: location.search,
+			rows: Array.from(root?.querySelectorAll("[role='option']") ?? []).map((el) => ({
+				code: (el.getAttribute("title") ?? "").split("·").pop()?.trim() ?? "",
+				selected: el.getAttribute("aria-selected") === "true"
+			})),
+			text: root?.textContent ?? ""
+		};
+	});
+
+	const policyRequests = [];
+	const recordPolicyRequest = (request) => {
+		const url = new URL(request.url());
+		if (url.pathname === "/api/iam/policies")
+			policyRequests.push(url.searchParams);
+	};
+	page.on("request", recordPolicyRequest);
+
+	await page.goto(`${BASE_URL}/system/policy`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(600);
+	const firstPolicy = await readPolicyPage();
+	const firstPolicyQuery = policyRequests.at(-1);
+
+	log(
+		"策略页默认选中首行，列表走服务端分页（page_size=15，且不请求被忽略的 code / policy_type / enabled）",
+		firstPolicy.shape === "two"
+		&& firstPolicy.search.includes("id=pol_platform_full")
+		&& firstPolicyQuery?.get("page_size") === "15"
+		&& !firstPolicyQuery?.has("code")
+		&& !firstPolicyQuery?.has("policy_type")
+		&& !firstPolicyQuery?.has("enabled"),
+		`url="${firstPolicy.search}" 参数=${firstPolicyQuery ? Array.from(firstPolicyQuery.keys()).join("/") : "无请求"}`
+	);
+
+	// `document` 上游给的是 **JSON 字符串**：页面要缩进展示，不能原样吞成一行
+	log(
+		"策略文档按 JSON 格式化预览（不把字符串原样摊在一行）",
+		firstPolicy.text.includes("\"Action\": [") && firstPolicy.text.includes("Effect"),
+		`含缩进=${firstPolicy.text.includes("\"Action\": [")}`
+	);
+
+	// 搜索走服务端 `keyword`（旧代没有这个参数，只能在客户端过滤）
+	policyRequests.length = 0;
+	await page.locator("#app-toolbar-left input").first().fill("isp.role");
+	await page.waitForTimeout(900);
+	const searchedPolicy = await readPolicyPage();
+	const keywordPolicyQuery = policyRequests.at(-1);
+	log(
+		"策略搜索走服务端 keyword（结果收敛到 1 条）",
+		keywordPolicyQuery?.get("keyword") === "isp.role"
+		&& searchedPolicy.rows.length === 1
+		&& searchedPolicy.rows[0]?.code === "isp.role.readonly",
+		`keyword=${keywordPolicyQuery?.get("keyword") ?? "无"} 行=${searchedPolicy.rows.length}`
+	);
+
+	// 新建：右栏内联表单（D3，不套弹窗）；建成后 `?id` 换成真实主键（composable 用 code 回读）。
+	// 先把搜索清掉：否则新建后列表仍按上一个 keyword 过滤，新行会「建成了但看不见」。
+	await page.locator("#app-toolbar-left input").first().fill("");
+	await page.waitForTimeout(900);
+	await page.getByRole("button", { name: "新建策略", exact: true }).click();
+	await page.waitForTimeout(400);
+	const policyFormDialogs = await page.locator("[role='dialog']").count();
+	const policyInputs = page.locator("[data-split='policy'] form input");
+	await policyInputs.nth(0).fill("UI 自查策略");
+	await policyInputs.nth(1).fill("uicheck.policy");
+	await policyInputs.nth(2).fill("custom");
+	await page.locator("[data-split='policy'] form textarea").fill("[]");
+	await page.getByRole("button", { name: "创建", exact: true }).click();
+	await page.waitForTimeout(1600);
+	const afterPolicyCreate = await readPolicyPage();
+	log(
+		"新建策略落右栏内联表单，建成后选中新记录（`id` 回读 + `?id` replace）",
+		policyFormDialogs === 0
+		&& afterPolicyCreate.search.includes("id=pol_uicheck.policy")
+		&& afterPolicyCreate.rows.some((row) => row.code === "uicheck.policy"),
+		`弹窗=${policyFormDialogs} url="${afterPolicyCreate.search}"`
+	);
+
+	// 删除失败通道：上游回 `200 {code:400}`（UP-RBAC-05）时页面必须报错，不能当成删成功
+	await page.goto(`${BASE_URL}/system/policy?id=pol_role_reader_isp_a`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(500);
+	await page.getByRole("button", { name: "删除策略", exact: true }).click();
+	await page.waitForTimeout(400);
+	await page.locator("[role='dialog']").getByRole("button", { name: "删除", exact: true }).click();
+	await page.waitForTimeout(1200);
+	const deleteFailureDialogs = await page.locator("[role='dialog']").count();
+	const deleteFailureText = await page.evaluate(() => document.body.textContent ?? "");
+	log(
+		"删除被上游拒绝（200 + code 400）时报错并保留弹窗（不静默成功）",
+		deleteFailureDialogs > 0 && deleteFailureText.includes("删除失败：策略不存在或当前会话无权访问"),
+		`弹窗=${deleteFailureDialogs} 含失败文案=${deleteFailureText.includes("删除失败")}`
+	);
+
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(300);
+	page.off("request", recordPolicyRequest);
+}
 
 // 7.4 审计日志工具栏（NMCPS-DESIGN-005 §9.3 第 2 条 / NMCPS-ARCH-006 §4.1）：
 // 时间范围与日志族常驻左区、其余标识类筛选留浮层，且两个常驻控件必须真的改写请求参数 ——

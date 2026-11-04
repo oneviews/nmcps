@@ -2,27 +2,29 @@
 // 策略 / 权限两页（`/system/policy`、`/system/permission`）的错误码 → i18n 键映射与展示口径。
 //
 // 设计基准：NMCPS-DESIGN-005 §7.4 / §8.4（layers/content/collections/cn/architecture/2.domain/system.md）
-// 缺陷背景：NMCPS-REC-003（内置角色只读 `40305`、缺参 `500 10509`、无规则生命周期端点）。
+// 缺陷背景：NMCPS-REC-005（layers/content/collections/cn/records/defects/iam-policy-upstream-defects.md）。
+//
+// 两代口径并存（C4c 迁移中）：
+//   - `/system/policy` 已切到新代 `iam/policies`：**几乎没有业务码**，失败靠「HTTP 状态 + 响应形态」区分，
+//     甚至会把原始 PostgreSQL 错误文本直接回给客户端（UP-RBAC-04）；
+//   - `/system/permission` 仍是旧代 `/role` / `/permission`：下面 `resourceTypeKey` / `policyStatusKey` /
+//     旧业务码映射都只为它保留，该页迁移时整组删除（C4c code cut 2）。
 import { PERMISSION_RESOURCE_TYPE, POLICY_STATUS } from "~~/shared/types/policy";
 
 /** 两页各自的 i18n 命名空间（`errors.*` 与枚举标签都挂在下面） */
 export type PolicyErrorNamespace = "pages.system-policy" | "pages.system-permission";
 
 /**
- * 上游业务码 → i18n 键。
+ * 失败 → i18n 键（新代 `iam/*` 口径）。
  *
- * 返回 `undefined` 表示「不是已登记的业务码」：调用方回落到上游原文（不吞信息），
+ * 返回 `undefined` 表示「没有登记过的形态」：调用方回落到上游原文（不吞信息），
  * 运维类失败（未配置 / 掉线 / 超时）沿用 `upstreamHintKey()`。
  *
- * 已登记码来自 2026-11-01 实测：
- * - `10201` 未认证 / 域拒绝（超级管理员调策略域端点）
- * - `10301` 目标不存在（角色编码打错 / 已删除）
- * - `10302` 资源冲突（`roleCode` 重复）
- * - `20103` 只能向下管控（建同级或更高等级的角色）
- * - `40303` 内置角色禁止删除
- * - `40305` / `40307` 内置角色为共享只读模板，不可修改授权（授权回 `40307`、撤销回 `40305`，同一条文案）
- * - `40308` 角色级别越界（仅允许 L0–L4）
- * - `10509` 系统内部错误（缺必填字段）
+ * 判定顺序有意义：上游会用 `400` 同时承载「目标不存在」「唯一键冲突」「jsonb 解析失败」，
+ * 只有报文里的 `SQLSTATE` / 中文短语能区分它们（UP-RBAC-04 / UP-RBAC-05）。
+ *
+ * **原始 SQL 文本不得展示给用户**：命中 `SQLSTATE` 时一律换成页面文案，
+ * 表名 / 约束名只留在 `NMCPS-REC-005` 里。
  */
 export function policyErrorKey(error: unknown, namespace: PolicyErrorNamespace): string | undefined {
 	if (!(error instanceof ApiError))
@@ -32,6 +34,69 @@ export function policyErrorKey(error: unknown, namespace: PolicyErrorNamespace):
 	if (hint)
 		return hint;
 
+	// `/system/permission` 还没迁（C4c code cut 2）：继续按旧代业务码解释，
+	// 否则它手里的 `10201` / `40305` 会被当成「参数不合法」，把权限问题说成用法问题。
+	return namespace === "pages.system-permission"
+		? legacyPolicyErrorKey(error, namespace)
+		: iamPolicyErrorKey(error, namespace);
+}
+
+/**
+ * 新代 `iam/*` 失败 → i18n 键。
+ *
+ * 判定顺序有意义：上游会用 `400` 同时承载「目标不存在」「唯一键冲突」「jsonb 解析失败」，
+ * 只有报文里的 `SQLSTATE` / 中文短语能区分它们（UP-RBAC-04 / UP-RBAC-05）。
+ *
+ * **原始 SQL 文本不得展示给用户**：命中 `SQLSTATE` 时一律换成页面文案，
+ * 表名 / 约束名只留在 `NMCPS-REC-005` 里。
+ */
+function iamPolicyErrorKey(error: ApiError, namespace: PolicyErrorNamespace): string | undefined {
+	const message = error.message ?? "";
+
+	// 上游把 PG 错误原样透出：`ERROR: duplicate key value violates unique constraint "uk_…" (SQLSTATE 23505)`
+	if (message.includes("SQLSTATE 23505"))
+		return `${namespace}.errors.duplicateCode`;
+	if (message.includes("SQLSTATE 22P02"))
+		return `${namespace}.errors.invalidDocument`;
+	if (message.includes("SQLSTATE 23503"))
+		return `${namespace}.errors.missingRelation`;
+
+	// `400` 纯文本 `记录不存在`：详情 / 更新 / 删除的目标已不在（可能被他人删除）
+	if (message.includes("记录不存在"))
+		return `${namespace}.errors.notFound`;
+
+	// `200 {code:400,message:"资源不存在或无权访问"}`：删除失败但 transport 仍是 200（UP-RBAC-05）
+	if (message.includes("资源不存在") || message.includes("无权访问"))
+		return `${namespace}.errors.deleteRejected`;
+
+	switch (error.code) {
+		case 400:
+			return `${namespace}.errors.invalidParam`;
+		case 401:
+		case 40101:
+		case 10007:
+			return `${namespace}.errors.sessionInvalid`;
+		case 0:
+			return `${namespace}.errors.network`;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * 旧代 `/role` / `/permission` 业务码 → i18n 键（只为 `/system/permission` 保留）。
+ *
+ * 已登记码来自 2026-11-01 实测：
+ * - `10201` 未认证 / 域拒绝（超级管理员调策略域端点）
+ * - `10301` 目标不存在（角色编码打错 / 已删除）
+ * - `10302` 资源冲突（`roleCode` 重复）
+ * - `20103` 只能向下管控（建同级或更高等级的角色）
+ * - `40303` 内置角色禁止删除
+ * - `40305` / `40307` 内置角色为共享只读模板，不可修改授权
+ * - `40308` 角色级别越界（仅允许 L0–L4）
+ * - `10509` 系统内部错误（缺必填字段）
+ */
+function legacyPolicyErrorKey(error: ApiError, namespace: PolicyErrorNamespace): string | undefined {
 	switch (error.code) {
 		case 10201:
 			return `${namespace}.errors.forbidden`;

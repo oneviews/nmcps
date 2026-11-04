@@ -1,11 +1,11 @@
 <template>
 	<div class="flex min-h-0 flex-1 flex-col">
 		<!--
+			`/system/policy` 策略管理（两栏落码，NMCPS-ADR-0017 迁移步骤 6）。
 			页面根显式取 `flex-1 min-h-0`（NMCPS-ARCH-006 §3.3）：definite height 链在这里落定。
-			身份 / 范围说明下移到详情栏顶部（见 `#detail`，NMCPS-DESIGN-005 §7.3）：
-			页面顶部只留工具栏与两栏骨架，不再被一条横幅压掉左栏第一行。
+			身份 / 范围说明在详情栏顶部（见 `#detail`，NMCPS-DESIGN-005 §7.3）。
 		-->
-		<!-- 内容页工具栏（NMCPS-ARCH-006 §4）：全页只有这一层 -->
+		<!-- 内容页工具栏（§4）：全页只有这一层。左区 = 集合域动作，覆盖式详情态换成唯一「返回」 -->
 		<Teleport to="#app-toolbar-left">
 			<UTooltip v-if="toolbarPane === 'detail'" :text="$t('split.back')">
 				<UButton
@@ -18,10 +18,7 @@
 				/>
 			</UTooltip>
 			<template v-else>
-				<!--
-					上游 `GET /abac/rule` 没有 `keyword` 参数（UP-POL-04）：搜索在客户端做，
-					因此先全量拉取再过滤，而不是把关键字发给上游假装它能筛。
-				-->
+				<!-- 上游列表只认 `keyword`（`code` / `policy_type` / `enabled` 被静默忽略，UP-RBAC-06） -->
 				<UInput
 					v-model="keyword"
 					size="sm"
@@ -46,11 +43,57 @@
 		</Teleport>
 
 		<!--
-			本域在新代没有任何写端点（`iam/roles` / `iam/policies` 的迁移见 C4c），
-			因此右区不再挂「授权试算」按钮：`POST /access/dryrun` 在新代不存在（缺口 G5）。
+			右区 = 记录域 / 提交域 / 主 CTA（§4.1）；一页至多一个 primary：表单态是「创建 / 保存」，其余时候是「新建」。
+			没有「启用 / 停用」开关：`enabled` 写入被上游忽略（UP-RBAC-03），点了没反应的开关比没有入口更糟。
 		-->
+		<Teleport to="#app-toolbar-right">
+			<template v-if="formOpen">
+				<UButton
+					size="sm"
+					color="neutral"
+					variant="ghost"
+					:label="$t('pages.system-policy.form.cancel')"
+					@click="cancelForm"
+				/>
+				<UButton
+					size="sm"
+					:label="isCreating ? $t('pages.system-policy.form.create') : $t('pages.system-policy.form.save')"
+					:loading="formSubmitting"
+					@click="formRef?.submit()"
+				/>
+			</template>
+			<template v-else>
+				<template v-if="selected">
+					<UButton
+						size="sm"
+						color="neutral"
+						variant="outline"
+						icon="carbon:edit"
+						:label="$t('pages.system-policy.edit')"
+						@click="startEdit"
+					/>
+					<!-- 危险动作在记录域工具栏（D5）；确认弹窗负责讲清「系统策略也不受保护」（UP-RBAC-02） -->
+					<UButton
+						size="sm"
+						color="error"
+						variant="ghost"
+						icon="carbon:trash-can"
+						:aria-label="$t('pages.system-policy.delete')"
+						@click="deleteOpen = true"
+					/>
+				</template>
+				<!-- 覆盖式详情态不再给「新建」：那属于列表面板的动作（§4.4） -->
+				<UButton
+					v-if="toolbarPane === 'list'"
+					size="sm"
+					icon="carbon:add"
+					:label="$t('pages.system-policy.create')"
+					@click="startCreate"
+				/>
+			</template>
+		</Teleport>
 
-		<!-- 两栏骨架（NMCPS-ARCH-006 §3 / NMCPS-ADR-0017 D1） -->
+		<!-- 两栏骨架（§3 / NMCPS-ADR-0017 D1） -->
 		<LayoutSplit
 			id="policy"
 			:has-selection="hasSelection"
@@ -78,10 +121,12 @@
 					</UAlert>
 				</div>
 
+				<!-- 加载：骨架行 × 5，不整块 spinner（§3.4）；刷新时保留旧数据 -->
 				<div v-else-if="loading && rows.length === 0" class="space-y-2 p-3">
 					<USkeleton v-for="index in 5" :key="index" class="h-10 w-full" />
 				</div>
 
+				<!-- 空态在栏内，不塞进表格（§3.4）；「新建」只在工具栏一处入口（§4） -->
 				<div v-else-if="rows.length === 0" class="flex flex-col items-center gap-2 p-6 text-center">
 					<UIcon name="carbon:rule" class="size-7 text-(--ui-text-muted)" />
 					<p class="text-sm">
@@ -89,7 +134,10 @@
 					</p>
 				</div>
 
-				<!-- 自建 listbox（§3.6 / D8）：行可聚焦、`Enter` / `Space` 选中、带 `aria-selected` -->
+				<!--
+					列表：自建 listbox（§3.6 / D8）—— 行可聚焦、`Enter` / `Space` 选中、带 `aria-selected`；
+					行内动作 0 个：整行点击就是「选中」，写操作一律在右栏工具栏（D2 / D5）。
+				-->
 				<ul
 					v-else
 					role="listbox"
@@ -98,57 +146,54 @@
 					@keydown="onListKeydown"
 				>
 					<li
-						v-for="(rule, index) in pageRows"
-						:key="rule.ruleId"
-						:ref="(element) => setRowRef(String(rule.ruleId), element)"
+						v-for="(policyRow, index) in rows"
+						:key="policyRow.id"
+						:ref="(element) => setRowRef(policyRow.id, element)"
 						role="option"
-						:aria-selected="String(rule.ruleId) === selectedId"
-						:tabindex="String(rule.ruleId) === selectedId || (!selectedId && index === 0) ? 0 : -1"
-						:title="`${rule.ruleName} · ${rule.ruleCode}`"
+						:aria-selected="policyRow.id === selectedId"
+						:tabindex="policyRow.id === selectedId || (!selectedId && index === 0) ? 0 : -1"
+						:title="`${policyRow.name} · ${policyRow.code}`"
 						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-						:class="String(rule.ruleId) === selectedId
+						:class="policyRow.id === selectedId
 							? 'border-primary bg-accented'
 							: 'border-transparent'"
-						@click="selection.select(rule)"
-						@keydown.enter.prevent="selection.select(rule)"
-						@keydown.space.prevent="selection.select(rule)"
+						@click="selection.select(policyRow)"
+						@keydown.enter.prevent="selection.select(policyRow)"
+						@keydown.space.prevent="selection.select(policyRow)"
 					>
 						<div class="flex min-w-0 items-center justify-between gap-2">
 							<p class="truncate text-sm font-medium">
-								{{ rule.ruleName }}
+								{{ policyRow.name }}
 							</p>
-							<UBadge :color="policyStatusColor(rule.status)" variant="subtle" size="sm">
-								{{ $t(policyStatusKey(rule.status, 'pages.system-policy'), { status: rule.status }) }}
+							<!-- 系统策略只是标签，不是保护（UP-RBAC-02）：列表里也不加锁形图标误导 -->
+							<UBadge v-if="policyRow.is_system" color="neutral" variant="subtle" size="sm">
+								{{ $t("pages.system-policy.systemBadge") }}
 							</UBadge>
 						</div>
 						<p class="truncate font-mono text-xs text-(--ui-text-muted)">
-							{{ rule.ruleCode }} · {{ $t("pages.system-policy.priorityShort", { priority: rule.priority }) }} · {{ rule.roleCode || $t("pages.system-policy.globalScope") }}
+							{{ policyRow.code }} · {{ policyRow.policy_type }}
 						</p>
 					</li>
 				</ul>
 			</template>
 
-			<!--
-				列表尾部（滚动区之外）：计数 + 每页条数 + 分页（§3.8 / D2）。
-				本页是全量加载后客户端过滤 + 客户端分页：分页只切渲染层，命中判定与 `?id` 深链仍对全量生效。
-			-->
+			<!-- 列表尾部（滚动区之外）：计数 + 每页条数 + 分页（§3.8 / D2）。新代 `keyword` 在服务端生效，走服务端分页 -->
 			<template #list-footer>
 				<LayoutListFooter
-					v-model:page="uiPage"
+					v-model:page="page"
 					v-model:page-size="pageSize"
-					:total="rows.length"
+					:total="total"
 					:disabled="loading"
 				>
-					{{ $t("pages.system-policy.total", { total: rows.length, all: allRules.length }) }}
+					{{ $t("pages.system-policy.total", { total }) }}
 				</LayoutListFooter>
 			</template>
 
 			<template #detail>
 				<div class="flex min-h-full flex-col">
 					<!--
-						身份 / 范围说明（NMCPS-DESIGN-005 §7.3）：放在详情栏顶部，
-						它回答的是「这条规则在什么范围内可信」，属于所选记录的上下文而不是页面级横幅；
-						因此三种详情状态（含未选中空态）都在最上面看到它，覆盖式下随详情页一起出现。
+						身份 / 范围说明（NMCPS-DESIGN-005 §7.3）：放在详情栏顶部 —— 它回答的是
+						「这批策略在什么范围内可见」，属于所选记录的上下文而不是页面级横幅。
 					-->
 					<div v-if="loaded" class="shrink-0 px-4 pt-4">
 						<UAlert
@@ -159,8 +204,18 @@
 							:description="$t(scopeAlert.description)"
 						/>
 					</div>
-					<!-- `?id` 不在当前 rows：零详情请求 + 一次提示，不清空 URL（D6） -->
-					<div v-if="isMissing" class="p-4">
+
+					<!-- create / edit：右栏内联表单（D3 / 附录 B），提交按钮在右栏工具栏 -->
+					<PolicyForm
+						v-if="formOpen"
+						ref="formRef"
+						:key="isCreating ? 'create' : selectedId"
+						:policy="isEditing ? selected : null"
+						@saved="onSaved"
+					/>
+
+					<!-- `?id` 不在当前页结果集：零详情请求 + 一次提示，不清空 URL（D6） -->
+					<div v-else-if="isMissing" class="p-4">
 						<UAlert
 							color="warning"
 							variant="subtle"
@@ -180,81 +235,110 @@
 						</UAlert>
 					</div>
 
-					<!-- view 态：规则字段 + DSL 原文（只读，上游没有改 / 删端点） -->
+					<!-- view 态：字段 + 文档只读预览（§7.2：只做「格式化预览 + 复制」） -->
 					<div v-else-if="selected" class="max-w-[720px] space-y-5 p-4">
 						<div class="min-w-0">
 							<h2 class="truncate text-base font-semibold">
-								{{ selected.ruleName }}
+								{{ selected.name }}
 							</h2>
 							<p class="truncate font-mono text-xs text-(--ui-text-muted)">
-								{{ selected.ruleCode }}
+								{{ selected.code }}
 							</p>
 						</div>
 
 						<dl class="grid grid-cols-[minmax(5rem,auto)_1fr] items-baseline gap-x-4 gap-y-3 text-sm">
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-policy.columns.ruleId") }}
+								{{ $t("pages.system-policy.columns.id") }}
 							</dt>
-							<dd class="font-mono text-xs">
-								{{ selected.ruleId }}
+							<dd class="break-all font-mono text-xs">
+								{{ selected.id }}
 							</dd>
 
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-policy.columns.roleCode") }}
+								{{ $t("pages.system-policy.columns.policyType") }}
 							</dt>
-							<!-- 空串 = 全局规则（上游用空串而不是 null，见 NMCPS-CONTRACT-001 §四） -->
-							<dd class="font-mono text-xs">
-								{{ selected.roleCode || $t("pages.system-policy.globalScope") }}
+							<!-- openapi 未约束枚举：原样展示，未知值不映射成「其他」（§7.2） -->
+							<dd class="break-all font-mono text-xs">
+								{{ selected.policy_type }}
 							</dd>
 
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-policy.columns.priority") }}
+								{{ $t("pages.system-policy.columns.tenant") }}
 							</dt>
-							<dd>{{ selected.priority }}</dd>
+							<dd class="break-all font-mono text-xs">
+								{{ tenantName(selected.tenant_id) }}
+							</dd>
 
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-policy.columns.status") }}
+								{{ $t("pages.system-policy.columns.enabled") }}
 							</dt>
+							<!-- `enabled` 上游恒 true 且写入被忽略（UP-RBAC-03）：只读展示，不做开关 -->
 							<dd>
-								<UBadge :color="policyStatusColor(selected.status)" variant="subtle">
-									{{ $t(policyStatusKey(selected.status, "pages.system-policy"), { status: selected.status }) }}
+								<UBadge :color="selected.enabled ? 'success' : 'neutral'" variant="subtle">
+									{{ selected.enabled ? $t("pages.system-policy.enabledOn") : $t("pages.system-policy.enabledOff") }}
 								</UBadge>
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-policy.columns.description") }}
+							</dt>
+							<dd class="break-words">
+								{{ selected.description || "—" }}
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-policy.columns.createdAt") }}
+							</dt>
+							<!-- 上游 RFC3339 带偏移（`2026-11-03T18:59:06+08:00`）：原样展示，不换算也不加 (UTC) -->
+							<dd class="font-mono text-xs">
+								{{ selected.created_at || "—" }}
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-policy.columns.updatedAt") }}
+							</dt>
+							<dd class="font-mono text-xs">
+								{{ selected.updated_at || "—" }}
 							</dd>
 						</dl>
 
 						<section class="space-y-2">
 							<div class="flex items-center justify-between gap-2">
 								<h3 class="text-sm font-semibold">
-									{{ $t("pages.system-policy.columns.conditionDsl") }}
+									{{ $t("pages.system-policy.columns.document") }}
 								</h3>
 								<UButton
 									size="xs"
 									color="neutral"
 									variant="ghost"
 									icon="carbon:copy"
-									:label="$t('pages.system-policy.copyDsl')"
-									@click="copyDsl(selected.conditionDsl)"
+									:label="$t('pages.system-policy.copyDocument')"
+									:disabled="!documentPreview.text"
+									@click="copyDocument"
 								/>
 							</div>
-							<!-- 原样展示：上游不校验语法（UP-POL-02），这里也不做「美化」或「修正」 -->
-							<pre class="overflow-x-auto rounded-md border border-(--ui-border) bg-elevated/40 p-3 font-mono text-xs whitespace-pre-wrap break-words">{{ selected.conditionDsl || $t("pages.system-policy.emptyDsl") }}</pre>
+							<!-- 合法 JSON 缩进美化，非法 JSON 原样回落（不猜、不修） -->
+							<pre class="max-h-80 overflow-auto rounded-md border border-(--ui-border) bg-elevated/40 p-3 font-mono text-xs whitespace-pre-wrap break-words">{{ documentPreview.text || $t("pages.system-policy.documentEmpty") }}</pre>
+							<p v-if="!documentPreview.valid && documentPreview.text" class="text-xs text-(--ui-text-muted)">
+								{{ $t("pages.system-policy.documentInvalidHint") }}
+							</p>
 							<p class="text-xs text-(--ui-text-muted)">
-								{{ $t("pages.system-policy.dslHint") }}
+								{{ $t("pages.system-policy.documentHint") }}
 							</p>
 						</section>
 
 						<UAlert
 							color="info"
 							variant="subtle"
-							icon="carbon:locked"
-							:title="$t('pages.system-policy.readonlyTitle')"
-							:description="$t('pages.system-policy.readonly')"
+							icon="carbon:document"
+							:title="$t('pages.system-policy.documentReadonlyTitle')"
+							:description="$t('pages.system-policy.documentReadonly')"
 						/>
 					</div>
 
 					<!-- 无选中：右栏空态（D3） -->
 					<div v-else class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-						<UIcon name="carbon:document-blank" class="size-8 text-(--ui-text-muted)" />
+						<UIcon name="carbon:document-blank" class="size-7 text-(--ui-text-muted)" />
 						<p class="text-sm font-medium">
 							{{ $t("pages.system-policy.detailEmpty") }}
 						</p>
@@ -265,154 +349,110 @@
 				</div>
 			</template>
 		</LayoutSplit>
+
+		<!-- 破坏性确认：入口在右栏工具栏，弹窗只确认这一次写操作（D7） -->
+		<PolicyDeleteModal
+			v-model:open="deleteOpen"
+			:policy="selected ?? null"
+			@deleted="onDeleted"
+		/>
 	</div>
 </template>
 
 <script setup lang="ts">
-	import type { AbacRule } from "~~/shared/types/policy";
+	import type { IamPolicy } from "~~/shared/types/policy";
 	import { DEFAULT_PAGE_SIZE } from "~~/shared/constants/paging";
 
 	/**
-	 * `/system/policy` 策略配置（两栏落码，NMCPS-ADR-0017 迁移步骤 6）。
+	 * `/system/policy` 策略管理（两栏落码，NMCPS-ADR-0017 迁移步骤 6）。
 	 *
-	 * 设计基准：NMCPS-ARCH-006 §3（`layers/content/collections/cn/architecture/1.architecture/ui-architecture.md`）
-	 * 领域口径：NMCPS-DESIGN-005 §七（`layers/content/collections/cn/architecture/2.domain/system.md`）
-	 * 上游缺陷：NMCPS-REC-003（`layers/content/collections/cn/records/defects/policy-upstream-defects.md`）
+	 * 设计基准：NMCPS-ARCH-006 §3（layers/content/collections/cn/architecture/1.architecture/ui-architecture.md）
+	 * 领域口径：NMCPS-DESIGN-005 §七（layers/content/collections/cn/architecture/2.domain/system.md）
+	 * 契约来源：NMCPS-ADR-0018 §4.3（`/abac/rule` → `iam/policies`）
+	 * 上游缺陷：NMCPS-REC-005（layers/content/collections/cn/records/defects/iam-policy-upstream-defects.md）
 	 *
-	 * ── 决策矩阵：本页只读的理由（实测口径，详见 §7.3）─────────────────────────
-	 * | 能力 | 超级管理员（level 0） | 租户管理员（level 1） |
+	 * ── 能力矩阵（2026-11-04 实测 192.168.1.55:8888）────────────────────────────
+	 * | 能力 | 旧代 | 新代 |
 	 * | :--- | :--- | :--- |
-	 * | 规则列表 | 不提供：策略域四端点全部 `401 10201`（UP-POL-08） | 可用（`page` / `pageSize` 之外没有过滤参数） |
-	 * | 关键字搜索 | 不提供 | 客户端过滤：上游不接受 `keyword`（UP-POL-04） |
-	 * | 新建规则 | 不提供 | **不提供**：规则建了既不能改也不能删（`PUT`/`DELETE` 实测 `404`，UP-POL-01），且 `conditionDsl` 不做语法校验（UP-POL-02） |
-	 * | 修改 / 删除规则 | 不提供 | 不提供：同上，端点不存在 |
-	 * | 启停规则 | 不提供 | 不提供：`status` 只能由上游改库 |
-	 * | 授权试算 | 不提供 | **下线**：`POST /access/dryrun` 在新代不存在（缺口 G5），入口与弹窗一并移除 |
+	 * | 列表 / 搜索 | `/abac/rule`，无 `keyword`（客户端过滤） | `GET /iam/policies`，服务端 `keyword`（服务端分页） |
+	 * | 建 | **无端点**（UP-POL-01） | `POST /iam/policies`，主键回在信封顶层 |
+	 * | 改 | **无端点** | `PUT /iam/policies/{id}`（只 `name` / `document` / `description` 生效） |
+	 * | 删 | **无端点** | `DELETE /iam/policies/{id}`（系统策略也删得掉，UP-RBAC-02） |
+	 * | 启停 | 只能改库 | **无有效端点**：`enabled` 写入被忽略（UP-RBAC-03） |
+	 * | 授权试算 | `POST /access/dryrun` | **端点缺失**（缺口 G5）：入口与弹窗已随 C4 下线 |
 	 *
-	 * 这些收敛**只是不引导用户踩上游缺口**，不是安全边界：BFF 只做白名单透传，鉴权仍在上游。
-	 * 尤其「新建规则」：一个只能创建、不能回收的写入口，比没有入口更危险，故本页不提供。
+	 * 新代**没有业务级鉴权**：任何已认证会话（含零角色账号）都能读写这些端点，
+	 * 可见范围只由**会话租户**决定（UP-RBAC-01 / UP-RBAC-09）。页面不做任何「客户端先拦一道」的假设，
+	 * 收敛只发生在「不引导用户踩上游缺口」这一层：不做启停开关、文档不提供编辑器、
+	 * 删除确认如实写明系统策略不受保护。
 	 */
 	definePageMeta({ sort: 2, icon: "carbon:rule" });
 
 	const { t } = useI18n();
 	const toast = useToast();
-	const { user, isSuperAdmin, loaded } = useAuth();
-	const { listRules } = usePolicies();
+	const { user, loaded } = useAuth();
+	const { list } = usePolicies();
 
 	/** 当前形态（由 `Layout/Split.vue` 判定并外抛）：决定 `?id` 写历史时用 `replace` 还是 `push` */
 	const shape = ref<"two" | "overlay">("two");
 
-	/** 全量规则（上游无 keyword 参数，搜索只能在客户端做，因此必须先拉全） */
-	const allRules = ref<AbacRule[]>([]);
+	const rows = ref<IamPolicy[]>([]);
+	const total = ref(0);
+	const page = ref(1);
+	const pageSize = ref(DEFAULT_PAGE_SIZE);
 	const loading = ref(false);
 	const errorMessage = ref<string>();
 
-	/** 上游分页拉全的上限：防御 `total` 异常导致的死循环 */
-	const MAX_RULE_PAGES = 10;
-
-	// ── 筛选（客户端）──────────────────────────────────────────────────────────
-	/** 输入态与生效态分开：搜索防抖 300ms 才落生效（D2） */
-	const keyword = ref("");
-	const appliedKeyword = ref("");
-
-	/** 展示行 = 过滤 + 稳定排序；列表渲染与默认选中都只依赖它（§3.6） */
-	const displayRows = computed(() => {
-		const needle = appliedKeyword.value.trim().toLowerCase();
-		const matched = needle
-			? allRules.value.filter((rule) =>
-				[rule.ruleCode, rule.ruleName, rule.roleCode, rule.conditionDsl]
-					.some((field) => field.toLowerCase().includes(needle)))
-			: allRules.value;
-
-		// 上游语义「priority 越小越先匹配」：列表按匹配顺序展示，页面上不需要再解释一次
-		return byAbacPriority(matched);
-	});
-
 	/**
-	 * 命中全集：`?id` 命中判定与默认选中都以它为准（NMCPS-ARCH-006 §3.8 的客户端分页例外）。
-	 * 若换成切片后的 `pageRows`，第 2 页上的深链会被判成「记录不存在」。
+	 * 记录选择契约（NMCPS-ARCH-006 §5.2 / NMCPS-ADR-0017 D2 / D6）：`?id` 是「当前选中哪条」的唯一事实源。
+	 * `?id` 不进 `list()` 的请求参数，因此改选中 / 深链进入都不会重新拉列表；
+	 * 不在当前页结果集时只出空态提示，不静默翻页去捞（会让筛选状态与 URL 不一致）。
 	 */
-	const rows = computed(() => displayRows.value);
-
-	// ── 客户端分页（§3.8）：切片只作用于渲染层 ────────────────────────────────
-	/** 界面分页游标（与 `loadAll()` 里的上游取数页无关） */
-	const uiPage = ref(1);
-	const pageSize = ref(DEFAULT_PAGE_SIZE);
-
-	const pageRows = computed(() => {
-		const start = (uiPage.value - 1) * pageSize.value;
-		return rows.value.slice(start, start + pageSize.value);
-	});
-
-	/** 命中集合或条数变化后，游标可能已越界（如搜索把 3 页缩成 1 页）：夹回最后一页 */
-	watch([rows, pageSize], () => {
-		const lastPage = Math.max(1, Math.ceil(rows.value.length / pageSize.value));
-		if (uiPage.value > lastPage)
-			uiPage.value = lastPage;
-	});
-
-	/**
-	 * 记录选择契约（NMCPS-ARCH-006 §5.2 / D2 / D6）：`?id` = `ruleId`。
-	 *
-	 * - 命中判定只在当前 `rows` 里做，`?id` **不进** `listRules()` 的请求参数；
-	 * - 客户端搜索把记录过滤掉时落「不在当前结果内」空态，不静默改搜索条件去捞；
-	 * - 本页没有 create 态：上游不允许新建规则（UP-POL-01），故不传 `createId`。
-	 */
-	const selection = useRecordSelection<AbacRule>({
+	const selection = useRecordSelection<IamPolicy>({
 		rows,
-		getId: (rule) => String(rule.ruleId),
-		getLabel: (rule) => rule.ruleName,
+		getId: (record) => record.id,
+		getLabel: (record) => record.name,
 		isLoading: loading,
 		isOverlay: () => shape.value === "overlay",
 		autoSelect: true,
-		defaultRecord: (ruleList) => ruleList[0]
+		defaultRecord: (policyList) => policyList[0],
+		createId: "new"
 	});
 
-	const { selectedId, selected, isMissing, clear: clearSelection } = selection;
+	const { selectedId, selected, isMissing, isCreating, clear: clearSelection } = selection;
 
 	const hasSelection = computed(() => !!selectedId.value);
 
-	/** 工具栏内容跟随当前面板（NMCPS-ARCH-006 §4.4） */
-	const toolbarPane = computed<"list" | "detail">(() =>
-		shape.value === "overlay" && hasSelection.value ? "detail" : "list");
+	/**
+	 * 编辑态是本页局部状态，不占 URL：`?id=new` 只表示「新建」（D6），
+	 * 编辑永远依附于某条已选记录，多一个 `?mode=edit` 只会让深链有两种含义。
+	 */
+	const editing = ref(false);
+	const isEditing = computed(() => editing.value && !!selected.value);
+	/** 右栏是否处于表单态（新建或编辑）：决定工具栏给「创建 / 保存」还是记录域动作 */
+	const formOpen = computed(() => isCreating.value || isEditing.value);
 
-	/** 面包屑记录段（§5.1）：选中规则的名称 */
-	const recordLabel = computed(() => selection.label.value);
+	/** 工具栏内容跟随当前面板（§4.4）：覆盖式列表态只给集合域动作，详情态左区换成唯一「返回」 */
+	const toolbarPane = computed<"list" | "detail">(() =>
+		shape.value === "overlay" && (hasSelection.value || formOpen.value) ? "detail" : "list");
+
+	/** 面包屑记录段（§5.1）：create 态显示「新建策略」，否则显示选中记录名 */
+	const recordLabel = computed(() => isCreating.value
+		? t("pages.system-policy.create")
+		: selection.label.value);
 
 	const { clearRequests } = useRecordContext(recordLabel);
 
+	// 记录段被点击 = 清除选择（工具栏不直接写 URL，URL 只由 useRecordSelection 写）
 	watch(clearRequests, () => clearSelection());
 
-	// ── 身份口径 ──────────────────────────────────────────────────────────────
-	/** 策略域对超级管理员不开放（四端点全 `401 10201`，UP-POL-08）：入口处就说清楚，不发注定失败的请求 */
-	const canUseDomain = computed(() => !!user.value && !isSuperAdmin.value);
-
-	/** 身份说明三态：`0` / `1` 以外的等级不能冒充租户管理员来讲范围约束 */
-	const scopeAlert = computed<{ color: "neutral" | "info" | "warning", title: string, description: string }>(() => {
-		if (!!user.value && isSuperAdmin.value) {
-			return {
-				color: "neutral",
-				title: "pages.system-policy.scopeSuperAdminTitle",
-				description: "pages.system-policy.scopeSuperAdmin"
-			};
-		}
-
-		if (!!user.value && !isSuperAdmin.value) {
-			return {
-				color: "info",
-				title: "pages.system-policy.scopeTenantAdminTitle",
-				description: "pages.system-policy.scopeTenantAdmin"
-			};
-		}
-
-		return {
-			color: "warning",
-			title: "pages.system-policy.scopeUnknownTitle",
-			description: "pages.system-policy.scopeUnknown"
-		};
+	/** 换记录 / 新建时退出编辑态：表单里是旧记录的副本，留着会改错对象 */
+	watch(selectedId, () => {
+		editing.value = false;
 	});
 
-	// ── 键盘：listbox 语义（NMCPS-ARCH-006 §3.6 / D8）────────────────────────
+	// ── 键盘：listbox 语义（§3.6 / D8）────────────────────────────────────────
+	/** 行元素（`<li role="option">`）：`↑/↓/Home/End` 要能把焦点搬到目标行 */
 	const rowElements = new Map<string, HTMLElement>();
 
 	function setRowRef(id: string, element: unknown): void {
@@ -424,8 +464,7 @@
 
 	/** `↑/↓/Home/End` 移动焦点并同步选中（selection follows focus）；`Enter` / `Space` 由行自己处理 */
 	function onListKeydown(event: KeyboardEvent): void {
-		// 键盘只在**当前页可见行**里移动：跨页跳转会让焦点落到屏幕外的行上
-		const ids = pageRows.value.map((rule) => String(rule.ruleId));
+		const ids = rows.value.map((record) => record.id);
 		if (ids.length === 0)
 			return;
 
@@ -452,10 +491,106 @@
 		event.preventDefault();
 		const id = ids[next]!;
 		selection.set(id);
+		// v-for 重渲染可能替换节点，聚焦放到下一拍
 		void nextTick(() => rowElements.get(id)?.focus());
 	}
 
-	// ── 取数 ──────────────────────────────────────────────────────────────────
+	// ── 表单态（新建 `?id=new` / 编辑当前记录）────────────────────────────────
+	/** 右栏工具栏的「创建 / 保存」要驱动表单提交：模板 ref 拿子组件暴露的 `submit()` / `submitting` */
+	const formRef = ref<{ submit: () => Promise<void>, submitting: boolean }>();
+	const formSubmitting = computed(() => formRef.value?.submitting === true);
+
+	function startCreate(): void {
+		editing.value = false;
+		selection.set("new");
+	}
+
+	function startEdit(): void {
+		if (!selected.value)
+			return;
+
+		editing.value = true;
+	}
+
+	/** 取消：编辑只是退回详情；新建则连 `?id=new` 一起清掉 */
+	function cancelForm(): void {
+		editing.value = false;
+		if (isCreating.value)
+			clearSelection();
+	}
+
+	/**
+	 * 表单提交成功后的落定：
+	 * - 编辑：列表里那条是旧值，静默刷新校准（不重置滚动、不清空选中）；
+	 * - 新建：先就地 patch 进列表，再 `replace` `?id` 为真实主键，最后静默刷新。
+	 *
+	 * 新代 `POST /iam/policies` 把主键放在信封顶层（`{ code, message, id }`），composable 用
+	 * `keyword` 回读刚建好的那一行；拿不到时回落到整表刷新（不做猜测式选中）。
+	 */
+	function onSaved(created: IamPolicy | undefined): void {
+		if (editing.value) {
+			editing.value = false;
+			reload();
+			return;
+		}
+
+		if (!created?.id) {
+			reload();
+			return;
+		}
+
+		rows.value = [created, ...rows.value];
+		total.value += 1;
+		selection.set(created.id);
+		reload();
+	}
+
+	// ── 删策略（入口在右栏工具栏，弹窗只确认）────────────────────────────────
+	const deleteOpen = ref(false);
+
+	/** 删成功后当前记录已不存在：清掉 `?id` 再刷新，避免停在「记录不存在」空态 */
+	function onDeleted(): void {
+		clearSelection();
+		reload();
+	}
+
+	// ── 文档预览与复制（§7.2：只做格式化预览 + 复制，不提供编辑器）─────────────
+	const documentPreview = computed(() => previewPolicyDocument(selected.value?.document));
+
+	/** 复制文档原文：`navigator.clipboard` 在非安全上下文不可用，失败要说出口而不是静默 */
+	async function copyDocument(): Promise<void> {
+		const text = selected.value?.document;
+		if (!text)
+			return;
+
+		try {
+			await navigator.clipboard.writeText(text);
+			toast.add({ title: t("pages.system-policy.copied"), color: "success" });
+		} catch {
+			toast.add({ title: t("pages.system-policy.copyFailed"), color: "error" });
+		}
+	}
+
+	/** 租户展示：本页没有租户目录，原样显示标识（不伪造名称） */
+	function tenantName(id: string | null | undefined): string {
+		return id || "—";
+	}
+
+	/**
+	 * 范围说明三态（§7.3）：讲的是**可见范围**，不是权限等级 ——
+	 * 新代没有业务级鉴权，可见范围只由会话租户决定（UP-RBAC-01 / UP-RBAC-09）。
+	 */
+	const scopeAlert = computed(() => {
+		if (user.value && user.value.tenantId === null)
+			return { color: "neutral" as const, title: "pages.system-policy.scopePlatformTitle", description: "pages.system-policy.scopePlatform" };
+
+		if (user.value)
+			return { color: "info" as const, title: "pages.system-policy.scopeTenantTitle", description: "pages.system-policy.scopeTenant" };
+
+		return { color: "warning" as const, title: "pages.system-policy.scopeUnknownTitle", description: "pages.system-policy.scopeUnknown" };
+	});
+
+	// ── 取数（服务端分页 + 服务端 keyword）────────────────────────────────────
 	function describeError(error: unknown): string {
 		const key = policyErrorKey(error, "pages.system-policy");
 		if (key)
@@ -466,41 +601,37 @@
 			: t("pages.system-policy.errors.failed");
 	}
 
-	/**
-	 * 全量规则：逐页累加到不足一页为止。
-	 *
-	 * 为什么不吃首页就算：客户端搜索必须覆盖全部规则，只搜当前页会让「搜不到」变成假结论。
-	 * `MAX_RULE_PAGES` 是 `total` 异常时的兜底，不是产品上限。
-	 */
-	async function loadAll(): Promise<void> {
-		// 超管调策略域恒 `401 10201`（UP-POL-08）：不发这次注定失败的请求，理由由页面级 Alert 说明
-		if (!canUseDomain.value || loading.value)
+	// 输入态与生效态分开：搜索防抖 300ms 才落生效（D2），改筛选一律回到第一页
+	const keyword = ref("");
+	const appliedKeyword = ref("");
+
+	async function load(): Promise<void> {
+		if (loading.value)
 			return;
 
 		loading.value = true;
 		errorMessage.value = undefined;
 
-		/**
-		 * 一次拉多少条（与界面上的「每页条数」无关）：界面分页是客户端切片，见 `rows` / `pageRows`。
-		 * 取 100 是为了少跑几轮请求，同时不超过上游隐性上限（同族列表端点的分页上限都不写在契约里）。
-		 */
-		const FETCH_PAGE_SIZE = 100;
-		const collected: AbacRule[] = [];
-
 		try {
-			// 注意：这里的 `page` 是**上游取数页**，与界面上的客户端分页游标无关（后者叫 `uiPage`）
-			for (let page = 1; page <= MAX_RULE_PAGES; page++) {
-				const result = await listRules(page, FETCH_PAGE_SIZE);
-				const chunk = result.list ?? [];
-				collected.push(...chunk);
+			const result = await list({
+				page: page.value,
+				page_size: pageSize.value,
+				keyword: appliedKeyword.value || undefined
+			});
 
-				if (chunk.length < FETCH_PAGE_SIZE || collected.length >= (result.total ?? 0))
-					break;
+			rows.value = result.list ?? [];
+			total.value = result.total ?? 0;
+
+			// 命中变少时回退到最后一页，避免停在空白页
+			const lastPage = Math.max(1, Math.ceil(total.value / pageSize.value));
+			if (page.value > lastPage) {
+				page.value = lastPage;
+				loading.value = false;
+				await load();
 			}
-
-			allRules.value = collected;
 		} catch (error) {
-			allRules.value = [];
+			rows.value = [];
+			total.value = 0;
 			errorMessage.value = describeError(error);
 		} finally {
 			loading.value = false;
@@ -508,32 +639,31 @@
 	}
 
 	function reload(): void {
-		void loadAll();
+		void load();
 	}
 
-	/** 生效态落定：客户端过滤，不触发任何请求；游标回第一页（换命中集合后旧页码无意义） */
-	function applyKeyword(): void {
+	/** 落生效态并重新取第一页（`page` 变了由 `watch(page)` 触发加载，避免重复请求） */
+	function applyFilters(): void {
 		appliedKeyword.value = keyword.value.trim();
-		uiPage.value = 1;
+
+		if (page.value !== 1) {
+			page.value = 1;
+			return;
+		}
+
+		reload();
 	}
 
 	// 搜索框防抖 300ms（D2）：输入即生效，不需要再点「筛选」
-	watchDebounced(keyword, () => applyKeyword(), { debounce: 300 });
+	watchDebounced(keyword, () => applyFilters(), { debounce: 300 });
+	// 单页条数变化同样走 `applyFilters()`：换条数后 `page * pageSize` 的偏移必然错位，必须回第一页
+	watch(pageSize, () => applyFilters());
 
-	/** 复制 DSL 原文：`navigator.clipboard` 在非安全上下文不可用，失败要说出口而不是静默 */
-	async function copyDsl(dsl: string): Promise<void> {
-		if (!dsl)
-			return;
-
-		try {
-			await navigator.clipboard.writeText(dsl);
-			toast.add({ title: t("pages.system-policy.copied"), color: "success" });
-		} catch {
-			toast.add({ title: t("pages.system-policy.copyFailed"), color: "error" });
-		}
-	}
+	watch(page, () => {
+		void load();
+	});
 
 	onMounted(() => {
-		void loadAll();
+		void load();
 	});
 </script>

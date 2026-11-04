@@ -41,7 +41,8 @@ tags:
 | C3 | `feat(bff): 网关白名单按新代命名空间重建，出口归一与脱敏` ✅ | `shared/types/api.ts`、`server/utils/bff/{gateway,proxy}.ts`、`scripts/{check-bff,lib/bff-harness}.mjs` | `pnpm build:server && pnpm check:bff`（82/82）+ `pnpm check:ui`（103/103） |
 | C4a | `refactor(system): 用户管理改接 iam/users，试算随 G5 下线` ✅ | `shared/types/{account,tenant,department}.ts`、`layers/system/app/{composables/useAccounts,composables/useTenants,composables/useDepartments,composables/usePolicies,utils/accountError}.ts`、`layers/system/app/components/User/*`、`layers/system/app/pages/system/user.vue`、`pages/system/policy.vue`（移除试算入口）、`shared/types/policy.ts`、i18n、`scripts/{check-ui,check-bff}.mjs`、`scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（84/84）+ `pnpm check:ui`（103/103） |
 | C4b | `refactor(system): 审计页改接 audit/operation-logs 与归档` | `shared/types/audit.ts`、`composables/{useAuditLogs,useAuditExport}.ts`、`pages/system/log.vue`、假上游与自检 | `pnpm check:ui` + 手测 `/system/log` |
-| C4c | `refactor(system): 策略与权限页改接 iam/roles 与 iam/policies，删除旧代白名单组` | `shared/types/policy.ts`、`composables/{usePolicies,usePermissions}.ts`、`pages/system/{policy,permission}.vue`、`shared/types/api.ts`（旧代组删除）、`check:bff`（旧名 404 断言） | `pnpm check:bff` + `pnpm check:ui` + 手测两页 |
+| C4c-1 | `refactor(system): 策略页改接 iam/policies（CRUD + 文档预览）` ✅ | `shared/types/policy.ts`（新代类型段）、`layers/system/app/{composables/usePolicies,utils/policyError,utils/policyDocument}.ts`、`components/Policy/{PolicyForm,PolicyDeleteModal}.vue`、`pages/system/policy.vue`、i18n（`pages.system-policy`）、`scripts/{check-ui,check-bff}.mjs`、`scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（92/92）+ `pnpm check:ui`（111/111） |
+| C4c-2 | `refactor(system): 权限页改接 iam/roles + role-policies + subject-roles，删除旧代白名单组` | `shared/types/policy.ts`（旧代段删除）、`composables/usePermissions.ts`、`pages/system/permission.vue`、`shared/types/api.ts`（旧代组删除）、`check:bff`（旧名 404 断言） | `pnpm check:bff` + `pnpm check:ui` + 手测两页 |
 
 ---
 
@@ -295,12 +296,16 @@ export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): re
 | C3 | `scripts/check-bff.mjs` ⑧ | — | 新增 8 条：「asset 放行并透传」「`snmp_auth_pass` → `***`」「`snmp_priv_pass` → `***`」「其余字段原样」「响应体无明文凭据」「`list: null` → `[]`」「分页字段不受影响」「`system` / `transmission` 在白名单内」 |
 | C4a | `scripts/lib/bff-harness.mjs` | 无 `iam/users` / `iam/tenants` / `iam/departments` | 新增三条：列表按 `keyword` / `status` / `department_id` 真过滤、`page_size` 分页、空结果 `list: null`；`POST` 回 `{ code, message, id }`、重复用户名 `200 + 10002`、缺字段 `200 + 40001`；`PUT` / `DELETE /iam/users/{id}`（目标不存在回 `400` +「记录不存在」） |
 | C4a | `scripts/check-ui.mjs` ③ | 假上游固定账号集 `ACC-1001…`、等级候选断言 | 用户集换 `u_alice` / `u_bob` / `u_carol`；等级候选用例改为「建号表单只剩部门一个下拉」；建号用例改填 `username` / 显示名 / 邮箱 / 口令，断言 `id` 回读与 `?id` replace |
+| C4c-1 | `scripts/lib/bff-harness.mjs` | 无 `iam/policies`（`/abac/rule` 假路由随旧代退场删除） | 新增 `iamPolicies` 三条种子 + `GET|POST /iam/policies`、`GET|PUT|DELETE /iam/policies/{id}`；`keyword` 真过滤、`code` 过滤不实现（对齐 UP-RBAC-06）、非法 `document` / 重复 `code` 回 **`400` + 纯文本 SQLSTATE**、删除固定一条回 **`200 {code:400}`**（UP-RBAC-05）；另加 `sendText` 以支持纯文本失败体 |
+| C4c-1 | `scripts/check-bff.mjs` ⑧ | — | 新增 8 条：`iam/policies` 透传 snake_case、`keyword` 服务端生效、`code` 过滤被静默忽略、非法 `document` → 400 不判成功、重复 `code` → 400 且原文保留、建策略主键在信封顶层、删除失败 `200 + code 400`、删除成功 `code 0` |
+| C4c-1 | `scripts/check-ui.mjs` 7.3b | 策略页只有「列表尾部落到四个列表页」一条间接覆盖 | 新增 5 条：默认选中首行 + 服务端分页（`page_size=15`，不发 `code` / `policy_type` / `enabled`）、文档 JSON 格式化预览、搜索走服务端 `keyword`、内联新建表单建成并 `?id` replace、删除被拒（`200 + code 400`）时报错且保留弹窗 |
 
 C1 落码实测（2026-11-04）：`pnpm check:bff` 83/83、`pnpm check:ui` 105/105。
 C2 落码实测（2026-11-04，同一上游）：`pnpm check:bff` 74/74、`pnpm check:ui` 103/103
 —— 断言总数下降是因为 MFA 绑定（G8）、强制改密（G2）、刷新轮换与 whoami 相关用例随能力退场被删除。
 C3 落码实测（2026-11-04）：`pnpm check:bff` 82/82（74 + 8）、`pnpm check:ui` 103/103、`pnpm lint` / `pnpm typecheck` 无输出。
 C4a 落码实测（2026-11-04）：`pnpm check:bff` 84/84（82 + 2：`iam/users` 透传 snake_case、空结果归一 `[]`）、`pnpm check:ui` 103/103（等级候选用例改成「建号表单只剩部门一个下拉」，建号用例改为断言 `id` 回读 + `?id` replace，断言总数不变）、`pnpm lint` / `pnpm typecheck` / `pnpm build:server` 无输出。
+C4c-1 落码实测（2026-11-04）：`pnpm check:bff` 92/92（84 + 8：`iam/policies` 的列表 / `keyword` / 被忽略的 `code` 过滤 / 两条 400 原始 SQL / 建策略顶层主键 / 删除失败 `200 + code 400` / 删除成功）、`pnpm check:ui` 111/111（103 + 5 条策略页用例，含「新建前先清搜索」这条实测坑：`keyword` 不清，新行会被过滤掉而看不见）、`pnpm lint` / `pnpm typecheck` / `pnpm build:server` 无输出。
 
 断言数变化须同步更新脚本自身摘要的 `N/N` 与相关架构文档里的计数（`.clinerules`「CI self-check conventions」）。
 

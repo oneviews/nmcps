@@ -243,9 +243,18 @@ export async function startUpstream(port) {
 		{ permissionId: 3, permCode: "system:account:read", permName: "账号只读", resourceType: 2, resourcePath: "/api/v1/account/*", action: "read", fieldScope: "", status: 1 }
 	];
 
-	const abacRules = [
-		{ ruleId: 1, ruleCode: "RULE-IP", ruleName: "内网放行", roleCode: "", conditionDsl: "clientIp in ('10.0.0.0/8')", priority: 10, status: 1 },
-		{ ruleId: 2, ruleCode: "RULE-HOUR", ruleName: "运维时段", roleCode: "ROLE-OPS", conditionDsl: "hour >= 9 && hour <= 18", priority: 20, status: 1 }
+	/**
+	 * 新代策略假数据（`GET /iam/policies`，2026-11-04 实测字段）：给 `/system/policy` 两栏自查用。
+	 * 三条硬要求，否则用例测不出真伪：
+	 *   - `keyword` 真的命中 name / code（`code` / `policy_type` / `enabled` 传了被静默忽略，UP-RBAC-06）；
+	 *   - 分页字段是 `page_size`（不是 `pageSize`），`total` 要能分页；
+	 *   - 留一条「删除回 `200 {code:400}`」的样本（`pol_role_reader_isp_a`），把 UP-RBAC-05 的
+	 *     失败通道固定进假上游，否则「删除失败」分支永远测不到。
+	 */
+	const iamPolicies = [
+		{ id: "pol_platform_full", tenant_id: "tnt_default", name: "平台全权限", code: "platform.full_access", policy_type: "system", document: "[{\"Action\":[\"*\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]", description: "平台内置全权限策略", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
+		{ id: "pol_tenant_reader", tenant_id: "tnt_default", name: "租户只读", code: "tenant.readonly", policy_type: "custom", document: "[{\"Action\":[\"read\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]", description: "自查用自建策略", enabled: true, is_system: false, created_at: "2026-11-04T09:00:00+08:00", updated_at: "2026-11-04T09:00:00+08:00", deleted_at: null },
+		{ id: "pol_role_reader_isp_a", tenant_id: "t_isp_a", name: "ISP-A 角色只读", code: "isp.role.readonly", policy_type: "custom", document: "[]", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:10:00+08:00", updated_at: "2026-11-04T09:10:00+08:00", deleted_at: null }
 	];
 
 	/** 分页信封：与审计域一致（`page` / `pageSize` 按请求原样回显） */
@@ -283,6 +292,17 @@ export async function startUpstream(port) {
 		const send = (status, payload) => {
 			res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
 			res.end(JSON.stringify(payload));
+		};
+
+		/**
+		 * 纯文本响应：真实上游的失败不总是信封 ——
+		 * `GET /iam/policies/{id}` 不存在时回 `400` + `记录不存在`，
+		 * 唯一键 / jsonb 失败回 `400` + 原始 `ERROR: … (SQLSTATE 23505)`。
+		 * BFF 与页面都必须按「非信封」处理，假上游不能把它包装成 JSON。
+		 */
+		const sendText = (status, text) => {
+			res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+			res.end(text);
 		};
 
 		if (url.pathname === "/__control/down") {
@@ -579,6 +599,85 @@ export async function startUpstream(port) {
 				return send(404, { code: 10404, message: "iam_path_not_found" });
 			}
 
+			// ── `iam/policies`（NMCPS-DESIGN-005 §7）：/system/policy 的唯一数据源 ──
+			// `GET /iam/policies`：`keyword` 命中 name / code；`code` / `policy_type` / `enabled`
+			// 传了被静默忽略（UP-RBAC-06）—— 假上游也不实现它们，页面才测得出「筛选没生效」。
+			if (url.pathname === "/iam/policies" && req.method === "GET") {
+				const keyword = (url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+				const filtered = iamPolicies.filter((item) => !keyword
+					|| item.name.toLowerCase().includes(keyword)
+					|| item.code.toLowerCase().includes(keyword));
+
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			// `POST /iam/policies`：成功把新主键放在**信封顶层**（`{ code, message, id }`，没有 data）；
+			// 非法 document / 重复 code 回 `400` + 原始 SQL 文本（UP-RBAC-04），页面必须换成文案。
+			if (url.pathname === "/iam/policies" && req.method === "POST") {
+				let parsed = false;
+				try {
+					JSON.parse(body?.document ?? "");
+					parsed = true;
+				} catch {
+					parsed = false;
+				}
+				if (!parsed)
+					return sendText(400, "ERROR: invalid input syntax for type json (SQLSTATE 22P02)");
+				if (iamPolicies.some((item) => item.code === body?.code))
+					return sendText(400, "ERROR: duplicate key value violates unique constraint \"uk_sys_policy_tenant_code\" (SQLSTATE 23505)");
+
+				const created = {
+					id: `pol_${body.code}`,
+					tenant_id: "tnt_default",
+					name: body.name ?? "",
+					code: body.code,
+					policy_type: body.policy_type ?? "custom",
+					document: body.document,
+					description: body.description ?? "",
+					enabled: true,
+					is_system: false,
+					created_at: "2026-11-04T10:00:00+08:00",
+					updated_at: "2026-11-04T10:00:00+08:00",
+					deleted_at: null
+				};
+				iamPolicies.push(created);
+				return send(200, { code: 0, message: "success", id: created.id });
+			}
+
+			const iamPolicyPath = url.pathname.match(/^\/iam\/policies\/([^/]+)$/);
+			if (iamPolicyPath) {
+				const id = decodeURIComponent(iamPolicyPath[1]);
+				const record = iamPolicies.find((item) => item.id === id);
+
+				// 实测：目标不存在回 **HTTP 400 + 纯文本「记录不存在」**（非信封）
+				if (!record)
+					return sendText(400, "记录不存在");
+
+				if (req.method === "GET")
+					return send(200, { code: 0, message: "success", data: record });
+
+				if (req.method === "PUT") {
+					// `enabled` 写入被忽略（UP-RBAC-03）：只有 name / document / description 生效
+					for (const key of ["name", "document", "description"]) {
+						if (body?.[key] !== undefined)
+							record[key] = body[key];
+					}
+					record.updated_at = "2026-11-04T10:30:00+08:00";
+					return send(200, { code: 0, message: "success" });
+				}
+
+				if (req.method === "DELETE") {
+					// `pol_role_reader_isp_a` 固定走 UP-RBAC-05 的失败通道：transport 仍是 200，业务码 400
+					if (record.id === "pol_role_reader_isp_a")
+						return send(200, { code: 400, message: "资源不存在或无权访问" });
+
+					iamPolicies.splice(iamPolicies.indexOf(record), 1);
+					return send(200, { code: 0, message: "success" });
+				}
+
+				return send(404, { code: 10404, message: "iam_path_not_found" });
+			}
+
 			if (url.pathname === "/iam/tenants" && req.method === "GET")
 				return send(200, { code: 0, message: "success", data: iamPaged(iamTenants, url) });
 
@@ -715,8 +814,8 @@ export async function startUpstream(port) {
 			return send(404, { code: 10404, msg: "audit_path_not_found" });
 		}
 
-		// ── /role、/permission、/abac/rule：策略域最小只读数据（`/system/permission`、
-		//    `/system/policy` 的列表栏自查要真实渲染列表态，见 NMCPS-ARCH-006 §3.8） ──
+		// ── /role、/permission：旧代策略域最小只读数据（只有 `/system/permission` 还在用；
+		//    `/system/policy` 已迁到 `iam/policies`，C4c code cut 2 后整段可删） ──
 		if (url.pathname === "/role" && req.method === "GET") {
 			const keyword = (url.searchParams.get("keyword") ?? "").trim();
 			const matched = keyword
@@ -748,9 +847,6 @@ export async function startUpstream(port) {
 				&& (!resourceType || item.resourceType === resourceType));
 			return send(200, { code: 0, msg: "success", data: paged(matched, url) });
 		}
-
-		if (url.pathname === "/abac/rule" && req.method === "GET")
-			return send(200, { code: 0, msg: "success", data: paged(abacRules, url) });
 
 		return send(404, { message: "upstream_not_found" });
 	});
