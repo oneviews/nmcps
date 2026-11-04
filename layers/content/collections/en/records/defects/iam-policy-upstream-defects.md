@@ -143,4 +143,6 @@ All self-created probe objects (roles `probe_c4c_*`, policies `probe_c4c_pol*`, 
 - The `subject_type` value set: only `user` was verified; whether `group` / `api_key` work is unprobed (`/iam/groups` and `/iam/api-keys` exist but are empty).
 - `document` semantic validation: only "invalid JSON is rejected by jsonb" was verified; a valid JSON that violates policy grammar (e.g. `Action` as a string) was not tested.
 - Why objects created by a platform session land in `tnt_default` instead of failing with "missing tenant": possibly because the super admin itself sits in the default tenant; needs upstream confirmation.
+- **Real-instance** write-back of `PUT /iam/policies/{id}`: C4c-1 only verified the request shape ("send `name` / `document` / `description` only, nothing else") and the success branch against the fake upstream in `check:bff`. Until a rename and a description edit are each hand-tested on the real instance, do not treat "editing persists" as established (`enabled` still counts as ineffective per `UP-RBAC-03`).
+
 

@@ -152,3 +152,5 @@ comm -23 /tmp/sr.txt /tmp/us.txt   # 有绑定、但用户已不存在
 - `subject_type` 的取值集合：只验证 `user`；`group` / `api_key` 是否支持未探测（`/iam/groups`、`/iam/api-keys` 端点存在但种子为空）。
 - `document` 的语义校验：只验证「非法 JSON 被 jsonb 拒绝」，未验证合法但不合 policy 语法的 `document`（如 `Action` 写成字符串）是否被接受。
 - 平台会话建对象为何落 `tnt_default`（而不是报「缺少租户」）：可能与超管账号本身挂在默认租户有关，需上游确认。
+- `PUT /iam/policies/{id}` 的**真实环境**写回：C4c-1 只用 `check:bff` 的假上游验证了「只发 `name` / `document` / `description` 三项、其余字段不发」的请求形状与成功分支；真实实例上的改名称 + 改描述各手测一次前，勿把「编辑已落库」当作既成事实（`enabled` 仍按 `UP-RBAC-03` 视为无效）。
+
