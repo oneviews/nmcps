@@ -193,6 +193,10 @@ if (process.argv.includes("--seal")) {
 }
 
 // `--write-fixtures`：重采样本后退出，不跑断言（断言要求样本非空且最新）
+// 不绿不写：失败的输出一旦写成样本，就成了「真实日志」的赝品，后面谁也看不出来。
+// `--write-fixtures` 看退出码，`--from-ci` 看该步骤在这次运行里的结论——两条路径共用这一句，措辞不许分叉
+const NO_RED_SAMPLE = "不把失败输出固化成样本";
+
 if (process.argv.includes("--write-fixtures")) {
 	const jobs = [
 		// lint / typecheck 成功时只有 pnpm 回显的 `$ eslint .` 一行，banner 必须留（正则就指着它）
@@ -210,10 +214,10 @@ if (process.argv.includes("--write-fixtures")) {
 
 	let problems = 0;
 	for (const { key, cmd, status, body } of collected) {
-		// 不绿不写：失败的输出一旦写成样本，就成了「真实日志」的赝品，后面谁也看不出来
+		// 不绿不写（规矩见 NO_RED_SAMPLE）：失败的输出一旦写成样本，就成了「真实日志」的赝品
 		if (status !== 0) {
 			problems++;
-			console.log(`❌ 跳过 ${fixturePath(key)}：\`${cmd}\` exit ${status}，不把失败输出固化成样本（先让这步本地变绿再重采）`);
+			console.log(`❌ 跳过 ${fixturePath(key)}：\`${cmd}\` exit ${status}，${NO_RED_SAMPLE}（先让这步本地变绿再重采）`);
 			continue;
 		}
 		const source = `本地 \`${cmd}\` 真实输出尾部（${new Date().toISOString().slice(0, 10)} 重采）`;
@@ -259,12 +263,12 @@ if (process.argv.includes("--from-ci")) {
 	} catch {
 		fail(`gh run view ${runId} 的输出不是 JSON`);
 	}
-	const stepToJob = new Map();
+	// 步骤名 → { job 名, 结论 }：`# source:` 要写 job 名，而结论决定这一步的日志能不能当样本
+	// （失败步骤的日志同样被 ci.yml 的 tee 落盘并上传，直接回填就等于把红输出固化下来）
+	const stepMeta = new Map();
 	for (const job of jobsMeta) {
-		// 结论也记下来：失败步骤的日志同样被 ci.yml 的 tee 落盘并上传，直接回填就等于把红输出
-		// 固化成「真实日志样本」——和 --write-fixtures 的「不绿不写」对着干
 		for (const step of job.steps ?? [])
-			stepToJob.set(step.name, { job: job.name, conclusion: step.conclusion ?? step.status });
+			stepMeta.set(step.name, { job: job.name, conclusion: step.conclusion ?? step.status });
 	}
 
 	const dir = join(ROOT, "ci-logs/downloads", runId);
@@ -299,16 +303,17 @@ if (process.argv.includes("--from-ci")) {
 
 	let problems = 0;
 	for (const { key, artifact, file, step, tail, keep, keepBanner } of CI_ARTIFACTS) {
-		const meta = stepToJob.get(step);
+		const meta = stepMeta.get(step);
 		if (!meta) {
 			problems++;
 			console.log(`❌ 跳过 ${fixturePath(key)}：run ${runId} 里找不到名为「${step}」的步骤（步骤改名了？同步 CI_ARTIFACTS）`);
 			continue;
 		}
-		// 与 --write-fixtures 同一条规矩：失败的输出绝不当样本。产物里那份 log 是真的，但它是红的
+		// 与 --write-fixtures 同一条规矩（NO_RED_SAMPLE），只是这里读的是步骤结论而不是退出码：
+		// 产物里那份 log 是真的，但它是红的
 		if (meta.conclusion !== "success") {
 			problems++;
-			console.log(`❌ 跳过 ${fixturePath(key)}：run ${runId} 里「${step}」的结论是 ${meta.conclusion}，不把失败输出固化成样本（换一次该步骤 success 的运行）`);
+			console.log(`❌ 跳过 ${fixturePath(key)}：run ${runId} 里「${step}」的结论是 ${meta.conclusion}，${NO_RED_SAMPLE}（换一次该步骤 success 的运行）`);
 			continue;
 		}
 		const path = findArtifactFile(artifact, file);
