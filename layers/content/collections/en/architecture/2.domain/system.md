@@ -1,7 +1,7 @@
 ---
 docId: NMCPS-DESIGN-005
 title: "System Management Domain Baseline"
-description: "Tier 2 design baseline for the system management domain (domain.system): system logs (audit-log list, detail, chain verification and export), policy management, user and permission management, including the /system/log and /system/user endpoint, field, permission-matrix and error-code baseline. This is the single authority for the domain.system domain."
+description: "Tier 2 design baseline for the system management domain (domain.system): system logs (operation logs, security logs and archive records, including running an archive), policy management, user and permission management, including the /system/log and /system/user endpoint, field, permission-matrix and error-code baseline. This is the single authority for the domain.system domain."
 excerpt: "System logs (audit), policy, user and permission management (incl. the implementation baselines)."
 keywords:
   - "system"
@@ -12,7 +12,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.5.7
+version: 0.6.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -20,7 +20,7 @@ dependsOn:
   - NMCPS-GOV-003
   - NMCPS-ARCH-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-03"
+updatedAt: "2026-11-04"
 icon: "carbon:settings"
 tags:
   - "Domain"
@@ -32,7 +32,7 @@ tags:
 
 > **Responsibility**: single authority for `domain.system` — system logs, policy management, user and permission management. IAM architecture: `NMCPS-ARCH-003`.
 > **Audience**: implementation engineers / AI assistants.
-> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1`. The endpoints and fields in §6 / §7 / §8 / §9 (`/api/v1/account`, `/api/v1/role`, `/api/v1/audit`, `accountLevel`, `/abac/rule`, `/access/dryrun`, `/audit/export`, `/audit/verify`) describe the **old generation** and must be rewritten against the new contract (the `iam` / `audit` namespaces); until then, live probing wins, and the switch record is indexed by `NMCPS-GOV-003`.
+> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1`. **§9 was rewritten against the new `audit/*` families in 0.6.0**; §6 still describes the old generation (`/api/v1/account`, `accountLevel` — the cn 0.6.0 `iam/users` rewrite is not translated yet), and §7 / §8 (`/api/v1/role`, `/api/v1/permission`, `/api/v1/abac/rule`, `/api/v1/access/dryrun`) are still old generation too. Those sections must be rewritten against the `iam` namespace; until then, live probing wins, and the switch record is indexed by `NMCPS-GOV-003`.
 
 ---
 
@@ -46,7 +46,7 @@ System management is the "governance plane" of the NMS: it manages runtime logs,
 
 | Sub-page | Function |
 | :--- | :--- |
-| log | Audit log: list query, detail, chain verification and export (`/system/log`) |
+| log | Audit log: operation / security / archive-record lists and details plus running an archive (`/system/log`) |
 | policy | Global policy management |
 | user | User account management |
 | permission | Permission assignment (role/policy binding) |
@@ -282,68 +282,71 @@ Upstream missing / unreachable / timeout reuse the operational guidance from `up
 
 ## 9. `/system/log` audit log (implementation baseline)
 
-> Source: probing `http://192.168.1.55:8888/api/v1` on 2026-11-02 with both identities (super admin / tenant admin) plus a swagger diff. Contract deviations are filed as `NMCPS-REC-004` (`layers/content/collections/en/records/defects/audit-upstream-defects.md`); this section only states what the page may rely on.
+> Source: probing `http://192.168.1.55:8888/api/v1` on 2026-11-04 with both identities (super admin / tenant admin) plus a field-by-field openapi diff. The old generation (0.5.x: one endpoint plus `category`, `verify` and `export`) has been retired as a whole, so this section is rewritten against the new `audit` namespace (C4b, `NMCPS-ADR-0018` §3). Contract deviations are filed as `NMCPS-REC-004` (`layers/content/collections/en/records/defects/audit-upstream-defects.md`); this section only states what the page may rely on.
 
 ### 9.1 Data sources and endpoints
 
-| Capability | BFF path | Upstream | Notes |
+| Capability | BFF path | Upstream | Parameters |
 | :--- | :--- | :--- | :--- |
-| List | `GET /api/audit` | `GET /api/v1/audit` | `page` / `pageSize`, optional `accountId` / `deviceCode` / `sessionId` / `category` / `traceId` / `startTime` / `endTime` |
-| Detail | `GET /api/audit/{logCode}` | Same | The path segment is `logCode` (`AUD…`), not a numeric id; an unknown code answers `404 10301` |
-| Chain verification | `POST /api/audit/verify` | Same | Body `{ startTime?, endTime? }`, returns `{ intact, checkedCount, brokenAtLogId }`; **it is a write** (each call appends an audit entry, UP-AUD-05) |
-| Export job list | `GET /api/audit/export` | Same | Only `page` / `pageSize`, **no filter by status or name** |
-| Create export | `POST /api/audit/export` | Same | `exportName` / `startTime` / `endTime` required, `accountId` / `category` / `deviceCode` optional |
+| Operation-log list | `GET /api/audit/operation-logs` | Same | `page` / `page_size`, optional `keyword` / `username` / `module` / `status` / `created_from` / `created_to` |
+| Operation-log detail | `GET /api/audit/operation-logs/{id}` | Same | The path segment is the primary key `id` (UUID); the old generation used `logCode` |
+| Security-log list | `GET /api/audit/security-logs` | Same | `page` / `page_size`, optional `subject_name` / `action` / `auth_decision` / `ip_address` / `logged_from` / `logged_to` |
+| Security-log detail | `GET /api/audit/security-logs/{id}` | Same | Same as the left cell |
+| Archive-record list | `GET /api/audit/archive/records` | Same | `page` / `page_size`, optional `table_name` / `status`; **no time condition** |
+| Archive-record detail | `GET /api/audit/archive/records/{id}` | Same | Same shape as a list row |
+| Run archiving | `POST /api/audit/archive/run` | Same | Body `{ table_name? }` (omitted = archive both tables), returns `{ "<table>": rows }` |
 
-- **Export jobs have no detail endpoint and no delete endpoint** (`GET|DELETE /api/audit/export/{code}` answers `404`): progress can only be read back from the list and a job can never be reclaimed (UP-AUD-07).
+- **Each family has its own endpoint, filter parameters and detail endpoint** — this is not "one endpoint plus a filter". Switching family swaps the endpoint, the parameter names and the fields, so the page branches per family instead of assuming one parameter set fits all three.
+- Two old capabilities have **no counterpart** in the new generation and are retired together with gaps G6 / G7: `POST /audit/verify` (hash-chain verification) and `GET|POST /audit/export` (export jobs). "Where does expired data go" is now answered by the archive chain.
 - The BFF allow-list must contain `audit` (`GATEWAY_RESOURCES` in `shared/types/api.ts`), otherwise every call answers `404 bff_resource_not_allowed`.
 - The contract types live in `shared/types/audit.ts` (shared by `app/` and `server/`); the page declares no fields of its own.
 
 ### 9.2 Field semantics
 
-- **A list row is the first 12 detail fields**: `logCode` / `category` / `accountId` / `deviceCode` / `sessionId` / `traceId` / `action` / `resource` / `result` / `clientIp` / `eventTime` / `logHash`; the detail adds `sourceService` / `beforeSnapshot` / `afterSnapshot` / `detailJson` / `prevHash`.
-- `category`: only `session` (login / logout / session revocation) and `api` (interface calls) were observed; the value is **case-sensitive** and anything else is silently ignored, returning the full set (UP-AUD-02) — so the page offers only these two and renders other values as an unknown category with their raw value.
-- `result`: `1` success / `2` failure; no sample exists for other values, so they fall back to `result.unknown` instead of a guess.
-- `eventTime`: RFC3339 with an offset (`2026-11-02T03:15:09+08:00`) — trimmed to `YYYY-MM-DD HH:MM:SS` for display, **never converted between zones**.
-- `action` / `resource`: session rows carry `auth.login.success` / `auth`, API rows carry `METHOD path` / the request path; both render as returned.
-- `accountId`: the meaning of `0` is unverified (it does not imply "system action"); as a **filter** both `0` and an empty string count as "not provided" (UP-AUD-03).
-- `pageSize`: upstream has no stable ceiling (`200` really returns 200 rows, `500` returns 20 rows but echoes 500, UP-AUD-03) — so the client clamps to `AUDIT_MAX_PAGE_SIZE = 100` and offers 15 / 30 / 50 / 100 (15 by default, selector in the list footer, `NMCPS-ARCH-006` §3.8).
-- Time parameters: **both** `YYYY-MM-DD HH:MM:SS` and RFC3339 are accepted (the same window returns the same rows) and a malformed value is silently ignored, returning the full set (UP-AUD-04) — so the page always sends the space format (no offset, browser local time as typed) and rejects a reversed window locally.
-- Snapshot fields (`sourceService` / `beforeSnapshot` / `afterSnapshot` / `detailJson`) were empty strings in every sample (UP-AUD-09) — they render only when non-empty.
-- Export jobs: `status` is an **undocumented bare number** (only `1` observed), `downloadUrl` / `objectKey` are empty until the artefact exists and `totalRecords` stays `0` while running; the list read-back `createdAt` is 8 hours later than the create response (UP-AUD-08) — so `status` renders as a number and `createdAt` is not converted.
-- Verification result: `checkedCount` is the number of entries **actually checked**, and an empty window still answers `intact: true` (a single-ended window behaves the same, UP-AUD-04) — so the copy always quotes "N entries checked" and `checkedCount = 0` renders as a neutral notice stating that an empty window proves nothing.
+- **The primary key is `id` (UUID)**, which doubles as the detail path segment; it never enters a list query, it only drives `?id` deep links and detail fetches (the old `logCode` no longer exists).
+- `page_size`: 15 by default, options 15 / 30 / 50 / 100, with a page-level ceiling of `AUDIT_MAX_PAGE_SIZE = 100` (selector in the list footer, `NMCPS-ARCH-006` §3.8). An empty result arrives upstream as `list: null` and the BFF exit normalises it to `[]` (`NMCPS-ADR-0018` D6), so no consumer has to null-check.
+- Time bounds are **epoch-millisecond integers** (the old generation sent strings): `created_from` / `created_to` for operation logs, `logged_from` / `logged_to` for security logs. The page converts its `datetime-local` literal using **browser local time**; picking a calendar day yields a whole-day window `00:00:00` … `23:59:59` including both ends (dropping those 59 seconds loses the last half minute of the day), and a reversed window is rejected locally.
+- Archive records carry **no time condition**: `/audit/archive/records` only accepts `table_name` / `status`, so the page hides the whole range control in the archive family and sends no time parameter at all.
+- Archive-record fields were measured (one real `POST /audit/archive/run` on 2026-11-04, then read back): `id` / `table_name` / `archive_batch` / `rows_archived` / `cutoff_before` / `started_at` / `finished_at` / `status` / `created_at`. `*_at` / `cutoff_before` are RFC3339 with an offset (`2026-08-06T10:34:39.998235+08:00`); they are trimmed for display and **never converted between zones**.
+- **The entry fields of operation and security logs are not yet verified against real data** (this instance's audit database is empty; only the archive path has produced real samples, so that is where the measured field list comes from): the type file derives the registered field list from the openapi query parameters and sibling entities, so the page renders "a registered field that is missing shows `—`, an unregistered field is listed raw at the end of the detail pane" and keeps a permanent "field semantics" alert at the top of the detail pane — nobody should read "upstream did not record it" as "the page dropped it".
+- The archive result is a **row-count map**, not a job object: `0` rows is a normal result (nothing past the retention cutoff) rather than a failure, and the dialog has to say so before it runs.
 
 ### 9.3 Permission matrix and page behaviour
 
-| Action | Super admin (`accountLevel: 0`) | Tenant admin (`accountLevel: 1`) |
+| Action | Super admin | Tenant admin |
 | :--- | :--- | :--- |
-| List / detail | Whole platform | Available, **the scope is filtered by tenant upstream** (`total` 1893 vs 1709 at the same moment, every row's `accountId` inside that tenant; UP-AUD-01) |
-| Chain verification | Available (writes an entry) | Same |
-| Export job list / create | Available | Same |
+| All three families, list / detail | Whole platform | Available; **scope is filtered upstream per tenant** |
+| Run archiving | Available (a write that leaves a batch record) | The page shows the entry too and lets upstream judge; **not exercised under a tenant-admin identity** |
 
-Client narrowing (**not a security boundary**):
+Client narrowing (**not** a security boundary):
 
-1. Both identities fetch normally: the scope is filtered upstream, and the identity note at the top of the detail pane only states "you see the whole platform / your own tenant" (also in the empty selection; position rule: `NMCPS-ARCH-006` §4.1).
-2. Filters split by "does it decide the data scope": the **time range** (button label = current window summary; the `UPopover` holds a preset column — "all time / last 15 minutes / last hour / last 24 hours / last 7 days" — beside a two-month `UCalendar range`, with two `datetime-local` inputs underneath for second-level precision) and the **category** (`USelect`: any / session / API) stay standing in the toolbar left area; `accountId` / `deviceCode` / `sessionId` / `traceId` stay in the filter popover; the page size belongs to neither — it is presentation rather than a filter, so it sits in the list footer (`NMCPS-ARCH-006` §3.8, 15 by default). There is **no `result` / `keyword` control** because upstream ignores them. The criterion for standing is "hiding it would make people read the filtered `total` as the whole set"; the budget and rendering rules live in `NMCPS-ARCH-006` §4.1.
-3. The page uses `LayoutSplit` plus `useRecordSelection` over `?id`; `↑` / `↓` move the selection inside the list and the detail pane reads `GET /api/audit/{logCode}`.
-4. Verification is an **explicit button** that requires both time bounds; the list reloads either way (the check itself writes an entry) and the break point is shown as "entry #N" only (`brokenAtLogId` is a whole-chain index, never mapped to a list row); `checkedCount = 0` renders as a neutral notice, not a green success.
-5. The export dialog only creates, reads back and refreshes manually: the three required fields and a reversed window are rejected locally, there is **no progress bar and no polling** (no progress field exists), download appears only when `downloadUrl` is non-empty, and there is no delete.
-6. `check:ui` guards the toolbar on four counts: both standing controls are present and switching the category or picking a preset really puts `category` / `startTime` / `endTime` into the request; the filter popover no longer repeats the time range or category (only the four IDs); the left area stays within 45% of the content box; at 320px the time range collapses to an icon with no horizontal overflow. The list footer is guarded too: 49px tall, 15 rows per page by default, and a selection fill that stays readable in both themes (`NMCPS-ARCH-006` §3.8).
+1. Both identities fetch normally: the scope is filtered upstream and the page only states "you are looking at the whole platform / this tenant" at the top of the detail pane (also in the empty state; position rules in `NMCPS-ARCH-006` §4.1).
+2. Filters split on "does it decide the data scope": the **time range** (a button whose label is the current window summary, with a `UPopover` holding the "all time / last 15 minutes / last hour / last 24 hours / last 7 days" preset column, a two-month `UCalendar range`, and two second-precision `datetime-local` inputs under the calendar) and the **log family** (`USelect`: operation / security / archive) stay in the toolbar's left area; the popover only holds the identifiers this family's openapi really lists — operation logs `keyword` / `username` / `module` / `status`, security logs `subject_name` / `action` / `auth_decision` / `ip_address`, archive records `table_name` / `status`. Page size is neither: it is presentation, not filtering, and lives in the list footer (15 by default). The archive family has no time condition, so the range control disappears with it. The standing rule is "hiding it would let people read the filtered `total` as the whole set"; budget and rendering rules live in `NMCPS-ARCH-006` §4.1.
+3. The page uses `LayoutSplit` plus `useRecordSelection` over `?id`; `↑` / `↓` move the selection inside the list and the detail pane reads **the current family's detail endpoint**. Switching family returns to page 1 and clears the selection, since the old row does not exist in the new family.
+4. Archiving is an **explicit action**: the right-area button appears only in the list pane and outside the archive family, the dialog states "write, cannot be undone" and "0 rows is a normal result", and the archive-record list is reloaded afterwards so the new batch shows up.
+5. Verification and export entries are gone (G6 / G7): there is no "start verification" button, no "export" button and no export-progress polling.
+6. `check:ui` guards 11 cases: both standing controls exist, the left area stays within 45% of the content box, and the popover only holds this family's identifiers; the list renders from the family endpoint; selecting a row hits the family detail endpoint; a preset really rewrites `created_from` / `created_to` (epoch ms, 24h apart); the button label echoes the window; calendar day picks include both ends; switching to security logs swaps to `security-logs` plus `logged_from` / `logged_to`; the archive family hides the range control and sends no time parameter; at 320px the range collapses to an icon with no horizontal overflow. The list footer additionally asserts 49px height, 15 rows per page (`page_size`) and a selection fill readable in both themes (`NMCPS-ARCH-006` §3.8).
 
 ### 9.4 Error codes → page handling
 
+The new generation returns business errors as **HTTP 200 + `code≠0`**; the BFF preserves the business code and `apiGuard` throws `ApiError` from it (`NMCPS-ADR-0018` §3).
+
 | Code | Upstream meaning | Page handling |
 | :--- | :--- | :--- |
-| `10201` | Unauthenticated / session expired (the same code as "no permission", UP-AUD-01) | "Session expired or no permission" notice with a re-login hint, never the "load failed" branch |
-| `10301` | Target not found (entry purged or a bad `logCode`) | "That entry does not exist or has been purged" in the detail pane, selection kept so the user can retry |
-| `10101` | Invalid parameters | "invalid parameters" notice, user input preserved |
-| `10509` | Upstream internal error (also a missing export field, UP-AUD-06) | Generic failure notice plus a required-field check |
+| `40401` | Target not found (shared by all three detail endpoints; the `message` names the entity: "operation log not found" / "security audit log not found" / "archive record not found") | "That record does not exist or has been purged" in the detail pane, selection kept so the user can retry |
+| `10007` | Invalid / expired token | "Session expired or no permission" notice with a re-login hint, never the "load failed" branch |
+| `40001` | Field validation failed (time bounds / paging) | "invalid parameters" notice, user input preserved |
+| `10509` / `5xx` | Upstream internal error | Generic failure notice with a retry entry |
 | Non-envelope failure (`code = 0`) | Network | "Network error, please retry" |
 
-Upstream missing / unreachable / timeout reuse the operational guidance from `upstreamHintKey()`.
+`10201` means "wrong password" in the new generation and is **no longer** reused as an auth failure (the old reading is void). Upstream missing / unreachable / timeout reuse the operational guidance from `upstreamHintKey()`.
 
 ### 9.5 Known gaps
 
-`UP-AUD-01` / `02` / `03` / `04` / `05` / `06` / `07` / `08` / `09` in `NMCPS-REC-004`: tenant scoping is undocumented and an expired token shares its code with a denial, `category` is case-sensitive with unknown values ignored, unknown query parameters are dropped and `pageSize` has no stable ceiling, two time formats are accepted while invalid values are ignored, `verify` writes and reports a whole-chain index, a missing export field answers `500`, export has no detail or delete endpoint, export list timestamps are offset by 8 hours, and detail snapshots are always empty. The page relies only on the five confirmed endpoints and treats none of the gaps as contract.
+- **G6 / G7 (capability gaps)**: the new generation has neither hash-chain verification nor export-job endpoints. The old defects that lived on `verify` / `export` (UP-AUD-05 / 06 / 07 / 08) retire together with those endpoints, and the page no longer offers either path.
+- **Unverified field semantics**: the entry fields of operation and security logs have never been checked against real data (this instance's audit database is empty); only the archive-record fields were verified field by field. The page therefore renders "a registered field is missing" and "an unregistered field exists" explicitly instead of dropping either silently.
+- **Archiving is not exhaustively characterised**: it was exercised once, as a super admin, with 0 rows in both tables. Retention length, concurrent runs and a tenant admin's rights are all unverified, and the page promises nothing about them.
+- The old `UP-AUD-01` / `02` / `03` / `04` / `09` describe retired endpoints (`category` case sensitivity, no `pageSize` ceiling, two time formats, always-empty snapshots). They stay in `NMCPS-REC-004` as history and are **no longer contract**.
 
 ---
 
@@ -364,4 +367,5 @@ Upstream missing / unreachable / timeout reuse the operational guidance from `up
 | 2026-11-02 | 0.5.5 | **§9.3 item 2: the time-range popover becomes a "preset column + two-month calendar"**. The popover used to hold a single column of presets plus two `datetime-local` inputs, so a range like "last Wednesday to last Friday" had to be typed as two timestamps. It is now `components/Audit/RangePicker.vue` (popover shape copied from the Nuxt UI dashboard template's `HomeDateRangePicker`): a left preset column (matched preset highlighted, hidden on narrow viewports) beside a two-month `UCalendar range`, with two `datetime-local` inputs underneath for second-level precision; a day selection lands on a whole-day window `00:00:00` … `23:59:59`, and the first click opens the range while the second closes it (the end stays empty in between so reka keeps extending instead of restarting). All three entries (presets / calendar / typing) write the same `start` / `end` / `preset`; fetching still happens through the page's existing `watch`. Rendering details and two measured gotchas: `NMCPS-ARCH-006` §4.1 (0.2.15). |
 | 2026-11-03 | 0.5.6 | **The page size moves from the filter popover to the list footer, and all four list pages default to 15 rows**. Three measured problems: (1) the selected row fill was unreadable in both themes (`bg-elevated/60` on a white pane composites to nearly the same pixel) — `NMCPS-ARCH-006` 0.2.16 switches it to `bg-accented`; (2) the page size defaulted to 20 and only `/system/log` had one, buried in its filter popover, while `/system/user` and `/system/permission` had no entry at all and `/system/policy` did not paginate — now `DEFAULT_PAGE_SIZE = 15` (options 15 / 30 / 50 / 100, sourced from `shared/constants/paging.ts`) and all four pages render the selector in the footer; (3) the footer height is a single 49px token (`--app-list-footer-h`). This file follows: §7.3 item 3 notes client-side pagination slicing only the render layer while deep links still hit the full set, §9.2 changes the `pageSize` options to 15 / 30 / 50 / 100, §9.3 item 2 moves the page size out of the popover and item 6 adds the three footer assertions. |
 | 2026-11-03 | 0.5.7 | **§6 account-creation rules corrected from the 2026-11-03 re-probe (fixes "tenant admin can never create an account")**. Symptom: a tenant admin on `?id=new` saw only level `1` (its own) in the picker, and every submit returned `20103 can only manage downwards` — the level select had no viable option. Three measured facts: (1) the target level must be **strictly lower than the caller's own** (super admin `1`–`3`, tenant admin `2`–`3`); same or higher → `20103`, and `4` → `20102` (service accounts are provisioned by the system); (2) `POST /account` now requires `tenantId` (`0` counts as missing), so a super admin omitting it fails with `10101` — the form therefore gains a tenant picker fed by `GET /api/tenant`; (3) `UP-ACC-01` (tenant escalation) is closed upstream, so §6.5 and `NMCPS-REC-002` are updated and `UP-ACC-07` (mandatory `tenantId`) / `UP-ACC-08` (`4` belongs to service accounts) are filed. §6.1 adds the tenant endpoint, §6.2 rewrites level semantics, §6.3 rewrites the matrix and adds client narrowing items 1–2, §6.4 adds `20102` / `20103`. |
+| 2026-11-04 | 0.6.0 | **§9 rewritten against the new `audit/*` families (C4b)**: the old single endpoint `GET /audit?category=…` plus `POST /audit/verify` and `GET|POST /audit/export` is retired wholesale in favour of six read paths split by log family plus one write path — operation logs `GET /audit/operation-logs`, security logs `GET /audit/security-logs`, archive records `GET /audit/archive/records` (each with its own detail endpoint) and `POST /audit/archive/run`. The primary key moves from `logCode` to `id` (UUID), paging from `pageSize` to `page_size`, time bounds from strings to **epoch-millisecond integers** (`created_from` / `created_to`, `logged_from` / `logged_to`), and the empty `list: null` is normalised to `[]` at the BFF exit. The page becomes "three families, one page": a log-family `USelect` stands in the left area, the popover only holds that family's openapi parameters, and the archive family folds the range control away. Verification and export entries retire with gaps G6 / G7 and the archive dialog replaces export; the error-code table becomes `40401` / `10007` / `40001` (the old `10201` now means "wrong password"). Field semantics are layered honestly: archive-record fields are measured, operation / security entry fields have no real samples yet, so the page renders registered fields only and lists unregistered ones raw. The `/system/log` cases in `check:ui` go 8 → 11 (family switch swaps endpoint and time parameters, the archive family sends no time condition, selecting a row hits the family detail endpoint) and the total goes 105 → 106; the empty-list normalisation path in `check:bff` moves to `operation-logs`. |
 

@@ -1,7 +1,7 @@
 ---
 docId: NMCPS-DESIGN-005
 title: "系统管理领域基准"
-description: "系统管理域（domain.system）的 Tier 2 设计基准：系统日志（审计日志的列表、详情、链式校验与导出）、策略管理、用户与权限管理，含 /system/log 与 /system/user 的端点、字段、权限矩阵与错误码口径。本文是 domain.system 域的唯一权威。"
+description: "系统管理域（domain.system）的 Tier 2 设计基准：系统日志（操作日志 / 安全日志 / 归档记录三族，含归档执行）、策略管理、用户与权限管理，含 /system/log 与 /system/user 的端点、字段、权限矩阵与错误码口径。本文是 domain.system 域的唯一权威。"
 excerpt: "系统日志（审计）、策略、用户与权限管理的领域基准（含落码口径）。"
 keywords:
   - "system"
@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.6.0
+version: 0.7.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -33,7 +33,7 @@ tags:
 
 > **本文职责**：`domain.system` 域的唯一权威，定义系统管理——系统日志、策略管理、用户与权限管理。身份与访问控制的架构基准见 `NMCPS-ARCH-003`。
 > **目标读者**：实施工程师 / AI 助手。
-> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关。**第六节已于 0.6.0 按新代 `iam/users` 重写**；第七 / 八 / 九节仍写的是旧代（`/api/v1/role`、`/api/v1/permission`、`/api/v1/abac/rule`、`/api/v1/access/dryrun`、`/api/v1/audit`、`/audit/export`、`/audit/verify`），须按 `iam` / `audit` 命名空间重写（C4b / C4c，`NMCPS-ADR-0018`）；那三节在重写完成前以联调实测为准。
+> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关。**第六节已于 0.6.0 按新代 `iam/users` 重写，第九节已于 0.7.0 按新代 `audit/*` 三族重写**；第七 / 八节仍写的是旧代（`/api/v1/role`、`/api/v1/permission`、`/api/v1/abac/rule`、`/api/v1/access/dryrun`），须按 `iam` 命名空间重写（C4c，`NMCPS-ADR-0018`）；那两节在重写完成前以联调实测为准。
 
 ---
 
@@ -47,7 +47,7 @@ tags:
 
 | 子页面 | 功能 |
 | :--- | :--- |
-| log | 审计日志：列表查询、详情、链式校验与导出（`/system/log`） |
+| log | 审计日志：操作日志 / 安全日志 / 归档记录三族列表与详情 + 归档执行（`/system/log`） |
 | policy | 全局策略管理 |
 | user | 用户账号管理 |
 | permission | 权限分配（角色/策略绑定） |
@@ -286,68 +286,71 @@ tags:
 
 ## 九、`/system/log` 审计日志（落码基准）
 
-> 口径来源：2026-11-02 对 `http://192.168.1.55:8888/api/v1` 的实调（超级管理员 / 租户管理员双身份穷举）+ swagger 比对。与契约不符处登记在 `NMCPS-REC-004`（`layers/content/collections/cn/records/defects/audit-upstream-defects.md`），本节只写「页面能依赖什么」。
+> 口径来源：2026-11-04 对 `http://192.168.1.55:8888/api/v1` 的实调（超级管理员 / 租户管理员双身份）+ openapi 逐项比对。旧代（0.5.x）的「单端点 + `category` + `verify` + `export`」已整体退役，本节按新代 `audit` 命名空间重写（C4b，`NMCPS-ADR-0018` §三）。与契约不符处登记在 `NMCPS-REC-004`（`layers/content/collections/cn/records/defects/audit-upstream-defects.md`），本节只写「页面能依赖什么」。
 
 ### 9.1 数据源与端点
 
-| 能力 | BFF 路径 | 上游 | 说明 |
+| 能力 | BFF 路径 | 上游 | 参数 |
 | :--- | :--- | :--- | :--- |
-| 列表 | `GET /api/audit` | `GET /api/v1/audit` | `page` / `pageSize`，可选 `accountId` / `deviceCode` / `sessionId` / `category` / `traceId` / `startTime` / `endTime` |
-| 详情 | `GET /api/audit/{logCode}` | 同 | 路径段是 `logCode`（`AUD…`），不是数值 id；未知代码 `404 10301` |
-| 链式校验 | `POST /api/audit/verify` | 同 | body `{ startTime?, endTime? }`，返回 `{ intact, checkedCount, brokenAtLogId }`；**是写操作**（每次调用新增一条审计日志，UP-AUD-05） |
-| 导出任务列表 | `GET /api/audit/export` | 同 | 只认 `page` / `pageSize`，**没有按状态或名称过滤的参数** |
-| 创建导出 | `POST /api/audit/export` | 同 | `exportName` / `startTime` / `endTime` 必填，可选 `accountId` / `category` / `deviceCode` |
+| 操作日志列表 | `GET /api/audit/operation-logs` | 同 | `page` / `page_size`，可选 `keyword` / `username` / `module` / `status` / `created_from` / `created_to` |
+| 操作日志详情 | `GET /api/audit/operation-logs/{id}` | 同 | 路径段是主键 `id`（UUID）；旧代是 `logCode` |
+| 安全日志列表 | `GET /api/audit/security-logs` | 同 | `page` / `page_size`，可选 `subject_name` / `action` / `auth_decision` / `ip_address` / `logged_from` / `logged_to` |
+| 安全日志详情 | `GET /api/audit/security-logs/{id}` | 同 | 同左 |
+| 归档记录列表 | `GET /api/audit/archive/records` | 同 | `page` / `page_size`，可选 `table_name` / `status`；**没有时间条件** |
+| 归档记录详情 | `GET /api/audit/archive/records/{id}` | 同 | 与列表项同形 |
+| 执行归档 | `POST /api/audit/archive/run` | 同 | body `{ table_name? }`（省 = 两张表都归档），返回 `{ "表名": 行数 }` |
 
-- **导出任务没有详情端点、也没有删除端点**（`GET|DELETE /api/audit/export/{code}` 实测 `404`）：进度只能靠列表回读，任务一旦创建不可回收（UP-AUD-07）。
+- **三族各有自己的端点、筛选参数与详情端点**，不是「一个端点加过滤条件」：切族 = 换端点 + 换参数名 + 换字段。页面按族分支，不做「一套参数打三处」的假设。
+- 旧代两条能力在新代**没有对应端点**，已随缺口下线：`POST /audit/verify`（哈希链校验，缺口 G6）与 `GET|POST /audit/export`（导出任务，缺口 G7）。「数据过保后去哪了」改由归档链路回答。
 - BFF 白名单需含 `audit`（`shared/types/api.ts` 的 `GATEWAY_RESOURCES`），否则一律 `404 bff_resource_not_allowed`。
 - 契约类型在 `shared/types/audit.ts`（`app/` 与 `server/` 同构引用），页面不重复声明字段。
 
 ### 9.2 字段口径
 
-- **列表项 = 详情的前 12 个字段**：`logCode` / `category` / `accountId` / `deviceCode` / `sessionId` / `traceId` / `action` / `resource` / `result` / `clientIp` / `eventTime` / `logHash`；详情额外返回 `sourceService` / `beforeSnapshot` / `afterSnapshot` / `detailJson` / `prevHash`。
-- `category`：实测只有 `session`（会话：登录 / 登出 / 会话回收）与 `api`（接口调用）两个取值；**大小写敏感**，其余取值被上游静默忽略并返回全量（UP-AUD-02）→ 页面只提供这两项，其他取值按「未知类别」展示并带出原值。
-- `result`：`1` 成功 / `2` 失败；其余取值无样本 → 走 `result.unknown`，不猜语义。
-- `eventTime`：RFC3339 带偏移（`2026-11-02T03:15:09+08:00`）→ 只裁剪成 `YYYY-MM-DD HH:MM:SS` 展示，**不做时区换算**。
-- `action` / `resource`：会话类是 `auth.login.success` / `auth`，接口类是 `METHOD path` / 请求路径；两列都原样展示。
-- `accountId`：`0` 的语义未验证（不据此推断「系统动作」）；作为**过滤条件**时 `0` 与空串都被当「未提供」（UP-AUD-03）。
-- `pageSize`：上游没有稳定上限（`200` 真给 200 条、`500` 只给 20 条却回显 500，UP-AUD-03）→ 页面级常量 `AUDIT_MAX_PAGE_SIZE = 100`，选项 15 / 30 / 50 / 100（默认 15，选择器在列表栏尾部，`NMCPS-ARCH-006` §3.8）。
-- 时间参数：`YYYY-MM-DD HH:MM:SS` 与 RFC3339 **两种格式上游都收**（同区间结果一致），非法格式被静默忽略（回全量，UP-AUD-04）→ 页面固定发空格格式（不带偏移，浏览器本地时原样发出），反向区间本地拦下。
-- 快照类字段（`sourceService` / `beforeSnapshot` / `afterSnapshot` / `detailJson`）实测恒为空串（UP-AUD-09）→ 只在非空时渲染。
-- 导出任务：`status` 是**未文档化的裸数字**（实测只见到 `1`），`downloadUrl` / `objectKey` 产出前为空串，`totalRecords` 未跑完为 `0`；列表回读的 `createdAt` 比创建响应晚 8 小时（UP-AUD-08）→ `status` 原样展示数字，`createdAt` 不做换算。
-- 校验结果：`checkedCount` 是**真正校验的条数**，零条窗口上游仍回 `intact: true`（单端时间同样如此，UP-AUD-04）→ 结果文案始终带「共校验 N 条」，`checkedCount = 0` 时按中性提示渲染并明说「空窗口的完整不代表链没问题」。
+- **主键是 `id`（UUID）**，同时是详情端点路径段；它**不进**列表查询参数，只用于 `?id` 深链与详情取数（旧代的 `logCode` 已不存在）。
+- `page_size`：默认 15、选项 15 / 30 / 50 / 100，页面级上限 `AUDIT_MAX_PAGE_SIZE = 100`（选择器在列表栏尾部，`NMCPS-ARCH-006` §3.8）。空结果上游给 `list: null`，BFF 出口归一为 `[]`（`NMCPS-ADR-0018` D6），消费面不必逐页判空。
+- 时间边界是 **epoch 毫秒整数**（旧代是时间串）：操作日志 `created_from` / `created_to`，安全日志 `logged_from` / `logged_to`。页面把 `datetime-local` 字面值按**浏览器本地时**换算成毫秒发出；日历选日落到整日窗口 `00:00:00` … `23:59:59`（含首尾两端，少这 59 秒就会漏掉当天最后半分钟），反向区间本地先拦。
+- 归档记录**没有时间条件**：`/audit/archive/records` 只认 `table_name` / `status`，因此页面在归档族把时间范围控件整个收起，请求里也不带任何时间参数。
+- 归档记录字段已实测（2026-11-04 真跑一次 `POST /audit/archive/run` 后回读）：`id` / `table_name` / `archive_batch` / `rows_archived` / `cutoff_before` / `started_at` / `finished_at` / `status` / `created_at`。`*_at` / `cutoff_before` 是带偏移的 RFC3339（`2026-08-06T10:34:39.998235+08:00`），只裁剪展示、**不做时区换算**。
+- **操作日志与安全日志的条目字段集合尚未在真实数据上核对过**（该实例审计库为空，只有归档链路跑出过真实样本）：类型文件按 openapi 的查询参数与同类实体反推已登记清单，渲染策略是「已登记字段缺失显示 `—`、未登记字段在详情尾部原样列出」，详情栏顶部常驻一条「字段口径说明」Alert —— 不让读者把「上游没记」误读成「页面漏渲染」。
+- 归档结果是**行数映射**而不是任务对象：`0` 行是正常结果（没有过期数据），不是失败；弹窗里必须先说明这一点，否则「归档成功但 0 行」会被当成故障。
 
 ### 9.3 权限矩阵与页面行为
 
-| 动作 | 超级管理员（`accountLevel: 0`） | 租户管理员（`accountLevel: 1`） |
+| 动作 | 超级管理员 | 租户管理员 |
 | :--- | :--- | :--- |
-| 列表 / 详情 | 全平台 | 可用，**范围由上游按租户过滤**（同刻 `total` 1893 vs 1709，行内 `accountId` 只落本租户；UP-AUD-01） |
-| 链式校验 | 可用（会写一条审计） | 同左 |
-| 导出任务列表 / 创建 | 可用 | 同左 |
+| 三族列表 / 详情 | 全平台 | 可用，**范围由上游按租户过滤** |
+| 执行归档 | 可用（写操作，会留下批次记录） | 页面同样给入口，越权由上游裁决（**未在租户管理员身份下实跑过**） |
 
 客户端收敛（**不是安全边界**）：
 
 1. 两种身份都照常取数：范围由上游过滤，页面只在详情栏顶部用身份说明讲清「你看的是全平台 / 本租户」（未选中空态也在，位置口径见 `NMCPS-ARCH-006` §4.1）。
-2. 筛选按「是否决定数据口径」分两处：**时间范围**（按钮文案即当前窗口摘要 + `UPopover` 里给「全部时间 / 近 15 分钟 / 近 1 小时 / 近 24 小时 / 近 7 天」快捷项列、双月 `UCalendar range` 日历，以及日历下方两个到秒的 `datetime-local` 补手）和**类别**（`USelect`：全部 / 会话 / 接口）常驻工具栏左区；`accountId` / `deviceCode` / `sessionId` / `traceId` 留在筛选浮层；每页条数不在两处之列 —— 它是列表呈现而非筛选，固定在列表栏尾部（`NMCPS-ARCH-006` §3.8，默认 15）。**不提供 `result` / `keyword` 控件**（上游忽略它们）。常驻的判据是「不常驻会让人把过滤后的 `total` 当全量读」，占位预算与控件形态见 `NMCPS-ARCH-006` §4.1。
-3. 列表用 `LayoutSplit` 两栏 + `useRecordSelection` 读写 `?id`；`↑` / `↓` 可在列表内移动选中，详情栏回读 `GET /api/audit/{logCode}`。
-4. 校验是**显式按钮**：必须两端时间齐全才可点，成功与否都重新拉列表（因为它本身写了一条日志），断点只写「第 N 条」（`brokenAtLogId` 是整链序号，不映射到列表行）；`checkedCount = 0` 走中性提示而不是成功绿。
-5. 导出弹窗只做「创建 + 列表回读 + 手动刷新」：三个必填本地先拦、反向区间本地先拦、**不做进度条也不自动轮询**（没有进度字段可读）、只提供下载（`downloadUrl` 非空时），不提供删除。
-6. 工具栏由 `check:ui` 守住四条：两个常驻控件在位、且切类别 / 选快捷区间后请求里真的带上 `category` / `startTime` / `endTime`；筛选浮层不再重复时间与类别（只留四个标识）；左区总宽不超内容盒 45%；320px 下时间范围退成图标且无横向溢出。列表栏尾部同由 `check:ui` 守住：高度 49px、默认每页 15 条、选中行底色在深浅两模式都可辨（`NMCPS-ARCH-006` §3.8）。
+2. 筛选按「是否决定数据口径」分两处：**时间范围**（按钮文案即当前窗口摘要 + `UPopover` 里给「全部时间 / 近 15 分钟 / 近 1 小时 / 近 24 小时 / 近 7 天」快捷项列、双月 `UCalendar range` 日历，以及日历下方两个到秒的 `datetime-local` 补手）与**日志族**（`USelect`：操作日志 / 安全日志 / 归档记录）常驻工具栏左区；浮层只放本族 openapi 真正列出的标识参数 —— 操作日志 `keyword` / `username` / `module` / `status`，安全日志 `subject_name` / `action` / `auth_decision` / `ip_address`，归档记录 `table_name` / `status`。每页条数不在这两处之列（列表呈现而非筛选，固定在列表栏尾部，默认 15）。归档族没有时间条件，范围控件随之隐藏。常驻判据是「不常驻会让人把过滤后的 `total` 当全量读」，占位预算与控件形态见 `NMCPS-ARCH-006` §4.1。
+3. 列表用 `LayoutSplit` 两栏 + `useRecordSelection` 读写 `?id`；`↑` / `↓` 可在列表内移动选中，详情栏回读**当前族的详情端点**；切族回第一页并清掉选中（旧记录在新族里不存在）。
+4. 归档是**显式动作**：右区按钮只在列表态且非归档族时出现，弹窗写明「写操作、不可撤销」「0 行是正常结果」，跑完后刷新归档记录列表让新批次可见。
+5. 校验与导出入口全部下线（G6 / G7）：页面既没有「开始校验」也没有「导出」按钮，也不再有导出进度轮询。
+6. `check:ui` 守住 11 项：两个常驻控件在位、左区总宽不超内容盒 45%、浮层只留本族标识参数；列表按族端点渲染；选中行走族详情端点；快捷区间真的改写 `created_from` / `created_to`（epoch 毫秒、间隔 24h）；按钮文案回显窗口；日历选整天含首尾两端；切到安全日志换成 `security-logs` + `logged_from` / `logged_to`；归档族收起范围控件且请求不带时间参数；320px 下时间范围退成图标且无横向溢出。列表栏尾部另有：高度 49px、默认每页 15 条（`page_size`）、选中行底色在深浅两模式都可辨（`NMCPS-ARCH-006` §3.8）。
 
 ### 9.4 错误码 → 页面处置
 
+新代把业务错误塞进 **HTTP 200 + `code≠0`**，BFF 保留业务码、`apiGuard` 依码抛 `ApiError`（`NMCPS-ADR-0018` §三）。
+
 | 码 | 上游含义 | 页面处置 |
 | :--- | :--- | :--- |
-| `10201` | 未认证 / 登录态失效（与「无权限」同码，UP-AUD-01） | 「登录态已失效或没有权限」提示并引导重登，不进「加载失败」分支 |
-| `10301` | 目标资源不存在（日志已被清理 / `logCode` 拼错） | 详情栏提示「该条日志不存在或已清理」，保留选中项以便重试 |
-| `10101` | 参数不合法 | 「参数不合法」提示，保留用户输入 |
-| `10509` | 上游内部错误（导出缺必填也走这里，UP-AUD-06） | 通用失败提示 + 检查必填项 |
+| `40401` | 目标不存在（三个详情端点共用此码，`message` 里点名实体：「操作日志不存在」/「安全审计日志不存在」/「归档记录不存在」） | 详情栏提示「该记录不存在，或已被清理」，保留选中项以便重试 |
+| `10007` | 令牌无效 / 过期 | 「登录态已失效或没有权限」提示并引导重登，不进「加载失败」分支 |
+| `40001` | 字段校验失败（时间边界 / 分页参数） | 「参数不合法」提示，保留用户输入 |
+| `10509` / `5xx` | 上游内部错误 | 通用失败提示 + 重试入口 |
 | 非信封失败（`code = 0`） | 网络层 | 「网络异常，请重试」 |
 
-上游未配置 / 掉线 / 超时沿用 `upstreamHintKey()` 的运维指引。
+`10201` 在新代是「密码错误」，**不再**当作鉴权失败复用（旧代口径作废）。上游未配置 / 掉线 / 超时沿用 `upstreamHintKey()` 的运维指引。
 
 ### 9.5 已知缺口
 
-`UP-AUD-01` / `02` / `03` / `04` / `05` / `06` / `07` / `08` / `09` 见 `NMCPS-REC-004`：租户数据范围未文档化且失效令牌同码、`category` 大小写敏感且未知值静默忽略、未知查询参数被忽略且 `pageSize` 无稳定上限、时间参数双格式且非法值不报错、`verify` 是写操作且断点为整链序号、导出缺必填回 `500`、导出无详情与删除端点、导出列表时区偏移 8 小时、详情快照恒为空。页面只依赖上文已确认可用的五个端点，不把上述缺口当契约。
+- **G6 / G7（功能缺口）**：新代没有哈希链校验，也没有导出任务端点；`verify` 与 `export` 的旧代缺陷（UP-AUD-05 / 06 / 07 / 08）随端点一起退役，页面不再提供这两条路径。
+- **字段口径未实测**：操作日志与安全日志的条目字段集合未在真实数据上核对过（实例审计库为空），只有归档记录字段逐字核对过；页面因此把「已登记字段缺失」与「未登记字段」都显式呈现，而不是静默丢弃。
+- **归档执行口径未穷举**：本次只在超级管理员身份下实跑过一次（两张表各 0 行）；保留期长度、并发执行、租户管理员越权行为均未验证，页面不据此给任何承诺。
+- 旧代 `UP-AUD-01` / `02` / `03` / `04` / `09` 描述的是已下线的端点（`category` 大小写、`pageSize` 无上限、时间双格式、快照恒空），保留在 `NMCPS-REC-004` 作历史记录，**不再作为契约**。
 
 ---
 
@@ -368,4 +371,5 @@ tags:
 | 2026-11-02 | 0.5.5 | **§9.3 第 2 条：时间范围浮层改为「快捷项列 + 双月日历」**。原先浮层里只有一列快捷按钮和两个 `datetime-local`，选「上周三到上周五」这种区间必须手填两个时间串。现在抽出 `components/Audit/RangePicker.vue`（形态照 Nuxt UI dashboard 模板的 `HomeDateRangePicker`）：左侧快捷项列（命中项底色高亮，窄屏隐藏）+ 双月 `UCalendar range` 日历，日历下方保留两个到秒的 `datetime-local` 补手；选日按整日窗口落 `00:00:00` … `23:59:59`，点一天 = 从那天起、点第二天才收尾（留空终点，reka 的区间选择才能继续）。三条入口（快捷项 / 日历 / 手填）只改同一个 `start` / `end` / `preset`，取数仍由页面既有的 `watch` 落地。渲染细节与两个实测坑见 `NMCPS-ARCH-006` §4.1（0.2.15）。 |
 | 2026-11-03 | 0.5.6 | **每页条数从筛选浮层移到列表栏尾部，四个列表页统一默认 15 条**。三个实测问题：① 选中行底色在浅 / 深两模式都读不出（`bg-elevated/60` 叠在白面板上几乎同色），已由 `NMCPS-ARCH-006` 0.2.16 改为 `bg-accented`；② 每页条数原先默认 20、只有 `/system/log` 在筛选浮层里有一个，`/system/user` 与 `/system/permission` 连入口都没有，`/system/policy` 则完全不分页 —— 现在统一 `DEFAULT_PAGE_SIZE = 15`（选项 15 / 30 / 50 / 100，来源 `shared/constants/paging.ts`），四页都在列表尾提供选择器；③ 列表尾高度统一 49px（`--app-list-footer-h`）。本文件相应更新：§6 端点表口径不变，§7.3 第 3 条补「客户端分页只切渲染层，深链仍对全量生效」、§9.2 的 `pageSize` 选项改为 15 / 30 / 50 / 100、§9.3 第 2 条把每页条数移出筛选浮层、第 6 条补尾部三条断言。 |
 | 2026-11-03 | 0.5.7 | **§6 用户管理建号口径按 2026-11-03 复测更正（修「租户管理员建号必失败」）**。现象：租户管理员在 `?id=new` 建号，表单只提供 `1`（= 自身等级），提交一律回 `20103 只能向下管控`，可见的「账号等级」下拉等于没有可选项。复测三条结论：① 等级必须**严格低于自己**（超级管理员 `1`–`3`、租户管理员 `2`–`3`），同级或更高 → `20103`；`4` → `20102`（服务账号由系统开通）；② `POST /account` 新增 `tenantId` 必填（`0` 视同缺省），超级管理员不带该字段直接 `10101`，因此页面新增「所属租户」下拉，来源 `GET /api/tenant`；③ `UP-ACC-01`（租户越级建号）由上游闭环，§6.5 与 `NMCPS-REC-002` 同步更新，新增 `UP-ACC-07`（`tenantId` 必填）/ `UP-ACC-08`（`4` 归服务账号）。§6.1 端点表加租户列表、§6.2 等级语义改写、§6.3 矩阵重写并补客户端收敛 1 / 2 两条、§6.4 错误码加 `20102` / `20103`。 |
+| 2026-11-04 | 0.7.0 | **§9 审计日志按新代 `audit/*` 三族重写（C4b）**：旧代的单端点 `GET /audit?category=…` + `POST /audit/verify` + `GET|POST /audit/export` 全部退役，改为按日志族拆分的六个读路径与一个写路径 —— 操作日志 `GET /audit/operation-logs`、安全日志 `GET /audit/security-logs`、归档记录 `GET /audit/archive/records`（各带自己的详情端点）与执行归档 `POST /audit/archive/run`；主键从 `logCode` 变 `id`（UUID），分页字段从 `pageSize` 变 `page_size`，时间边界从时间串变 **epoch 毫秒整数**（`created_from` / `created_to`、`logged_from` / `logged_to`），空结果 `list: null` 由 BFF 出口归一为 `[]`。页面改成「三族一页」：日志族下拉常驻左区、浮层只放本族的 openapi 参数、归档族收起时间范围；校验与导出入口随缺口 G6 / G7 下线，归档弹窗取代导出；错误码表换成 `40401` / `10007` / `40001`（旧代 `10201` 在新代是「密码错误」，不再复用）。字段口径如实分层：归档记录已实测，操作 / 安全日志的条目字段尚无真实样本，页面只渲染已登记字段并把未登记字段原样列出。`check:ui` 的 `/system/log` 用例 8 → 11（切族换端点与时间参数、归档族无时间条件、选中行走族详情端点），总数 105 → 106；`check:bff` 的空列表归一路径改到 `operation-logs`。 |
 | 2026-11-04 | 0.6.0 | **§6 用户管理按新代 `iam/users` 重写（C4a）**：端点表换成 `GET|POST /iam/users`、`GET|PUT|DELETE /iam/users/{id}`、`GET /iam/tenants`、`GET /iam/departments`；字段口径改 snake_case（`id` / `username` / `display_name` / `status: active|disabled|locked` / `mfa_enabled` / `tenant_id` / `department_id`），`pageSize` → `page_size`，`list: null` 由 BFF 出口归一为 `[]`；**等级模型（`accountLevel`）整段退役**（缺口 G1），建号归属改由「部门」表达（`POST /iam/users` 实测没有 `tenant_id`）；新增删号（`DELETE`，软删 `deleted_at`，旧代 `UP-ACC-04` 闭环）与「列表自带租户归属」（`UP-ACC-05` 闭环）；错误码表改为实测的 `10002` / `40001` / `10003` / `10007` / `10301` 组合，口令策略按实测「6-128 字符」；`POST /access/dryrun` 入口与弹窗随缺口 G5 下线。 |
