@@ -75,7 +75,7 @@ layers/content/collections/{cn,en}/
 
 - **Authority pyramid**: Tier 0~5 (defined in `NMCPS-GOV-001` §2).
 - **docId contract**: governed docs (`architecture/`, `records/`) carry `docId` / `tier` / `authority` / `scope` / `status` in frontmatter; the `docId ↔ path` mapping lives in `shared/constants/docIds.ts`.
-- **Guard**: `pnpm check:doc-system` (six assertions: uniqueness / completeness / reference closure / acyclicity / tier validity / staleness warnings).
+- **Guard**: `pnpm check:doc-system` (seven assertions: uniqueness / completeness / reference closure / acyclicity / tier validity / staleness warnings / CN-EN parity).
 - **Single source of truth**: the authority index is `NMCPS-GOV-003` (doc-map); `.clinerules` only points to it.
 
 ---

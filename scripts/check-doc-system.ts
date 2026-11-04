@@ -1,13 +1,14 @@
 // scripts/check-doc-system.ts
 // 文档体系守卫（S0 奠基；设计基准：NMCPS-GOV-001，索引：NMCPS-GOV-003）
 //
-// 六组最小断言：
+// 七组最小断言：
 //   ① 唯一性：docId 唯一、同 scope 仅一个 normative、DOC_PATHS 与文件集一致
 //   ② 完整性：受治理文档的 frontmatter 必需字段齐全且合法
 //   ③ 引用闭合：dependsOn 目标 docId 必须存在（死链拦截）
 //   ④ 无环：dependsOn 构成 DAG
 //   ⑤ 层级合法：只向上引用、normative 不依赖 informative、Tier 5 不作依据
 //   ⑥ 老化告警：reviewBy 过期 / updatedAt 超 180 天 —— 仅告警，不影响退出码
+//   ⑦ 中英对齐：doc-map 变更记录里的「docId → x.y.z」目标集合中英一致，且同一 docId 的两份文档版本号相同
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import process from "node:process";
@@ -248,6 +249,61 @@ for (const d of governed) {
 	// excerpt 短摘要长度告警（列表卡片排版）
 	if (d.excerpt && d.excerpt.length > 80)
 		warning(`${d.docId} excerpt 超 80 字：${d.excerpt.length} 字`);
+}
+
+// ⑦ 中英对齐（doc-map 变更集合 / 同一 docId 的版本号）
+console.log("\n⑦ 中英对齐");
+{
+	const cnMap = (DOC_PATHS as Record<string, string>)["NMCPS-GOV-003"];
+	const enOf = (cnFile: string): string => cnFile.replace("/collections/cn/", "/collections/en/");
+	const enMap = cnMap === undefined ? undefined : enOf(cnMap);
+
+	// (a) doc-map 变更记录：每行 `| 日期 | 版本 | ... |`，抓取正文里的「`docId` → x.y.z」目标版本
+	const TARGET_RE = /(NMCPS-(?:GOV|ARCH|DESIGN|CONTRACT|ADR|REC)-[A-Z0-9-]+)`?\s*→\s*(\d+\.\d+\.\d+)/g;
+	const targets = (file: string | undefined): Map<string, Set<string>> => {
+		const out = new Map<string, Set<string>>();
+		if (file === undefined || !existsSync(file))
+			return out;
+		for (const line of readFileSync(file, "utf8").split("\n")) {
+			if (!line.startsWith("| 2026-"))
+				continue;
+			for (const hit of line.matchAll(TARGET_RE)) {
+				const set = out.get(hit[1]!) ?? new Set<string>();
+				set.add(hit[2]!);
+				out.set(hit[1]!, set);
+			}
+		}
+		return out;
+	};
+	const cnTargets = targets(cnMap);
+	const enTargets = targets(enMap);
+	ok(enMap !== undefined && existsSync(enMap), "en doc-map 存在", enMap);
+	for (const docId of [...new Set([...cnTargets.keys(), ...enTargets.keys()])].sort()) {
+		const cnVers = cnTargets.get(docId) ?? new Set<string>();
+		const enVers = enTargets.get(docId) ?? new Set<string>();
+		const missing = [...cnVers].filter((v) => !enVers.has(v)).sort();
+		const extra = [...enVers].filter((v) => !cnVers.has(v)).sort();
+		ok(missing.length === 0 && extra.length === 0, `变更集合中英一致：${docId}（${cnVers.size} 个版本）`, { missing, extra });
+	}
+
+	// (b) 同一 docId 的中英文档必须版本号相同（doc-map 例外：两套独立平行编号，内容集合由 (a) 覆盖）
+	const versionOf = (file: string): string | null => {
+		const hit = readFileSync(file, "utf8").match(/^version:\s*"?(\d+\.\d+\.\d+)"?\s*$/m);
+		return hit ? hit[1]! : null;
+	};
+	for (const [docId, cnFile] of Object.entries(DOC_PATHS as Record<string, string>)) {
+		if (docId === "NMCPS-GOV-003")
+			continue;
+		const enFile = enOf(cnFile);
+		if (!existsSync(enFile)) {
+			ok(false, `en 对应文档存在：${docId}`, enFile);
+			continue;
+		}
+		ok(true, `en 对应文档存在：${docId}`);
+		const cnVer = versionOf(cnFile);
+		const enVer = versionOf(enFile);
+		ok(cnVer === enVer, `中英版本号一致：${docId}（${cnVer ?? "无 version 字段"}）`, { cn: cnVer, en: enVer });
+	}
 }
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败 / ${warn} 告警`);

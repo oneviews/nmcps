@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.36.4
+version: 0.36.5
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -185,3 +185,4 @@ tags:
 | 2026-11-04 | 0.36.2 | `NMCPS-ARCH-006` → 0.2.23 (§7 row 22 drops the hardcoded component count: it now says "every `.vue` template under `app` and `layers`" and records that `check:i18n` prints the real count, so prose never has to be updated; assertion groups stay 9, `check:ui` stays 116). |
 | 2026-11-04 | 0.36.3 | `NMCPS-ARCH-006` → 0.2.24 (`check:i18n` gains group ⑧, a site-wide reference pass over `t()` / `$t()` / `tm()` literals across `app` and every `layers/*/app`, with dynamic keys asserted as static prefixes; assertion groups 9 → 10, and `quickstart` now says ten groups). |
 | 2026-11-04 | 0.36.4 | `NMCPS-ARCH-006` → 0.2.25 (groups ⑥ and ⑧ of `check:i18n` merge into one `auditUsage()` implementation, with prefix matching split into `segment` / `open`; assertion groups stay 10 and the measured 333/5 and 497/9 are unchanged). This row also closes the English lag since 0.36.0: rows 0.36.1–0.36.4 mirror the Chinese doc-map's 0.39.1–0.39.4, so both maps now carry the same change set. |
+| 2026-11-04 | 0.36.5 | **Guard hardening**: `check:doc-system` gains group ⑦, "CN-EN parity" — (a) compares the `docId` → x.y.z target-version sets harvested from the two doc-maps' changelog rows and fails when either side is missing a version; (b) asserts, for every docId registered in `DOC_PATHS`, that its English mirror exists and carries the same `version` as the Chinese doc, with `NMCPS-GOV-003` itself exempt (the two maps keep parallel independent numbering, so (a) covers the content set). Assertions 886 → 967 (40 governed docs, 39 CN-EN pairs). Measured negative case: flipping the English 0.2.22 to 0.2.99 yields 966 pass / 1 fail and prints `missing` / `extra`. The assertion-group count is updated in the same pass across `quickstart`, `doc-workflow` and `content-center-architecture` in both languages. |

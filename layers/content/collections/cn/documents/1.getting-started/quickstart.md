@@ -35,7 +35,7 @@ pnpm dev
 ```bash
 pnpm typecheck        # 类型检查
 pnpm lint             # ESLint（含 i18n 键序）
-pnpm check:doc-system # 文档体系守卫（六组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警）
+pnpm check:doc-system # 文档体系守卫（七组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警 / 中英对齐）
 pnpm check:i18n       # 文案自查（十组断言：键集合对齐 / en 无中文 / 值形状 / 占位符一致 / 系统管理页引用闭合 / 全站 t() 引用闭合 / 模板无硬编码中文）
 pnpm build:server     # 先构建 BFF 产物，check:bff 消费 .output/server
 pnpm check:bff        # BFF 网关契约（白名单 / 动词 / 路径穿越 / CORS / 信封 / 就绪探针 / SSE，依据 NMCPS-ADR-0007、NMCPS-ADR-0010）

@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.4
+version: 0.39.5
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -194,3 +194,4 @@ tags:
 | 2026-11-04 | 0.39.2 | `NMCPS-ARCH-006` → 0.2.23（§7 第 22 行去掉硬编码组件计数：改成「`app` 与 `layers` 下全部 `.vue` 模板」并注明计数由 `check:i18n` 按实际扫描输出；断言组数 9、`check:ui` 116 不变）。 |
 | 2026-11-04 | 0.39.3 | `NMCPS-ARCH-006` → 0.2.24（`check:i18n` 新增第 ⑧ 组「全站引用闭合」：扫 `app` 与全部 `layers/*/app` 的 `t()` / `$t()` / `tm()` 字面量键，动态拼接按静态前缀断言；断言组数 9 → 10，`check:ui` 116 与 `quickstart` 同步改为十组）。 |
 | 2026-11-04 | 0.39.4 | `NMCPS-ARCH-006` → 0.2.25（`check:i18n` 的 ⑥ / ⑧ 合为 `auditUsage()` 一份实现，前缀判定拆 `segment` / `open` 两态；断言组数仍 10，实测 333/5 与 497/9 不变）。 |
+| 2026-11-04 | 0.39.5 | **守卫增强**：`check:doc-system` 新增第 ⑦ 组「中英对齐」——(a) 比对两份 doc-map 变更记录正文里的「`docId` → x.y.z」目标版本集合，任何一侧缺版本即报错；(b) 对 `DOC_PATHS` 登记的每个 docId 断言 en 镜像存在且 `version` 与 cn 相同，`NMCPS-GOV-003` 自身例外（两套编号平行独立，由 (a) 覆盖内容集合）。断言 886 → 967（受治理文档 40 篇、39 对中英文档）。负例实测：把 en 的 0.2.22 改为 0.2.99 → 966 通过 / 1 失败并列出 `missing` / `extra`；同时章末断言组数在 `quickstart`、`doc-workflow`、`content-center-architecture` 三处中英文同步改为七组。 |
