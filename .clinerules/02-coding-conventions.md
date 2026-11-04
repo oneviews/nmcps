@@ -27,6 +27,7 @@ Follow the project's existing conventions at all times:
 
 - Before editing a UI / integration self-check step in `.github/workflows/ci.yml`, confirm the instance under test gets its required environment: `check:ui` and `check:bff` boot their own fake upstream plus build output, so hand-starting a server (or pointing `CHECK_UI_BASE_URL` at an external one) requires providing `NUXT_BFF_UPSTREAM_BASE` yourself — otherwise the "upstream ready" and login cases fail as false positives (measured 2026-10-31).
 - When a self-check gains cases, update the counts quoted in its own summary output and in the related architecture doc — never leave a stale "N/N" in prose.
+- Every `sh scripts/ci-summary.sh` call in `ci.yml` must pass `--expect "<regex>"` naming the conclusion line that step's log has to contain, followed by `|| status=1` — otherwise a check that runs but prints no verdict still shows a green step (the regex is pinned by `pnpm check:ci-summary`).
 
 ## Tauri Conventions
 

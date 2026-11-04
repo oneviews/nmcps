@@ -48,7 +48,7 @@ jobs:
           set +e
           pnpm lint 2>&1 | tee ci-logs/lint.log
           status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "lint" ci-logs/lint.log
+          sh scripts/ci-summary.sh "lint" ci-logs/lint.log --expect '\$ eslint' || status=1
           exit $status
 
       - name: Typecheck
@@ -56,7 +56,7 @@ jobs:
           set +e
           pnpm typecheck 2>&1 | tee ci-logs/typecheck.log
           status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "typecheck" ci-logs/typecheck.log
+          sh scripts/ci-summary.sh "typecheck" ci-logs/typecheck.log --expect 'vue-tsc' || status=1
           exit $status
 
       # 文案门禁：cn / en 键集合对齐、en 值不混中文、占位符一致、系统管理页引用的键都落地、模板不硬编码中文。
@@ -66,10 +66,11 @@ jobs:
           set +e
           pnpm check:i18n 2>&1 | tee ci-logs/i18n.log
           status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "i18n guard" ci-logs/i18n.log
+          sh scripts/ci-summary.sh "i18n guard" ci-logs/i18n.log --expect '文案自查 [0-9]+/[0-9]+ 通过' || status=1
           exit $status
 
       # 治理门禁：文档体系（doc-map / docIds / frontmatter）、守卫自测（⑦ 中英对齐的四个负例）、
+      # 步骤摘要自测（`ci-summary.sh --expect`：抽不到预期结论就算失败）、
       # `.clinerules` 自查与平台能力面约定
       # （`check:platform`：capabilities 不得出现 `shell:allow-execute`，探针页与组合式边界）合成一个入口。
       # `.clinerules` 是喂给 AI 的约定，改坏了不会报错、只会静默失效，所以同样进门禁。
@@ -78,7 +79,7 @@ jobs:
           set +e
           pnpm check:governance 2>&1 | tee ci-logs/governance.log
           status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "governance guard" ci-logs/governance.log
+          sh scripts/ci-summary.sh "governance guard" ci-logs/governance.log --expect '结果：[0-9]+ 通过' || status=1
           exit $status
 
       - name: Upload quality check logs
@@ -124,7 +125,7 @@ jobs:
           set +e
           pnpm check:bff 2>&1 | tee ci-logs/check-bff.log
           status=${PIPESTATUS[0]}
-          sh scripts/ci-summary.sh "BFF gateway contract" ci-logs/check-bff.log
+          sh scripts/ci-summary.sh "BFF gateway contract" ci-logs/check-bff.log --expect '[0-9]+/[0-9]+ 项通过' || status=1
           exit $status
 
       # Playwright 浏览器体积大（chromium 约 170MB），按 lockfile 指纹缓存；
@@ -153,12 +154,13 @@ jobs:
             pnpm check:ui 2>&1 | tee -a ci-logs/check-ui.log
             status=${PIPESTATUS[0]}
             if [ "$status" -ne 0 ]; then
-              sh scripts/ci-summary.sh "page UI checks（round $round 失败）" ci-logs/check-ui.log
+              # 已经红了：这里只补摘要，不再让摘要的期望值覆盖真实失败码
+              sh scripts/ci-summary.sh "page UI checks（round $round 失败）" ci-logs/check-ui.log --expect '[0-9]+/[0-9]+ 项通过' || true
               exit "$status"
             fi
           done
-          sh scripts/ci-summary.sh "page UI checks（$CHECK_UI_ROUNDS 轮）" ci-logs/check-ui.log
-          exit 0
+          sh scripts/ci-summary.sh "page UI checks（$CHECK_UI_ROUNDS 轮）" ci-logs/check-ui.log --expect '[0-9]+/[0-9]+ 项通过' || status=1
+          exit $status
         env:
           CHECK_UI_SCREENSHOT: ${{ github.workspace }}/ui-check.png
           CHECK_UI_ROUNDS: 2
