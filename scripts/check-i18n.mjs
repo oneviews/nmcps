@@ -16,6 +16,9 @@
 //   ⑦ 模板：`.vue` 的 `<template>` 段不得硬编码中文（可见文案只能来自 i18n；注释剥离后判定）
 //   ⑧ 全站：`app` 与 `layers/*/app` 里 `t()` / `$t()` / `tm()` 的字面量键必须在两份里都存在
 //      —— ⑥ 只看系统管理页的 `pages.system-*`（含命名空间常量），⑧ 把同一口径铺到全部域
+//      ⑥ / ⑧ 共用 `auditUsage()`：只有采样器不同（⑥ 按文本匹配、⑧ 按 `t()` 实参），
+//      前缀判定按「静态部分是否落在段边界」分 segment / open 两种，防止 `pages.system-log`
+//      被 `pages.system-login` 顶替，同时不把 `pages.content-` + `${section}` 误报成缺键
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
@@ -89,12 +92,109 @@ function walk(dir) {
 	});
 }
 
+/** 解析后的两份扁平键表：`locale → Map<key, value>`，①–⑤ 填，⑥ / ⑧ 读 */
+const messages = new Map();
+
+/**
+ * 引用闭合审计（⑥ / ⑧ 共用）：把代码里出现的键与前缀对齐两份 locale。
+ *
+ * 前缀分两种，判据是「静态部分的末尾有没有落在段边界上」：
+ * - `segment`（`pages.system-log.` / `pages.content-${x}.title` 的前缀）：只认 `prefix.` 开头的键，
+ *   否则 `pages.system-log` 会被 `pages.system-login` 假冒命中；
+ * - `open`（`pages.content-${section}` 断在段中间 → `pages.content-`）：只能认「任意以该前缀开头的键」，
+ *   否则「前缀合法但换了段」会被误判成缺键。
+ *
+ * @param {string[]} dirs 扫描目录
+ * @param {(source: string, exact: Set<string>, prefixes: Map<string, "segment" | "open">) => void} collect 采样器
+ */
+function auditUsage(dirs, collect) {
+	const sources = dirs.flatMap(walk);
+	const exact = new Set();
+	const prefixes = new Map();
+
+	for (const path of sources)
+		collect(readFileSync(path, "utf8"), exact, prefixes);
+
+	const hasKey = (locale, key) => messages.get(locale).has(key);
+	const hasPrefix = (locale, prefix, kind) => {
+		const keys = [...messages.get(locale).keys()];
+
+		return kind === "open"
+			? keys.some((key) => key.startsWith(prefix))
+			: keys.some((key) => key.startsWith(`${prefix}.`));
+	};
+	// 命名空间常量（`policyErrorKey(error, "pages.system-policy")`）不是叶子键：
+	// 只有它在两份里都没有、但下面有键时，按 segment 前缀断言，不算缺键
+	const namespacePrefixes = new Map(prefixes);
+	const missingKeys = [];
+
+	for (const key of exact) {
+		if (LOCALES.every((locale) => hasKey(locale, key)))
+			continue;
+		if (LOCALES.every((locale) => hasPrefix(locale, key, "segment"))) {
+			namespacePrefixes.set(key, "segment");
+			continue;
+		}
+		missingKeys.push(key);
+	}
+
+	const emptyPrefixes = [...namespacePrefixes].filter(([prefix, kind]) => {
+		return LOCALES.some((locale) => !hasPrefix(locale, prefix, kind));
+	}).map(([prefix]) => prefix).sort();
+
+	return {
+		files: sources.length,
+		exact: exact.size,
+		prefixes: namespacePrefixes.size,
+		missing: [...missingKeys.sort(), ...emptyPrefixes.map((prefix) => `${prefix}*`)]
+	};
+}
+
+/** ⑥ 的采样：`layers/system` 里任何位置出现的 `pages.system-*` 字面量（含命名空间常量、非 `t()` 调用处） */
+function collectSystemPageKeys(source, exact, prefixes) {
+	for (const match of source.matchAll(/pages\.system-[\w.-]*/g)) {
+		const raw = match[0];
+		const next = source[match.index + raw.length] ?? "";
+
+		// `pages.system-log.${kind}` / `pages.system-log.filter.` 这类是动态拼接：
+		// 只能断言「前缀下有键」，不能当成完整键
+		if (next === "$" || raw.endsWith(".")) {
+			const head = raw.replace(/\.$/, "");
+
+			if (head)
+				prefixes.set(head, raw.endsWith(".") ? "segment" : "open");
+			continue;
+		}
+
+		exact.add(raw);
+	}
+}
+
+/** ⑧ 的采样：`t()` / `$t()` / `tm()` 的第一个实参为字面量时取键 */
+function collectTranslationKeys(source, exact, prefixes) {
+	// 前置 `(?<![\w$])` 排除 `split(` / `format(` / `parseInt(` 这类以 t 结尾的其它函数名；
+	// 实参不是字面量（变量、函数返回值）时无从静态判定，交由运行时断言兜底
+	for (const match of source.matchAll(/(?<![\w$])\$?(?:tm|t)\(\s*(["'`])([^"'`\n]{1,160})\1/g)) {
+		const raw = match[2];
+		const dynamicAt = raw.indexOf("${");
+		// 静态部分 = 到 `${` 为止（无插值则整串），末尾的 `.` 决定它是段边界还是段中间
+		const staticPart = dynamicAt >= 0 ? raw.slice(0, dynamicAt) : raw;
+		const head = staticPart.replace(/\.$/, "");
+
+		if (dynamicAt >= 0 || raw.endsWith(".")) {
+			if (head)
+				prefixes.set(head, staticPart.endsWith(".") ? "segment" : "open");
+			continue;
+		}
+
+		exact.add(raw);
+	}
+}
+
 // ── ① 文件集 ──────────────────────────────────────────
 const files = existsSync(LOCALES_DIR) ? readdirSync(LOCALES_DIR).filter((name) => name.endsWith(".json")).sort() : [];
 
 log(`${LOCALES_DIR} 只有 cn.json / en.json`, files.join(",") === "cn.json,en.json", files.join(",") || "目录为空");
-
-const messages = new Map();
 
 for (const locale of LOCALES) {
 	const path = join(LOCALES_DIR, `${locale}.json`);
@@ -180,51 +280,12 @@ if (messages.size === LOCALES.length) {
 
 // ── ⑥ 使用面 ──────────────────────────────────────────
 if (messages.size === LOCALES.length) {
-	const sources = USAGE_DIRS.flatMap(walk);
-	const exact = new Set();
-	const prefixes = new Set();
-
-	for (const path of sources) {
-		const source = readFileSync(path, "utf8");
-
-		for (const match of source.matchAll(/pages\.system-[\w.-]*/g)) {
-			const raw = match[0];
-			const next = source[match.index + raw.length] ?? "";
-			// `pages.system-log.${kind}` / `pages.system-log.filter.` 这类是动态拼接：
-			// 只能断言「前缀下有键」，不能当成完整键
-			if (next === "$" || raw.endsWith("."))
-				prefixes.add(raw.replace(/\.$/, ""));
-			else
-				exact.add(raw);
-		}
-	}
-
-	const hasKey = (locale, key) => messages.get(locale).has(key);
-	const hasPrefix = (locale, prefix) => [...messages.get(locale).keys()].some((key) => key.startsWith(`${prefix}.`));
-	// 命名空间常量（`policyErrorKey(error, "pages.system-policy")`）不是叶子键：
-	// 只有它在两份里都没有、但下面有键时，按前缀断言，不算缺键
-	const missingKeys = [];
-	const namespacePrefixes = new Set(prefixes);
-
-	for (const key of exact) {
-		if (LOCALES.every((locale) => hasKey(locale, key)))
-			continue;
-		if (LOCALES.every((locale) => hasPrefix(locale, key))) {
-			namespacePrefixes.add(key);
-			continue;
-		}
-		missingKeys.push(key);
-	}
-
-	const missing = missingKeys.sort();
-	const emptyPrefixes = [...namespacePrefixes].filter((prefix) => {
-		return LOCALES.some((locale) => !hasPrefix(locale, prefix));
-	}).sort();
+	const audit = auditUsage(USAGE_DIRS, collectSystemPageKeys);
 
 	log(
-		`${USAGE_DIRS.join(", ")} 引用的 ${exact.size} 个完整键 / ${namespacePrefixes.size} 个动态前缀两份都在`,
-		missing.length === 0 && emptyPrefixes.length === 0,
-		[...missing, ...emptyPrefixes.map((prefix) => `${prefix}.*`)].slice(0, 8).join(", ") || `${exact.size} / ${namespacePrefixes.size}`
+		`${USAGE_DIRS.join(", ")} 引用的 ${audit.exact} 个完整键 / ${audit.prefixes} 个动态前缀两份都在`,
+		audit.missing.length === 0,
+		audit.missing.slice(0, 8).join("；") || `${audit.exact} / ${audit.prefixes}`
 	);
 }
 
@@ -255,55 +316,12 @@ if (messages.size === LOCALES.length) {
 
 // ── ⑧ 全站引用面 ──────────────────────────────────────
 if (messages.size === LOCALES.length) {
-	const sources = USAGE_ALL_DIRS.flatMap(walk);
-	const exact = new Set();
-	/** 动态拼接（`t(\`pages.content-${section}.title\`)` / `t("a.b.")`）只能断言「该前缀下两侧都有键」 */
-	const prefixes = new Set();
-
-	for (const path of sources) {
-		const source = readFileSync(path, "utf8");
-		// 只认 `t(` / `$t(` / `tm(` / `$tm(` 的第一个实参为字面量；其余（变量、函数返回值）无从静态判定。
-		// 前置 `(?<![\w$])` 是为了排除 `split(` / `format(` / `parseInt(` 这类以 t 结尾的其它函数名
-		for (const match of source.matchAll(/(?<![\w$])\$?(?:tm|t)\(\s*(["'`])([^"'`\n]{1,160})\1/g)) {
-			const raw = match[2];
-			const dynamicAt = raw.indexOf("${");
-
-			if (dynamicAt >= 0)
-				prefixes.add(raw.slice(0, dynamicAt).replace(/\.$/, ""));
-			else if (raw.endsWith("."))
-				prefixes.add(raw.replace(/\.$/, ""));
-			else
-				exact.add(raw);
-		}
-	}
-
-	const localesWith = (key) => LOCALES.filter((locale) => messages.get(locale).has(key));
-	// 动态前缀的静态部分可能落在键名中间（`pages.content-` + `${section}`），
-	// 所以既认 `prefix.` 也认 `prefix` 本身，否则「前缀合法但换段」会被误判为缺键
-	const hasPrefix = (locale, prefix) => [...messages.get(locale).keys()].some((key) => key.startsWith(prefix));
-	const missingKeys = [];
-	const namespacePrefixes = new Set(prefixes);
-
-	for (const key of exact) {
-		if (localesWith(key).length === LOCALES.length)
-			continue;
-		// 命名空间（`t("pages.system-policy")` 这种指向子树的常量）不是叶子键
-		if (LOCALES.every((locale) => hasPrefix(locale, key))) {
-			namespacePrefixes.add(key);
-			continue;
-		}
-		missingKeys.push(key);
-	}
-
-	const missing = missingKeys.sort();
-	const emptyPrefixes = [...namespacePrefixes].filter((prefix) => {
-		return LOCALES.some((locale) => !hasPrefix(locale, prefix));
-	}).sort();
+	const audit = auditUsage(USAGE_ALL_DIRS, collectTranslationKeys);
 
 	log(
-		`${USAGE_ALL_DIRS.length} 个域的 ${sources.length} 个文件里 t() 字面量 ${exact.size} 个完整键 / ${namespacePrefixes.size} 个动态前缀两份都在`,
-		missing.length === 0 && emptyPrefixes.length === 0,
-		[...missing, ...emptyPrefixes.map((prefix) => `${prefix}*`)].slice(0, 8).join(", ") || `${exact.size} / ${namespacePrefixes.size}`
+		`${USAGE_ALL_DIRS.length} 个域的 ${audit.files} 个文件里 t() 字面量 ${audit.exact} 个完整键 / ${audit.prefixes} 个动态前缀两份都在`,
+		audit.missing.length === 0,
+		audit.missing.slice(0, 8).join("；") || `${audit.exact} / ${audit.prefixes}`
 	);
 }
 
