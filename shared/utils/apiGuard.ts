@@ -13,12 +13,19 @@ export function isApiEnvelope(value: unknown): value is ApiResponse<unknown> {
 		&& "code" in (value as Record<string, unknown>);
 }
 
-/** 业务成功：`code === 0`（BFF 统一口径）或旧包裹层 `status === "success"` */
+/**
+ * 业务成功：**只认 `code === 0`**。
+ *
+ * 新代上游（NMCPS-ADR-0018 D5）的业务错误走 `HTTP 200 + code≠0`，成功信封里也
+ * 不带 `status` 字段；若这里退回「`status === "success"` 即成功」，一旦某个上游
+ * 同时给出 `status: "success"` 与 `code: 10003`，失败就会被读成成功。
+ * 故 `status` 只用于收紧（`warning` / `error` 一票否决），不再单独放行。
+ */
 export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): res is ApiResponse<T> & { data: T } {
 	return !!res
+		&& res.code === 0
 		&& res.status !== "warning"
-		&& res.status !== "error"
-		&& (res.status === "success" || res.code === 0);
+		&& res.status !== "error";
 }
 
 /** 分页成功（`total` / `page` / `page_size` 平铺） */

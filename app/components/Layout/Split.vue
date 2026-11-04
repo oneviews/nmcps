@@ -16,15 +16,22 @@
 		<section
 			v-show="!isOverlay || activePane === 'list'"
 			data-pane="list"
-			class="flex min-h-0 min-w-0 flex-col border-(--ui-border)"
+			class="@container/list flex min-h-0 min-w-0 flex-col border-(--ui-border)"
 			:class="isOverlay ? 'w-full flex-1' : 'shrink-0 border-e'"
 			:style="isOverlay ? undefined : { width: 'var(--split-list-w)' }"
 		>
 			<div class="min-h-0 flex-1 overflow-y-auto overflow-x-clip">
 				<slot name="list" />
 			</div>
-			<!-- 可选 footer（计数 + 分页，NMCPS-ADR-0017 D2）：在滚动区之外，翻页时不跟着滚走 -->
-			<div v-if="$slots['list-footer']" class="shrink-0 border-t border-(--ui-border)">
+			<!--
+				可选 footer（计数 + 每页条数 + 分页，NMCPS-ARCH-006 §3.8 / NMCPS-ADR-0017 D2）：
+				在滚动区之外，翻页时不跟着滚走；高度只读 `--app-list-footer-h`（49px），不写死 px。
+			-->
+			<div
+				v-if="$slots['list-footer']"
+				data-list-footer
+				class="h-(--app-list-footer-h) shrink-0 border-t border-(--ui-border)"
+			>
 				<slot name="list-footer" />
 			</div>
 		</section>

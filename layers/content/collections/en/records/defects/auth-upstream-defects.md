@@ -3,7 +3,7 @@ docId: NMCPS-REC-001
 title: "Upstream `/api/v1/auth` defect list (probed 2026-10-31)"
 navigation:
   title: "Upstream auth defects"
-description: "Record-layer defect list: an exhaustive probe of the seven `/auth/*` endpoints on http://192.168.1.55:10000/api/v1 (swagger diff + live calls + BFF end-to-end) registering 6 upstream defects (non-atomic refresh rotation, 500 on missing input, unvalidated Content-Type, OPTIONS 404, undocumented mfaType default, firstReset bypassing the old-password check) and 4 in-repo drifts, each with reproduction, expected behaviour, and the closed/open checklist, plus six ready-to-file upstream tickets carrying the verbatim curl commands and output."
+description: "Record-layer defect list: an exhaustive probe of the seven `/auth/*` endpoints on http://192.168.1.55:8888/api/v1 (swagger diff + live calls + BFF end-to-end) registering 6 upstream defects (non-atomic refresh rotation, 500 on missing input, unvalidated Content-Type, OPTIONS 404, undocumented mfaType default, firstReset bypassing the old-password check) and 4 in-repo drifts, each with reproduction, expected behaviour, and the closed/open checklist, plus six ready-to-file upstream tickets carrying the verbatim curl commands and output."
 excerpt: "6 upstream defects and 4 in-repo drifts on /auth, with reproduction."
 keywords:
   - "defect"
@@ -15,7 +15,8 @@ tier: 5
 authority: informative
 scope:
   - rec.defects.auth
-status: baseline
+status: superseded
+supersededBy: NMCPS-ADR-0018
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -33,12 +34,14 @@ tags:
 
 # Upstream `/api/v1/auth` defect list (NMCPS-REC-001)
 
+> **Generation note (2026-11-04)**: this list was captured against the **retired** go-zero gateway; that instance is gone and the repository plus the integration environment now target `http://192.168.1.55:8888/api/v1`. The host:port in the reproduction commands below has been rewritten to the current instance, **but the findings describe the old generation only** — re-probe before using them as a coding basis. The list is kept as history and `status` is set to `superseded`.
+
 > **Purpose**: capture this round's findings about the upstream authentication endpoints so the iam side can track them.
 > **Not here**: the contract itself is authoritative in `NMCPS-ARCH-003` (`layers/content/collections/cn/architecture/1.architecture/iam-architecture.md`) §7; this page only records what contradicts that contract or deserves fixing, plus its current state.
 
 ## 1. Scope and method
 
-- Target: `http://192.168.1.55:10000/api/v1`, prefix `/auth/*`.
+- Target: `http://192.168.1.55:8888/api/v1`, prefix `/auth/*`.
 - Method: (1) diff the endpoint list against `/swagger/specs/gateway.json`; (2) exhaustively probe each endpoint with valid, missing-field, unauthorised, wrong-credential, repeated and concurrent calls; (3) re-verify through the BFF (`PORT=39881 NUXT_BFF_UPSTREAM_BASE=<upstream>`) to see whether a defect is absorbed there.
 - Verdict: **all 7 endpoints work** (`login`, `whoami`, `token/refresh`, `logout`, `password`, `mfa/bind`, `mfa/confirm`); every unregistered path (`/auth/session`, `/auth/captcha`, `/auth/mfa/disable`, `/auth/mfa/verify`, `/auth/validate`) returns `404`, so there is no hidden capability. The BFF passes 10/10 end-to-end cases.
 
@@ -90,17 +93,17 @@ Still open: natural expiry (30-minute AT / 7-day RT) and concurrent refresh acro
 
 ## 5. Re-running the probe
 
-1. Start the BFF: `PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`.
+1. Start the BFF: `PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:8888/api/v1 node .output/server/index.mjs`.
 2. Hit the upstream directly for UP-AUTH-01 (concurrent refresh) and UP-AUTH-03/04 (missing input, Content-Type) — those are only visible upstream, the BFF absorbs them.
 3. Re-verify end-to-end through the BFF: `pnpm check:bff` against the fake upstream (81 assertions) and `pnpm check:ui` against its own fake upstream and the built artefact (68 assertions), then one manual login against the real upstream.
 4. Remember `--noproxy '*'` for local curl (the environment exports `http_proxy`).
 
 ## 6. Ticket text (ready to file)
 
-The six blocks below are self-contained: title, environment, reproduction, observed output, expectation, impact, acceptance. Every command and output was recorded verbatim against `http://192.168.1.55:10000/api/v1` on 2026-10-31. Shared prefix:
+The six blocks below are self-contained: title, environment, reproduction, observed output, expectation, impact, acceptance. Every command and output was recorded verbatim against `http://192.168.1.55:8888/api/v1` on 2026-10-31. Shared prefix:
 
 ```bash
-UP=http://192.168.1.55:10000/api/v1
+UP=http://192.168.1.55:8888/api/v1
 AT=$(curl -s --noproxy '*' -X POST "$UP/auth/login" -H 'content-type: application/json' \
   -d '{"accountName":"admin","password":"Admin@123456"}' | jq -r '.data.accessToken')
 ```
@@ -153,7 +156,7 @@ curl -s --noproxy '*' -X POST "$UP/auth/password" -H "authorization: Bearer $AT"
 **Reproduction**
 
 ```bash
-UP=http://192.168.1.55:10000/api/v1
+UP=http://192.168.1.55:8888/api/v1
 curl -s --noproxy '*' -X POST "$UP/auth/login" -H 'content-type: application/json' -d '{}'
 curl -s --noproxy '*' -X POST "$UP/auth/login" -H 'content-type: application/json' -d '{"accountName":"admin"}'
 curl -s --noproxy '*' -X POST "$UP/auth/token/refresh" -H 'content-type: application/json' -d '{}'

@@ -32,6 +32,7 @@ tags:
 
 > **Responsibility**: single authority for `arch.iam` — ensure the right entity accesses the right resource in the right way within the right context. Governance rules: `NMCPS-GOV-001`; authority index: `NMCPS-GOV-003`.
 > **Audience**: architecture and implementation engineers / AI assistants.
+> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1` (the `iam` namespace). The interface facts in §7 (`/api/v1/auth`, `accountLevel`, `whoami`, MFA, `sessionId`) describe the **old generation** and must be rewritten section-wide in the next revision; until then, live probing is the interface truth, and the switch record is indexed by `NMCPS-GOV-003`.
 
 ---
 
@@ -188,7 +189,7 @@ This repository is a demo program, so the login page must be loggable out of the
 - Prefill scope: `accountName` / `password` / `tenantCode` are refilled as a set per identity; other fields (such as `mfaCode`) are left alone, and every field stays editable.
 - Identity semantics: the super admin always has `tenantId === 0` and an empty `tenantCode`; the tenant admin carries a tenant code — consistent with the multi-tenant isolation in §5 and `AUTH_ACCOUNT_LEVEL` (`0` / `1`).
 - Demo only: the seed passwords serve demos and recordings; before going live they must be checked against the upstream IAM seed script, or the prefill removed (see `NMCPS-ADR-0013`).
-- Verified seed facts (owner-specified, probe on 2026-10-31 against `http://192.168.1.55:10000/api/v1`): login API `POST /api/v1/auth/login`; super admin `admin` / `Admin@123456` (`accountLevel: 0`, `tenantId: 0`); tenant admin `tenantadmin` / `Tenant@123456` (`accountLevel: 1`, `tenantId: 1`). The seeds carry no tenant code, so an empty `tenantCode` is enough to log in (the built-in default tenant code is `default`, used only when a tenant must be chosen explicitly).
+- Verified seed facts (owner-specified, probe on 2026-10-31 against `http://192.168.1.55:8888/api/v1`): login API `POST /api/v1/auth/login`; super admin `admin` / `Admin@123456` (`accountLevel: 0`, `tenantId: 0`); tenant admin `tenantadmin` / `Tenant@123456` (`accountLevel: 1`, `tenantId: 1`). The seeds carry no tenant code, so an empty `tenantCode` is enough to log in (the built-in default tenant code is `default`, used only when a tenant must be chosen explicitly).
 - Prerequisite: `NUXT_BFF_UPSTREAM_BASE` must be set (local `.env`, never committed). With an empty upstream every `/api/auth/*` route answers `503 bff_upstream_missing`, so no account — seed or otherwise — can log in; the prefill cannot compensate for a missing upstream.
 - Upstream probe: on mount the login page calls `GET /ready` through `useBffUpstream()` with an explicit `retry: false` (503 sits in ofetch's default retry list, so leaving it on means two requests per visit). Only an explicit `upstream.configured === false` triggers the warning; a failed probe (network outage, or desktop with no same-origin Nitro) draws no conclusion and defers to the login call.
 - Probe cache: `sessionStorage` under `bff.upstreamProbe`, 30s for "configured" and 5s for "not configured" (a to-fix state should heal quickly). The warning carries a "Check again" button that skips the cache, so fixing `.env` and restarting the BFF takes effect without waiting for the TTL.

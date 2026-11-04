@@ -32,6 +32,7 @@ export const DOC_PATHS = {
 	"NMCPS-ADR-0015": "layers/content/collections/cn/records/adr/adr-0015.md",
 	"NMCPS-ADR-0016": "layers/content/collections/cn/records/adr/adr-0016.md",
 	"NMCPS-ADR-0017": "layers/content/collections/cn/records/adr/adr-0017.md",
+	"NMCPS-ADR-0018": "layers/content/collections/cn/records/adr/adr-0018.md",
 	"NMCPS-ARCH-001": "layers/content/collections/cn/architecture/1.architecture/transport-architecture.md",
 	"NMCPS-ARCH-002": "layers/content/collections/cn/architecture/1.architecture/datasource-architecture.md",
 	"NMCPS-ARCH-003": "layers/content/collections/cn/architecture/1.architecture/iam-architecture.md",
@@ -48,7 +49,9 @@ export const DOC_PATHS = {
 	"NMCPS-CONTRACT-001": "layers/content/collections/cn/architecture/3.contract/shared-types.md",
 	"NMCPS-CONTRACT-002": "layers/content/collections/cn/architecture/3.contract/metrics.md",
 	"NMCPS-REC-001": "layers/content/collections/cn/records/defects/auth-upstream-defects.md",
-	"NMCPS-REC-002": "layers/content/collections/cn/records/defects/account-upstream-defects.md"
+	"NMCPS-REC-002": "layers/content/collections/cn/records/defects/account-upstream-defects.md",
+	"NMCPS-REC-003": "layers/content/collections/cn/records/defects/policy-upstream-defects.md",
+	"NMCPS-REC-004": "layers/content/collections/cn/records/defects/audit-upstream-defects.md"
 } as const;
 
 export type DocId = keyof typeof DOC_PATHS;

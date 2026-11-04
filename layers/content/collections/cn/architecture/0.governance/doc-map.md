@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.33.0
+version: 0.37.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-01"
+updatedAt: "2026-11-03"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -113,8 +113,11 @@ tags:
 | NMCPS-ADR-0015 | 平台能力探针化 | 5 | informative | rec.adr.0015 | baseline | records/adr/adr-0015.md |
 | NMCPS-ADR-0016 | 移除下载落地页 | 5 | informative | rec.adr.0016 | baseline | records/adr/adr-0016.md |
 | NMCPS-ADR-0017 | 数据表单交互基准 | 5 | informative | rec.adr.0017 | baseline | records/adr/adr-0017.md |
-| NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | baseline | records/defects/auth-upstream-defects.md |
-| NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | baseline | records/defects/account-upstream-defects.md |
+| NMCPS-ADR-0018 | 后端代际切换 | 5 | informative | rec.adr.0018 | baseline | records/adr/adr-0018.md |
+| NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
+| NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
+| NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
+| NMCPS-REC-004 | 上游 audit 缺陷清单 | 5 | informative | rec.defects.audit | superseded | records/defects/audit-upstream-defects.md |
 | NMCPS-ARCH-001 | 通信面架构 | 1 | normative | arch.transport | baseline | architecture/1.architecture/transport-architecture.md |
 | NMCPS-ARCH-002 | 数据源架构 | 1 | normative | arch.datasource | baseline | architecture/1.architecture/datasource-architecture.md |
 | NMCPS-ARCH-003 | IAM 架构 | 1 | normative | arch.iam | baseline | architecture/1.architecture/iam-architecture.md |
@@ -173,3 +176,16 @@ tags:
 | 2026-11-01 | 0.31.0 | **ARCH-006 → 0.2.8（`topbar` 模式补 `check:ui` 用例）**：§7 第 5 行「面包屑记录段」由待补转已覆盖（1920 视口切「顶栏」→ `[系统管理 / 用户管理 / Alice]`，点记录段去掉 `?id`）；新增第 14 行验收「工具栏与页头对齐的是限宽容器（同为 `left=240` / `width=1440`），内边距各保持 12px / 32px、20px 差为有意保留」，§4.1 同步写明该口径；`check:ui` 85 → 88 项。 |
 | 2026-11-01 | 0.32.0 | **ARCH-006 → 0.2.9（无动作页的三模式收起口径）**：§4.4 补 `mobile` 与 `bigscreen` 同口径、`topbar` 不收起（面包屑常驻，左区 0 子节点，判空为 `!isTopbarMode && !hasPageActions`）；§7 新增第 15 行（`/dashboard/overview`：大屏 `h=0` / 顶栏 `h=49` / 手机 `h=0`），`check:ui` 88 → 90 项。 |
 | 2026-11-01 | 0.33.0 | **ARCH-006 → 0.2.10（面包屑路由段的结构）**：§5.1 新增「父段链接落点是默认子页（`defaultChildPath()`，不是无页面的 `m.path`）」；§7 新增第 16 行（`/system/user`：`[系统管理(a → /system/user) / 用户管理(span)]`，选中记录后末位加 `Alice(button)` 且前两段不变），`check:ui` 90 → 92 项（`/system/user` 18 → 20 项）。 |
+| 2026-11-01 | 0.34.0 | 登记记录层缺陷清单：REC-003 上游 `/api/v1/{role,permission,abac,access}` 缺陷与对 `/system/policy`、`/system/permission` 落码的边界（10 项缺陷：无生命周期端点 / DSL 不校验 / 回读无 `effect` / 入参与过滤残缺 / 等级越权与越界 / 试算忽略上下文 / 账号↔角色只写不读 / 超管被域拒绝 / 内置角色三码 / 时区不一致，Tier 5，informative）；同步 DESIGN-005 升 0.4.0（新增第七节 `/system/policy` 与第八节 `/system/permission` 落码基准，原变更记录顺延为第九节）。 |
+| 2026-11-01 | 0.35.0 | **ARCH-006 → 0.2.11 与 DESIGN-005 → 0.4.1（口径说明 Alert 下移到详情栏顶部）**：三页（`/system/user`、`/system/policy`、`/system/permission`）页根的身份 / 范围说明横幅（`mx-3 mt-3`）改到 `#detail` 顶部（`px-4 pt-4`），未选中空态由 `h-full` 改 `flex-1`、详情栏内层用 `flex min-h-full flex-col` 承接（不再撑出滚动条）；ARCH-006 §3.7 的反馈分工与 §4.1 的对齐规则同步收窄（内容页不再有页面级 Alert），DESIGN-005 §7.3 / §8.3 的客户端收敛条目点明该位置。`check:ui` 仍为 92/92。 |
+| 2026-11-02 | 0.36.0 | 登记记录层缺陷清单：REC-004 上游 `/api/v1/audit` 缺陷与对 `/system/log` 落码的边界（9 项缺陷：租户数据范围未文档化且失效令牌与越权同码 / `category` 大小写敏感且未知值静默忽略 / 未知查询参数被忽略且 `pageSize` 无稳定上限 / 时间参数双格式且非法值不报错 / `verify` 是写操作且断点是整链序号 / 导出缺必填回 `500` / 导出无详情与删除端点 / 导出列表时区偏移 8 小时 / 详情快照字段恒为空，Tier 5，informative）；同步 DESIGN-005 升 0.5.0（新增第九节 `/system/log` 审计日志落码基准，原变更记录顺延为第十节）。 |
+| 2026-11-02 | 0.36.1 | **DESIGN-005 → 0.5.1（`/system/permission` 授权矩阵改两列）**：左列资源类（`resourceType` ≠ `4`）、右列接口类（`4`）。接口点在目录里占大头（24 条中 15 条），混排会把「单设备 / 指标 / MIB / 告警」压到底部；列序固定、窄容器自动堆叠（`repeat(auto-fit, minmax(17rem, 1fr))`，接口列仍第二）、空列留一行灰字。 |
+| 2026-11-02 | 0.36.2 | `NMCPS-ARCH-006` → 0.2.12（§3.7 右栏内「字段 + 只读分区」并排的例外、§3.2 宽度口径）、`NMCPS-DESIGN-005` → 0.5.2（§8.3 授权矩阵回单列并右移到详情栏右侧）。 |
+| 2026-11-02 | 0.36.3 | `NMCPS-ARCH-006` → 0.2.13（§3.7 右栏等分两列、铺满容器；§3.2 去掉并排形态的 `max-w` 上限）、`NMCPS-DESIGN-005` → 0.5.3（§8.3 详情栏等分两列 + 矩阵内部恢复资源类 / 接口类两列）。 |
+| 2026-11-02 | 0.36.4 | `NMCPS-ARCH-006` → 0.2.14（§4.1 新增「左区常驻筛选控件预算」与「不自造控件：只用 Nuxt UI v4 原生组件」两条）、`NMCPS-DESIGN-005` → 0.5.4（§9.3 第 2 条：时间范围与类别常驻工具栏左区，其余标识类筛选留浮层）。 |
+| 2026-11-02 | 0.36.5 | `NMCPS-ARCH-006` → 0.2.15（§4.1 补时间区间浮层的落码位置与两条实测口径：日历容器不能写 `w-0 flex-1`、整日窗口必须 `00:00:00` … `23:59:59`；§7 第 17 行断言 7 → 8，总数 99 → 100）、`NMCPS-DESIGN-005` → 0.5.5（§9.3 第 2 条：时间范围浮层改为快捷项列 + 双月日历 + 到秒补手）。 |
+| 2026-11-03 | 0.36.6 | `NMCPS-ARCH-006` → 0.2.16（§3.6 选中行底色由 `bg-elevated/60` 改为 `bg-accented` 并记下两模式实测原因；新增 §3.8「列表栏尾部：计数 / 每页条数 / 分页」：高度读 `--app-list-footer-h`、每页默认 15、选项 15·30·50·100 且四页统一、窄栏收敛顺序、`/system/policy` 客户端分页只切渲染层；§7 第 17 行去掉「每页条数」并新增第 18 行三条断言，总数 100 → 103）、`NMCPS-DESIGN-005` → 0.5.6（§7.3 第 3 条补客户端分页口径、§9.2 的 `pageSize` 选项改为 15 / 30 / 50 / 100、§9.3 第 2 条把每页条数移出筛选浮层、第 6 条补尾部断言）。 |
+| 2026-11-03 | 0.36.7 | `NMCPS-ARCH-006` → 0.2.17（§7 新增第 19 行：建号等级候选 = 严格低于会话等级且 ≤ 3，并落 2 条 `check:ui`；总数 103 → 105）、`NMCPS-DESIGN-005` → 0.5.7（§6.1 建号补「超级管理员需 `tenantId`」与 `GET /tenant`；§6.2 等级语义改为 0/1/2–3/4 四档；§6.3 矩阵按 2026-11-03 复测重写并列客户端收敛两条；§6.4 补 `20102` / `20103`；§6.5 标 `UP-ACC-01` 闭环并新增 `UP-ACC-07` / `UP-ACC-08`）、`NMCPS-REC-002` 复测更新（`UP-ACC-01` 标已闭环，新增 `UP-ACC-07` 建号 `tenantId` 必填与 `UP-ACC-08` 的 `L4` 归属服务账号，缺陷数 6 → 8，附复测命令）。 |
+| 2026-11-04 | 0.37.0 | 登记记录层 ADR：`NMCPS-ADR-0018` 后端代际切换（旧代 go-zero 网关退役，BFF 唯一上游改 `http://192.168.1.55:8888/api/v1`；10 条实测证据、4 张字段映射表、10 个能力缺口、13 个影响文件；局部作废 ADR-0011 的刷新轮换条款，Tier 5，informative）；`NMCPS-REC-001~004` 置 `superseded` 并补 `supersededBy: NMCPS-ADR-0018` 与文首代际说明（探测对象为已退役旧代）；新增 Tier 4 作业单 `documents/3.operations/backend-generation-migration.md`（逐文件 diff 草案 / `check:bff` 假上游改造点 / 验收与回滚，非受治理文档）。 |
+
+

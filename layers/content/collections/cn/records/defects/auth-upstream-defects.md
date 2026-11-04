@@ -3,7 +3,7 @@ docId: NMCPS-REC-001
 title: "上游 `/api/v1/auth` 缺陷清单（2026-10-31 实测）"
 navigation:
   title: "上游 auth 缺陷清单"
-description: "记录层缺陷清单：对 http://192.168.1.55:10000/api/v1 的 /auth/* 七个端点做穷举探测（swagger 比对 + 实调 + BFF 端到端），登记 6 项上游缺陷（刷新轮换非原子、缺参 500、Content-Type 未校验、OPTIONS 404、mfaType 缺省、firstReset 跳过旧口令校验）与 4 项仓库内漂移，并附复现步骤、期望行为、已闭环/未闭环清单，以及 6 份可直接提交上游的工单文本（含实测 curl 与输出）。"
+description: "记录层缺陷清单：对 http://192.168.1.55:8888/api/v1 的 /auth/* 七个端点做穷举探测（swagger 比对 + 实调 + BFF 端到端），登记 6 项上游缺陷（刷新轮换非原子、缺参 500、Content-Type 未校验、OPTIONS 404、mfaType 缺省、firstReset 跳过旧口令校验）与 4 项仓库内漂移，并附复现步骤、期望行为、已闭环/未闭环清单，以及 6 份可直接提交上游的工单文本（含实测 curl 与输出）。"
 excerpt: "上游 /auth 的 6 项缺陷与 4 项仓库内漂移，附复现与期望。"
 keywords:
   - "defect"
@@ -15,7 +15,8 @@ tier: 5
 authority: informative
 scope:
   - rec.defects.auth
-status: baseline
+status: superseded
+supersededBy: NMCPS-ADR-0018
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -33,12 +34,14 @@ tags:
 
 # 上游 `/api/v1/auth` 缺陷清单（NMCPS-REC-001）
 
+> **代际说明（2026-11-04）**：本文的探测对象是**已退役**的旧代 go-zero 网关；该实例已下线，仓库与联调环境统一改为 `http://192.168.1.55:8888/api/v1`。下文复现命令中的主机:端口已按当前实例改写，**但结论只描述旧代** —— 需在新代复测后才可作为落码依据。本文保留作历史，`status` 置 `superseded`。
+
 > **职责**：登记本轮对上游认证接口的缺陷结论与复现方法，供上游 iam 侧跟踪。
 > **不在本文**：契约语义本身以 `NMCPS-ARCH-003`（`layers/content/collections/cn/architecture/1.architecture/iam-architecture.md`）§7 为唯一权威；本文只记录「与契约不符 / 值得修」的部分及其现状。
 
 ## 一、探测范围与方法
 
-- 目标：`http://192.168.1.55:10000/api/v1`，路径前缀 `/auth/*`。
+- 目标：`http://192.168.1.55:8888/api/v1`，路径前缀 `/auth/*`。
 - 方法：① 以 `/swagger/specs/gateway.json` 比对端点清单；② 对每个端点做正向、缺参、越权、错误凭据、重复调用、并发调用穷举；③ 用 BFF（`PORT=39881 NUXT_BFF_UPSTREAM_BASE=<上游>`）做端到端复验，确认缺陷是否被 BFF 吸收。
 - 结论口径：**7 个端点全部可用**（`login`、`whoami`、`token/refresh`、`logout`、`password`、`mfa/bind`、`mfa/confirm`），未登记路径（`/auth/session`、`/auth/captcha`、`/auth/mfa/disable`、`/auth/mfa/verify`、`/auth/validate`）一律 `404`，无隐藏能力。BFF 端到端 10/10 通过。
 
@@ -90,17 +93,17 @@ tags:
 
 ## 五、复测方法
 
-1. 起 BFF：`PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:10000/api/v1 node .output/server/index.mjs`。
+1. 起 BFF：`PORT=39881 NUXT_BFF_UPSTREAM_BASE=http://192.168.1.55:8888/api/v1 node .output/server/index.mjs`。
 2. 直连上游跑 UP-AUTH-01（并发刷新）、UP-AUTH-03/04（缺参与 Content-Type）——这三项只在上游侧可见，BFF 已吸收。
 3. 走 BFF 复验端到端：`pnpm check:bff`（假上游，81 项）与 `pnpm check:ui`（自建假上游 + 构建产物，68 项）各一轮，再补一次真上游手工登录。
 4. 本地 curl 记得 `--noproxy '*'`（环境变量里有 `http_proxy`）。
 
 ## 六、工单文本（可直接提交）
 
-以下 6 份文本自包含：标题、环境、复现、实测输出、期望、影响、验收标准。复现命令与输出均为 2026-10-31 对 `http://192.168.1.55:10000/api/v1` 的原样记录。所有命令前缀统一：
+以下 6 份文本自包含：标题、环境、复现、实测输出、期望、影响、验收标准。复现命令与输出均为 2026-10-31 对 `http://192.168.1.55:8888/api/v1` 的原样记录。所有命令前缀统一：
 
 ```bash
-UP=http://192.168.1.55:10000/api/v1
+UP=http://192.168.1.55:8888/api/v1
 AT=$(curl -s --noproxy '*' -X POST "$UP/auth/login" -H 'content-type: application/json' \
   -d '{"accountName":"admin","password":"Admin@123456"}' | jq -r '.data.accessToken')
 ```
@@ -153,7 +156,7 @@ curl -s --noproxy '*' -X POST "$UP/auth/password" -H "authorization: Bearer $AT"
 **复现**
 
 ```bash
-UP=http://192.168.1.55:10000/api/v1
+UP=http://192.168.1.55:8888/api/v1
 curl -s --noproxy '*' -X POST "$UP/auth/login" -H 'content-type: application/json' -d '{}'
 curl -s --noproxy '*' -X POST "$UP/auth/login" -H 'content-type: application/json' -d '{"accountName":"admin"}'
 curl -s --noproxy '*' -X POST "$UP/auth/token/refresh" -H 'content-type: application/json' -d '{}'

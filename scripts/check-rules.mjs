@@ -9,7 +9,8 @@
 //   ③ 后续建议：A/B/C 选项的每条要求都必须写成列表项（Markdown 会把软换行折叠成一行，
 //      散文式写法在渲染后就读不出「每条分行」）
 //   ④ 语言与引用：收尾总结用中文；文档清单只引用 NMCPS-GOV-003，不手写清单
-//   ⑤ 工程约定：typecheck / lint / Rust 校验命令仍在规则里
+//   ⑤ 工程约定：typecheck / lint / Rust 校验命令、UI 组件选型（Nuxt UI v4 原生组件）
+//      与工具栏常驻筛选控件预算仍在规则里
 //   ⑥ CI 自查用例：`check:ui` / `check:bff` 的被测实例必须自带上游配置（否则用例误报）
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -97,6 +98,15 @@ log("编码约定仍要求在改动后跑 typecheck / lint", coding.includes("pn
 log(
 	"编码约定记录了 runtimeConfig 改动后先 nuxt prepare（.nuxt/types 缓存坑）",
 	bulletLines(coding, ["nuxt prepare"]).length === 1 && coding.includes("runtimeConfig") && coding.includes("TS2353")
+);
+
+log(
+	"编码约定要求 UI 一律用 Nuxt UI v4 原生组件（不自造等价控件）",
+	bulletLines(coding, ["Nuxt UI v4", "native components"]).length === 1
+);
+log(
+	"编码约定记录了工具栏常驻筛选控件预算（≤2 个 / ≤45% 内容盒）",
+	bulletLines(coding, ["toolbar", "45%"]).length === 1
 );
 
 const rust = texts.get("05-rust.md") ?? "";

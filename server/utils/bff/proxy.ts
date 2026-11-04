@@ -89,7 +89,7 @@ function normalizeUpstreamError(status: number, payload: unknown, raw: string): 
 	const details = pickDetails(payload)
 		?? (import.meta.dev && raw ? [{ loc: [], msg: raw.slice(0, 2000), type: "upstream_body" }] : undefined);
 
-	// 上游业务码（如 iam 的 20201 / 20205）与 HTTP 状态码天然不撞：> 599 时保留，
+	// 上游业务码（如 iam 的 10003 / 40101）与 HTTP 状态码天然不撞：> 599 时保留，
 	// 让前端能区分「口令错」「会话失效」「未认证」；HTTP 语义码仍以 status 为准。
 	const candidate = Number(asRecord(payload)?.code);
 	const code = Number.isFinite(candidate) && candidate > 599 ? candidate : status;
@@ -242,7 +242,7 @@ function safeJsonParse(raw: string): unknown {
  * - 上游不可达 → 502 `bff_upstream_unreachable`；超时 → 504 `bff_upstream_timeout`；
  * - 未配置上游 → 503 `bff_upstream_missing`（不静默返回空数据）；
  * - 上游非 2xx → 保留真实 HTTP 状态码 + `warning`（4xx）/`error`（5xx）语义；
- * - 上游非 2xx 且带业务码（`code > 599`，如 iam 的 20201）→ 保留业务码，便于 UI 分类；
+ * - 上游非 2xx 且带业务码（`code > 599`，如 iam 的 10003 / 40101）→ 保留业务码，便于 UI 分类；
  * - 上游裸 JSON → 包裹为 `{ code: 0, status: "success", data }`；已是信封则归一化后返回（`msg` → `message`）；
  * - 上游 `2xx` + `text/event-stream` → 原样流式透传（不套信封，见 `streamResponse`）；
  * - 原始上游报文只在 dev 下进入 `error_detail`，生产不泄露内网细节。

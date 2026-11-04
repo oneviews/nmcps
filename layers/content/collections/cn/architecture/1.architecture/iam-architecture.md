@@ -34,6 +34,7 @@ tags:
 
 > **本文职责**：`arch.iam` 域的唯一权威，定义系统身份与访问控制（IAM）架构——在正确上下文，让正确实体以正确方式访问正确资源。治理规则见 `NMCPS-GOV-001`，权威清单见 `NMCPS-GOV-003`。
 > **目标读者**：架构与实施工程师 / AI 助手。
+> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关（`iam` 命名空间），第七节的接口事实（`/api/v1/auth`、`accountLevel`、`whoami`、MFA、`sessionId`）对应**旧代**，须在下次修订中整节重写；重写完成前接口事实以联调实测为准，切换的记录见记录层索引（`NMCPS-GOV-003`）。
 
 ---
 
@@ -190,7 +191,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 预填范围：`accountName` / `password` / `tenantCode` 三项随身份整体回填，其余字段（如 `mfaCode`）不动；字段保持可编辑。
 - 身份口径：超级管理员 `tenantId` 恒为 `0`，`tenantCode` 留空；租户管理员带租户编码 —— 与第五节多租户隔离、`AUTH_ACCOUNT_LEVEL`（`0` / `1`）一致。
 - 演示专用：种子口令只用于演示与录屏；上线前须核对与上游 IAM 种子脚本一致，或移除预填（裁决见 `NMCPS-ADR-0013`）。
-- 种子事实（需求方给定 + 2026-10-31 对 `http://192.168.1.55:10000/api/v1` 实测）：登录 API = `POST /api/v1/auth/login`；超级管理员 `admin` / `Admin@123456`（`accountLevel: 0`、`tenantId: 0`）；租户管理员 `tenantadmin` / `Tenant@123456`（`accountLevel: 1`、`tenantId: 1`）。种子不含租户编码，`tenantCode` 留空即可登录（内置默认租户 code 为 `default`，仅显式多租户时填）。
+- 种子事实（需求方给定 + 2026-10-31 对 `http://192.168.1.55:8888/api/v1` 实测）：登录 API = `POST /api/v1/auth/login`；超级管理员 `admin` / `Admin@123456`（`accountLevel: 0`、`tenantId: 0`）；租户管理员 `tenantadmin` / `Tenant@123456`（`accountLevel: 1`、`tenantId: 1`）。种子不含租户编码，`tenantCode` 留空即可登录（内置默认租户 code 为 `default`，仅显式多租户时填）。
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。

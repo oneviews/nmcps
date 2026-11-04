@@ -11,6 +11,12 @@ Follow the project's existing conventions at all times:
 - After changing `runtimeConfig` keys in `nuxt.config.ts`, run `pnpm exec nuxt prepare` before `pnpm typecheck` — `.nuxt/types/runtime-config.d.ts` is generated, so a stale copy fails with `TS2353 ... does not exist in type`.
 - Do not introduce new dependencies unless they are already used in the project.
 
+## UI component conventions
+
+- Use Nuxt UI v4 native components (`UButton`, `UPopover`, `USelect`, `UInput`, `UFormField`, `UAlert`, `UModal`, `UDropdownMenu`, `USkeleton`…) — never hand-roll a button, dropdown, popover or input equivalent. When no native component fits, write the ADR for the gap first, then build the smallest possible wrapper.
+- Lift a filter into the page toolbar only when it decides the data scope (time window, low-cardinality enum): at most 2 standing controls, ≤45% of the content box, and the popover's "has filters" highlight must narrow to what actually remains inside the popover (`NMCPS-ARCH-006` §4.1).
+- A time-range filter is one summary `UButton` plus a `UPopover` holding a preset column and a `UCalendar range` calendar — never two side-by-side `datetime-local` inputs. Build date values with the `@internationalized/date` that Nuxt UI already ships, and let a calendar pick land on a whole-day window (`00:00:00` … `23:59:59`), not on `23:59`. The popover is sized by its content, so never wrap the calendar in `w-0 flex-1` (the month grids collapse to zero width and overlap).
+
 ## CI self-check conventions
 
 - Before editing a UI / integration self-check step in `.github/workflows/ci.yml`, confirm the instance under test gets its required environment: `check:ui` and `check:bff` boot their own fake upstream plus build output, so hand-starting a server (or pointing `CHECK_UI_BASE_URL` at an external one) requires providing `NUXT_BFF_UPSTREAM_BASE` yourself — otherwise the "upstream ready" and login cases fail as false positives (measured 2026-10-31).

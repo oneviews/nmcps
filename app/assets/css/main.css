@@ -26,6 +26,8 @@
 	:root {
 		/* 工具栏高度（L0 页级 / L1 栏级共用；@nuxt/ui DashboardToolbar 最小高的等值 rem） */
 		--app-toolbar-h: 3.0625rem; /* 49px @ 16px 根字号 */
+		/* 列表栏尾部高度（计数 / 每页条数 / 分页，NMCPS-ARCH-006 §3.8）：与工具栏同口径 49px */
+		--app-list-footer-h: 3.0625rem; /* 49px @ 16px 根字号 */
 		/* 分栏最小宽度常量 */
 		--page-min-w: 20rem; /* 320px：单栏 / 覆盖式最低可用宽 */
 		--split-min-w: 56rem; /* 896px：两栏门槛 = 左栏上限 24rem + 右栏下限 32rem */

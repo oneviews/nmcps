@@ -39,6 +39,10 @@ export type GatewayMethod = (typeof GATEWAY_METHODS)[number];
  * 新增资源须显式修改本表，而不是放开为通配。
  */
 export const GATEWAY_RESOURCES = [
+	// 策略域：`/system/policy` 的 `GET|POST /api/abac/rule`、
+	// `POST /api/access/dryrun`（NMCPS-DESIGN-005 §7.1）
+	"abac",
+	"access",
 	// 账号域：`/system/user` 的 `GET /api/account`、`POST /api/account`、
 	// `PUT /api/account/{accountCode}/status`（NMCPS-DESIGN-005 §6.1）
 	"account",
@@ -47,6 +51,9 @@ export const GATEWAY_RESOURCES = [
 	"alerts",
 	"asset",
 	"association",
+	// 审计域：`/system/log` 的 `GET /api/audit`、`GET /api/audit/{logCode}`、
+	// `POST /api/audit/verify`、`GET|POST /api/audit/export`（NMCPS-DESIGN-005 §9.1）
+	"audit",
 	"dashboard",
 	"device",
 	"devices",
@@ -60,6 +67,8 @@ export const GATEWAY_RESOURCES = [
 	"metrics",
 	"monitor",
 	"ota",
+	// 权限域：`/system/permission` 的 `GET|POST /api/permission`、`GET|POST /api/role`、
+	// `DELETE /api/role/{roleCode}`、`GET|POST|DELETE /api/role/{roleCode}/permission`（NMCPS-DESIGN-005 §8.1）
 	"permission",
 	"product",
 	"protocol",

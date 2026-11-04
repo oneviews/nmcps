@@ -3,10 +3,10 @@
 //
 // 设计基准：NMCPS-DESIGN-005 §6.4（layers/content/collections/cn/architecture/2.domain/system.md）
 // 缺陷背景：NMCPS-REC-002（缺参 / 越界等级上游报 `500 10509`，见 UP-ACC-03）。
-import { ACCOUNT_LEVEL, ACCOUNT_STATUS } from "~~/shared/types/account";
+import { ACCOUNT_CREATABLE_MAX_LEVEL, ACCOUNT_LEVEL, ACCOUNT_STATUS } from "~~/shared/types/account";
 
 /** 可内联到表单字段的业务码 → 目标字段（其余错误只做整体提示） */
-export function accountErrorField(error: unknown): "accountName" | "password" | undefined {
+export function accountErrorField(error: unknown): "accountName" | "accountLevel" | "password" | undefined {
 	if (!(error instanceof ApiError))
 		return undefined;
 
@@ -15,6 +15,10 @@ export function accountErrorField(error: unknown): "accountName" | "password" | 
 			return "accountName";
 		case 20101:
 			return "password";
+		// 等级越权 / 层级不符：上游口径已按「只能向下管控」收紧（NMCPS-REC-002 UP-ACC-01 / UP-ACC-08）
+		case 20102:
+		case 20103:
+			return "accountLevel";
 		default:
 			return undefined;
 	}
@@ -41,6 +45,12 @@ export function accountErrorKey(error: unknown): string | undefined {
 		// 口令复杂度 / 历史重复
 		case 20101:
 			return "pages.system-user.errors.weakPassword";
+		// 等级与归属层不匹配（实测提交 `accountLevel: 4`）
+		case 20102:
+			return "pages.system-user.errors.layerMismatch";
+		// 只能向下管控：同级或更高等级（实测租户管理员建 `0` / `1`）
+		case 20103:
+			return "pages.system-user.errors.escalation";
 		// 参数不合法：状态或等级越界
 		case 10101:
 			return "pages.system-user.errors.invalidParam";
@@ -61,12 +71,17 @@ export function accountErrorKey(error: unknown): string | undefined {
 	}
 }
 
-/** 账号等级 → i18n 键：只承认 `0` / `1`，其余（上游接受的 `2`–`4`）标「未定义」 */
+/** 账号等级 → i18n 键：`0` / `1` 有语义，`2`–`3` 是租户层下级账号，`4` 是系统开通的服务账号 */
 export function accountLevelKey(level: number): string {
 	if (level === ACCOUNT_LEVEL.SUPER_ADMIN)
 		return "pages.system-user.level.superAdmin";
 	if (level === ACCOUNT_LEVEL.TENANT_ADMIN)
 		return "pages.system-user.level.tenantAdmin";
+	// 2026-11-03 复测：上游把 1–3 归为「租户层」，4 归「服务账号由系统自动开通」
+	if (level > ACCOUNT_LEVEL.TENANT_ADMIN && level <= ACCOUNT_CREATABLE_MAX_LEVEL)
+		return "pages.system-user.level.subordinate";
+	if (level === ACCOUNT_CREATABLE_MAX_LEVEL + 1)
+		return "pages.system-user.level.service";
 
 	return "pages.system-user.level.undefined";
 }

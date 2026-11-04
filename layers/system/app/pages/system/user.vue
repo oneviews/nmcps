@@ -2,18 +2,9 @@
 	<div class="flex min-h-0 flex-1 flex-col">
 		<!--
 			页面根显式取 `flex-1 min-h-0`（NMCPS-ARCH-006 §3.3）：definite height 链在这里落定。
-			页面级口径说明（NMCPS-DESIGN-005 §6.3）：两栏 / 覆盖式都显示，属「页面级 Alert」。
+			身份 / 范围说明下移到详情栏顶部（见 `#detail`，NMCPS-DESIGN-005 §6.3）：
+			页面顶部只留工具栏与两栏骨架，不再被一条横幅压掉左栏第一行。
 		-->
-		<UAlert
-			v-if="loaded"
-			:color="scopeAlert.color"
-			variant="subtle"
-			icon="carbon:user-multiple"
-			:title="$t(scopeAlert.title)"
-			:description="$t(scopeAlert.description)"
-			class="mx-3 mt-3 shrink-0"
-		/>
-
 		<!--
 			内容页工具栏（NMCPS-ARCH-006 §4）：全页只有这一层。
 			左区 = 集合域动作（搜索 / 筛选 / 刷新）；覆盖式详情态换成唯一「返回」。
@@ -208,9 +199,9 @@
 						:aria-selected="account.accountCode === selectedId"
 						:tabindex="account.accountCode === selectedId || (!selectedId && index === 0) ? 0 : -1"
 						:title="`${account.displayName || account.accountName} · ${account.accountCode}`"
-						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated/40 focus-visible:bg-elevated/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
 						:class="account.accountCode === selectedId
-							? 'border-primary bg-elevated/60'
+							? 'border-primary bg-accented'
 							: 'border-transparent'"
 						@click="selection.select(account)"
 						@keydown.enter.prevent="selection.select(account)"
@@ -231,134 +222,148 @@
 				</ul>
 			</template>
 
-			<!-- 列表尾部（滚动区之外）：计数 + 分页（D2），翻页时不跟着滚走 -->
+			<!-- 列表尾部（滚动区之外）：计数 + 每页条数 + 分页（§3.8 / D2），翻页时不跟着滚走 -->
 			<template #list-footer>
-				<div class="flex items-center justify-between gap-2 px-3 py-2">
-					<span class="truncate text-xs text-(--ui-text-muted)">
-						{{ $t("pages.system-user.total", { total }) }}
-					</span>
-					<UPagination
-						v-model:page="page"
-						size="xs"
-						:total="total"
-						:items-per-page="pageSize"
-						:disabled="loading"
-					/>
-				</div>
+				<LayoutListFooter
+					v-model:page="page"
+					v-model:page-size="pageSize"
+					:total="total"
+					:disabled="loading"
+				>
+					{{ $t("pages.system-user.total", { total }) }}
+				</LayoutListFooter>
 			</template>
 
 			<template #detail>
-				<!-- create 态：原建号弹窗改为右栏内联表单（D3 / 附录 B） -->
-				<div v-if="isCreating" class="max-w-[640px] px-4 pt-4">
-					<h2 class="text-base font-semibold">
-						{{ $t("pages.system-user.createForm.title") }}
-					</h2>
-				</div>
-				<UserAccountCreateForm
-					v-if="isCreating"
-					ref="createFormRef"
-					:level-options="levelOptions"
-					@created="onCreated"
-				/>
-
-				<!-- `?id` 不在当前 rows：零详情请求 + 一次提示，不清空 URL（D6） -->
-				<div v-else-if="isMissing" class="p-4">
-					<UAlert
-						color="warning"
-						variant="subtle"
-						icon="carbon:unlink"
-						:title="$t('pages.system-user.selectionMissingTitle')"
-						:description="$t('pages.system-user.selectionMissing', { id: selectedId })"
-					>
-						<template #actions>
-							<UButton
-								size="sm"
-								color="neutral"
-								variant="subtle"
-								:label="$t('pages.system-user.selectionClear')"
-								@click="clearSelection()"
-							/>
-						</template>
-					</UAlert>
-				</div>
-
-				<!-- view 态：只读详情（无编辑入口，D3 的 `edit` 三态在两栏首例挂起） -->
-				<div v-else-if="selected" class="max-w-[640px] space-y-5 p-4">
-					<!-- 内容区标题（§4 / §5.3）：记录标题不进工具栏，覆盖式下它就是「我在看哪一条」 -->
-					<div class="min-w-0">
-						<h2 class="truncate text-base font-semibold">
-							{{ selected.displayName || selected.accountName }}
+				<div class="flex min-h-full flex-col">
+					<!--
+						身份 / 范围说明（NMCPS-DESIGN-005 §6.3）：放在详情栏顶部，
+						它回答的是「这批账号在什么范围内可见」，属于所选记录的上下文而不是页面级横幅；
+						因此三种详情状态（含未选中空态）都在最上面看到它，覆盖式下随详情页一起出现。
+					-->
+					<div v-if="loaded" class="shrink-0 px-4 pt-4">
+						<UAlert
+							:color="scopeAlert.color"
+							variant="subtle"
+							icon="carbon:user-multiple"
+							:title="$t(scopeAlert.title)"
+							:description="$t(scopeAlert.description)"
+						/>
+					</div>
+					<!-- create 态：原建号弹窗改为右栏内联表单（D3 / 附录 B） -->
+					<div v-if="isCreating" class="max-w-[640px] px-4 pt-4">
+						<h2 class="text-base font-semibold">
+							{{ $t("pages.system-user.createForm.title") }}
 						</h2>
-						<p class="truncate font-mono text-xs text-(--ui-text-muted)">
-							{{ selected.accountCode }}
+					</div>
+					<UserAccountCreateForm
+						v-if="isCreating"
+						ref="createFormRef"
+						:level-options="levelOptions"
+						:tenant-options="tenantOptions"
+						:tenant-loading="tenantsLoading"
+						@created="onCreated"
+					/>
+
+					<!-- `?id` 不在当前 rows：零详情请求 + 一次提示，不清空 URL（D6） -->
+					<div v-else-if="isMissing" class="p-4">
+						<UAlert
+							color="warning"
+							variant="subtle"
+							icon="carbon:unlink"
+							:title="$t('pages.system-user.selectionMissingTitle')"
+							:description="$t('pages.system-user.selectionMissing', { id: selectedId })"
+						>
+							<template #actions>
+								<UButton
+									size="sm"
+									color="neutral"
+									variant="subtle"
+									:label="$t('pages.system-user.selectionClear')"
+									@click="clearSelection()"
+								/>
+							</template>
+						</UAlert>
+					</div>
+
+					<!-- view 态：只读详情（无编辑入口，D3 的 `edit` 三态在两栏首例挂起） -->
+					<div v-else-if="selected" class="max-w-[640px] space-y-5 p-4">
+						<!-- 内容区标题（§4 / §5.3）：记录标题不进工具栏，覆盖式下它就是「我在看哪一条」 -->
+						<div class="min-w-0">
+							<h2 class="truncate text-base font-semibold">
+								{{ selected.displayName || selected.accountName }}
+							</h2>
+							<p class="truncate font-mono text-xs text-(--ui-text-muted)">
+								{{ selected.accountCode }}
+							</p>
+						</div>
+						<dl class="grid grid-cols-[minmax(5rem,auto)_1fr] items-baseline gap-x-4 gap-y-3 text-sm">
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.accountName") }}
+							</dt>
+							<dd class="break-all font-mono">
+								{{ selected.accountName }}
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.accountCode") }}
+							</dt>
+							<dd class="break-all font-mono text-xs">
+								{{ selected.accountCode }}
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.displayName") }}
+							</dt>
+							<dd>{{ selected.displayName }}</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.accountLevel") }}
+							</dt>
+							<dd>
+								<UBadge :color="accountLevelColor(selected.accountLevel)" variant="subtle">
+									{{ $t(accountLevelKey(selected.accountLevel), { level: selected.accountLevel }) }}
+								</UBadge>
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.status") }}
+							</dt>
+							<dd>
+								<UBadge :color="accountStatusColor(selected.status)" variant="subtle">
+									{{ $t(accountStatusKey(selected.status), { status: selected.status }) }}
+								</UBadge>
+							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.mfa") }}
+							</dt>
+							<dd>{{ selected.mfaEnabled ? $t("pages.system-user.mfaOn") : $t("pages.system-user.mfaOff") }}</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.createdAt") }}
+							</dt>
+							<!-- 上游同一字段两种时区（UP-ACC-05）：原样展示，不换算也不加 (UTC) -->
+							<dd class="font-mono text-xs">
+								{{ selected.createdAt }}
+							</dd>
+						</dl>
+
+						<p class="text-xs text-(--ui-text-muted)">
+							{{ $t("pages.system-user.immutableHint") }}
 						</p>
 					</div>
-					<dl class="grid grid-cols-[minmax(5rem,auto)_1fr] items-baseline gap-x-4 gap-y-3 text-sm">
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.accountName") }}
-						</dt>
-						<dd class="break-all font-mono">
-							{{ selected.accountName }}
-						</dd>
 
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.accountCode") }}
-						</dt>
-						<dd class="break-all font-mono text-xs">
-							{{ selected.accountCode }}
-						</dd>
-
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.displayName") }}
-						</dt>
-						<dd>{{ selected.displayName }}</dd>
-
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.accountLevel") }}
-						</dt>
-						<dd>
-							<UBadge :color="accountLevelColor(selected.accountLevel)" variant="subtle">
-								{{ $t(accountLevelKey(selected.accountLevel), { level: selected.accountLevel }) }}
-							</UBadge>
-						</dd>
-
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.status") }}
-						</dt>
-						<dd>
-							<UBadge :color="accountStatusColor(selected.status)" variant="subtle">
-								{{ $t(accountStatusKey(selected.status), { status: selected.status }) }}
-							</UBadge>
-						</dd>
-
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.mfa") }}
-						</dt>
-						<dd>{{ selected.mfaEnabled ? $t("pages.system-user.mfaOn") : $t("pages.system-user.mfaOff") }}</dd>
-
-						<dt class="text-(--ui-text-muted)">
-							{{ $t("pages.system-user.columns.createdAt") }}
-						</dt>
-						<!-- 上游同一字段两种时区（UP-ACC-05）：原样展示，不换算也不加 (UTC) -->
-						<dd class="font-mono text-xs">
-							{{ selected.createdAt }}
-						</dd>
-					</dl>
-
-					<p class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.system-user.immutableHint") }}
-					</p>
-				</div>
-
-				<!-- 无选中：右栏空态（D3）。「新建」只在工具栏一处入口（§4），空态里不再重复 -->
-				<div v-else class="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-					<UIcon name="carbon:document-blank" class="size-8 text-(--ui-text-muted)" />
-					<p class="text-sm font-medium">
-						{{ $t("pages.system-user.detailEmpty") }}
-					</p>
-					<p class="max-w-xs text-xs text-(--ui-text-muted)">
-						{{ $t("pages.system-user.detailEmptyHint") }}
-					</p>
+					<!-- 无选中：右栏空态（D3）。「新建」只在工具栏一处入口（§4），空态里不再重复 -->
+					<div v-else class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+						<UIcon name="carbon:document-blank" class="size-8 text-(--ui-text-muted)" />
+						<p class="text-sm font-medium">
+							{{ $t("pages.system-user.detailEmpty") }}
+						</p>
+						<p class="max-w-xs text-xs text-(--ui-text-muted)">
+							{{ $t("pages.system-user.detailEmptyHint") }}
+						</p>
+					</div>
 				</div>
 			</template>
 		</LayoutSplit>
@@ -375,7 +380,9 @@
 
 <script setup lang="ts">
 	import type { AccountStatus, AccountSummary } from "~~/shared/types/account";
-	import { ACCOUNT_LEVEL, ACCOUNT_STATUS } from "~~/shared/types/account";
+	import type { TenantSummary } from "~~/shared/types/tenant";
+	import { DEFAULT_PAGE_SIZE } from "~~/shared/constants/paging";
+	import { ACCOUNT_LEVEL, ACCOUNT_STATUS, creatableAccountLevels } from "~~/shared/types/account";
 
 	/**
 	 * `/system/user` 用户管理（两栏落码，NMCPS-ADR-0017 迁移步骤 4）。
@@ -389,8 +396,8 @@
 	 * | :--- | :--- | :--- |
 	 * | 列表范围 | 全平台 | 仅本租户（上游强约束） |
 	 * | 筛选 keyword / status | 可用 | 可用（受租户范围约束） |
-	 * | 筛选 accountLevel | 只提供「租户管理员」项：`0` 被上游当未提供（UP-ACC-02） |
-	 * | 新建账号 | 可建 `0` / `1` | 只能建 `1`（越级建号是上游缺口 UP-ACC-01，UI 不提供入口） |
+	 * | 筛选 accountLevel | 只提供「租户管理员」项：`0` 被上游当未提供（UP-ACC-02） | 同 |
+	 * | 新建账号 | 可建 `L1`–`L3`，**必须选所属租户**（缺 `tenantId` → `10101`，UP-ACC-07） | 可建 `L2` / `L3`（同级 / 更高级回 `20103`） |
 	 * | 变更状态 | 任意账号 | 本租户账号；跨租户上游回 `10301`（客户端不预判） |
 	 * | 变更本人状态 | 禁用（防自锁） | 禁用（防自锁） |
 	 * | 编辑资料 | 不提供：上游无 `PUT /account/{code}`（UP-ACC-04）→ 右栏无「编辑」入口 |
@@ -411,7 +418,7 @@
 	const rows = ref<AccountSummary[]>([]);
 	const total = ref(0);
 	const page = ref(1);
-	const pageSize = ref(20);
+	const pageSize = ref(DEFAULT_PAGE_SIZE);
 	const loading = ref(false);
 	const errorMessage = ref<string>();
 
@@ -549,7 +556,7 @@
 
 	/** 本人账号：状态变更会自锁，按钮直接禁用 */
 	function isSelf(account: AccountSummary): boolean {
-		return !!user.value?.accountCode && user.value.accountCode === account.accountCode;
+		return !!user.value?.username && user.value.username === account.accountName;
 	}
 
 	function openStatus(): void {
@@ -586,23 +593,59 @@
 		{ label: t("pages.system-user.level.tenantAdmin"), value: ACCOUNT_LEVEL.TENANT_ADMIN }
 	]);
 
-	/** 建号可选等级按身份收敛：租户管理员只看到「租户管理员」 */
-	const levelOptions = computed(() => isSuperAdmin.value
-		? [
-			{ label: t("pages.system-user.level.superAdmin"), value: ACCOUNT_LEVEL.SUPER_ADMIN },
-			{ label: t("pages.system-user.level.tenantAdmin"), value: ACCOUNT_LEVEL.TENANT_ADMIN }
-		]
-		: [{ label: t("pages.system-user.level.tenantAdmin"), value: ACCOUNT_LEVEL.TENANT_ADMIN }]);
+	/** 建号可选等级 = **严格低于自己且 ≤ 3**（2026-11-03 复测口径，NMCPS-DESIGN-005 §6.3） */
+	const creatableLevels = computed(() =>
+		creatableAccountLevels(ACCOUNT_LEVEL.TENANT_ADMIN));
+
+	/**
+	 * 建号等级下拉按身份推导：超级管理员 `L1`–`L3`、租户管理员 `L2`–`L3`。
+	 *
+	 * 2026-11-03 前这里写死「超级管理员 `0`/`1`、租户管理员只有 `1`」：上游改成
+	 * 「只能向下管控」（同级 / 更高回 `20103`）之后，两种身份的下拉都只剩必被拒的值，
+	 * 租户管理员建号 100% 失败。等级是上游归属层决定的，不该由页面写死。
+	 */
+	const levelOptions = computed(() => creatableLevels.value.map((level) => ({
+		label: `L${level}`,
+		value: level
+	})));
+
+	/** 超级管理员建号的「所属租户」候选（`GET /api/tenant`，UP-ACC-07）；租户管理员不需要 */
+	const { list: listTenants } = useTenants();
+	const tenants = ref<TenantSummary[]>([]);
+	const tenantsLoading = ref(false);
+	const tenantOptions = computed(() => tenants.value.map((tenant) => ({
+		label: `${tenant.tenantName}（${tenant.tenantCode}）`,
+		value: tenant.tenantId
+	})));
+
+	/** 只有超级管理员才拉租户列表：租户管理员的租户由上游按令牌推断，多发一次请求没有意义 */
+	watch(isSuperAdmin, (superAdmin) => {
+		if (!superAdmin || tenants.value.length || tenantsLoading.value)
+			return;
+
+		tenantsLoading.value = true;
+		void listTenants()
+			.then((list) => {
+				tenants.value = list;
+			})
+			// 租户列表拉不到时不阻断列表：表单会因无候选而提交不了，提示语由表单给出
+			.catch(() => {
+				tenants.value = [];
+			})
+			.finally(() => {
+				tenantsLoading.value = false;
+			});
+	}, { immediate: true });
 
 	/**
 	 * 身份说明三态：`0` / `1` 以外的等级（上游接受 `2`–`4` 但无语义）不能冒充租户管理员来说，
 	 * 否则页面上写的「受租户范围约束」会变成未经验证的断言。
 	 */
 	const scopeAlert = computed(() => {
-		if (user.value?.accountLevel === ACCOUNT_LEVEL.SUPER_ADMIN)
+		if (user.value && isSuperAdmin.value)
 			return { color: "neutral" as const, title: "pages.system-user.scopeSuperAdminTitle", description: "pages.system-user.scopeSuperAdmin" };
 
-		if (user.value?.accountLevel === ACCOUNT_LEVEL.TENANT_ADMIN)
+		if (user.value && !isSuperAdmin.value)
 			return { color: "info" as const, title: "pages.system-user.scopeTenantAdminTitle", description: "pages.system-user.scopeTenantAdmin" };
 
 		return { color: "warning" as const, title: "pages.system-user.scopeUnknownTitle", description: "pages.system-user.scopeUnknown" };
@@ -686,6 +729,8 @@
 	watchDebounced(keyword, () => applyFilters(), { debounce: 300 });
 	// 两个下拉是离散选择，改完立刻生效
 	watch([statusFilter, levelFilter], () => applyFilters());
+	// 单页条数变化同样走 `applyFilters()`：换条数后 `page * pageSize` 的偏移必然错位，必须回第一页
+	watch(pageSize, () => applyFilters());
 
 	watch(page, () => {
 		void load();
