@@ -40,9 +40,10 @@
 //   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部六个 key，
 //                        包含本地跑不了的 bff / ui；步骤名与 job 名取自这次的 `gh run view`。
 // 两条路都会在写回后立刻把正则回放一遍，措辞漂移当场就报；任一不过退出码 1。
-// `--seal` 是应急入口（只重封清单、不碰样本）：它能给任意字节盖章，所以正常流程里不该用它——
-// 一旦手工封存，必须在 commit message 里写明改了哪一份、为什么走不了上面两条路。它会把
-// 「本次封存改动了什么」逐条打印出来（字节变了 / 出处变了 / 新封 / 移除），没有任何变化就说没有。
+// `--seal --reason "…"` 是应急入口（只重封清单、不碰样本）：它能给任意字节盖章，所以正常流程里
+// 不该用它；真用了必须给 --reason，否则直接拒绝（盘上清单原样保留，⑯ 继续红）。理由是给人看的：
+// 它会被排成现成的 commit message 草稿（标题带理由、正文带改动清单），不进清单结构。它先打印
+// 「本次封存改动了什么」逐条明细（字节变了 / 出处变了 / 新封 / 移除），没有任何变化就说没有。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -136,12 +137,17 @@ function manifestDiff(before, after) {
 	return out;
 }
 
-/** 把当前样本的 sha256 + source 封存进清单；样本任何字节改动都会与清单对不上 */
-function seal() {
-	const keys = fixtureKeysOnDisk();
+/** 盘上六份样本的清单快照（还没落盘） */
+function snapshotManifest() {
 	const rows = {};
-	for (const key of keys)
+	for (const key of fixtureKeysOnDisk())
 		rows[key] = { sha256: sha256(fixturePath(key)), source: sourceOf(fixturePath(key)) };
+	return rows;
+}
+
+/** 把快照封存进清单并打印改动；样本任何字节改动都会与清单对不上 */
+function seal(rows = snapshotManifest()) {
+	const keys = Object.keys(rows);
 	const changes = manifestDiff(readManifest(), rows);
 	writeFileSync(join(ROOT, MANIFEST), `${JSON.stringify(rows, null, "\t")}\n`);
 	console.log(`✅ 已封存 ${MANIFEST}（${keys.length} 条：${keys.join(" / ")}）`);
@@ -152,14 +158,37 @@ function seal() {
 	return changes;
 }
 
-// `--seal`：只重封清单、不跑任何命令 —— 应急入口，样本正常不该由人来写
+// `--seal --reason "…"`：只重封清单、不跑任何命令 —— 应急入口，样本正常不该由人来写。
+// 没给理由就拒绝封存（盘上清单保持原样、⑯ 继续红），给了就把理由整理成现成的 commit message。
 if (process.argv.includes("--seal")) {
 	console.log("⚠️  --seal 是应急入口：正常重采请用 --write-fixtures（本地四步）或 --from-ci [run-id]（全部六份）。");
-	console.log("    它能给任何字节盖章，也就能把篡改合法化，所以手工封存必须在 commit message 里写明理由");
-	console.log("    （改了哪一份、为什么走不了机器回填）。");
-	const changes = seal();
-	if (changes.length === 0)
-		console.log("\n😐 样本本来就和清单一致：这次 --seal 没改变任何东西，不需要提交。");
+	console.log("    它能给任何字节盖章，也就能把篡改合法化，所以这次封存必须留下理由（--reason），");
+	console.log("    理由是写给人看的：它被排成 commit message 草稿，不进清单结构（清单仍只有 6 条 key）。");
+	const argv = process.argv.slice(2);
+	const at = argv.indexOf("--reason");
+	const reason = at === -1 ? "" : (argv[at + 1] ?? "").trim();
+	const rows = snapshotManifest();
+	const pending = manifestDiff(readManifest(), rows);
+
+	if (pending.length > 0 && !reason) {
+		console.log(`\n❌ 这次 --seal 会改动 ${pending.length} 处，但没给理由，拒绝封存（盘上清单原样保留，⑯ 继续红）：`);
+		for (const c of pending) console.log(`   · ${c}`);
+		console.log("\n   手工封存要写明改了哪一份、为什么 --write-fixtures / --from-ci 都走不了：");
+		console.log("   例：node scripts/check-ci-summary.mjs --seal --reason \"CI 产物已过期，ui.log 按 run 41928777512 第三次重试的日志手工补齐\"");
+		process.exit(1);
+	}
+
+	seal(rows);
+	if (pending.length === 0) {
+		console.log("\n😐 样本本来就和清单一致：没有变化就没有要提交的东西，这次不需要 --reason。");
+		process.exit(0);
+	}
+
+	// 出处那条差异自带换行，排进 commit 正文时压回一行，免得正文被断成两段
+	const body = pending.map((c) => `- ${c.replace(/\s*\n\s*/g, " ")}`).join("\n");
+	const keys = [...new Set(pending.map((c) => c.slice(0, c.indexOf(":"))))];
+	console.log(`\n📝 commit message 草稿（复制即用，理由已排进标题、改动清单已排进正文）：\n`);
+	console.log(`chore(ci): 手工重封 ${keys.join(" / ")} 样本 — ${reason}\n\n${body}\n`);
 	process.exit(0);
 }
 
