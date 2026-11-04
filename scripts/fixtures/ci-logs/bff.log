@@ -1,8 +1,11 @@
 # key: bff
-# source: CI run 41914867017 步骤 "Gateway contract checks"（job: BFF contract / page UI）日志尾部
-# 更新方式：gh run view <id> --log 里取该步骤尾部若干行（保留小结行），手工替换本文件
+# source: CI run 41923275927 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-04 回填）
+# 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
+✅ 挂载策略成功 200 code 0（AttachPolicy 是 POST 动作路由） — 200 0
+✅ 摘除不存在的策略仍 200（DetachPolicy 幂等） — 200 0
+✅ iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做） — total=3
+✅ AssignRole 成功 200 code 0（body 三字段 subject_type / subject_id / role_id） — 200 0
 ✅ RevokeRole 撤销不存在的绑定仍 200（幂等） — 200 0
-✅ 旧代策略域资源（role / permission / abac / access）→ 404 bff_resource_not_allowed — 404/bff_resource_not_allowed
+✅ 旧代策略域资源（role / permission / abac / access）→ 404 bff_resource_not_allowed — 404/bff_resource_not_allowed 404/bff_resource_not_allowed 404/bff_resource_not_allowed 404/bff_resource_not_allowed
 ✅ system / transmission 命名空间在白名单内（非 resource_not_allowed） — upstream_not_found / upstream_not_found
-
 106/106 项通过

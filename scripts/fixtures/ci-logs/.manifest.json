@@ -1,26 +1,26 @@
 {
 	"bff": {
-		"sha256": "9d695f968d4b14d797e61864b46afc2130fa031488af408da1e9923adcd70a92",
-		"source": "CI run 41914867017 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）日志尾部"
+		"sha256": "cbb58be88009306a43d4cca16ad367d658b7734b3965291451d3a7d63594a519",
+		"source": "CI run 41923275927 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-04 回填）"
 	},
 	"governance": {
-		"sha256": "c047af3457817741f8c315b7c0cb6e04c9b79232211eea8a11a6c12507fb6b11",
-		"source": "本地 `pnpm check:governance` 真实输出尾部（2026-11-04 重采）"
+		"sha256": "4b0ee40978f5c8495b6ad983d2a0e19fb494c83955cb64251672062cd2d451b1",
+		"source": "CI run 41923275927 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-04 回填）"
 	},
 	"i18n": {
-		"sha256": "c1b44cd1bd5216beb73219a1b4e61e70c34a8bbb1cfe8ae3c755512a6f73e043",
-		"source": "本地 `pnpm check:i18n` 真实输出尾部（2026-11-04 重采）"
+		"sha256": "fabe72ab90226eb5fb747b3aabe80a565f2794c15cd0b2183f5936e0f47e345c",
+		"source": "CI run 41923275927 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-04 回填）"
 	},
 	"lint": {
-		"sha256": "4124935543303d2c6e6454d204e36173cc108d3e43bd8edb783ffceedccde2ae",
-		"source": "本地 `pnpm lint` 真实输出尾部（2026-11-04 重采）"
+		"sha256": "f288bc327c9ea2c5bb0d2735c56df8287894155c872612b9b24c492cea9687bf",
+		"source": "CI run 41923275927 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-04 回填）"
 	},
 	"typecheck": {
-		"sha256": "0091711b9da6cd6379dc62ff2c5c88d9f1f4a1eaee1845c713d0c6dafe288059",
-		"source": "本地 `pnpm typecheck` 真实输出尾部（2026-11-04 重采）"
+		"sha256": "0187fae90d2f0bce68800b75f8daacf3aea1aedafdf23811d8d924232c31973c",
+		"source": "CI run 41923275927 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-04 回填）"
 	},
 	"ui": {
-		"sha256": "2fadb5007c9a350ac440a595fb6cdea30b5d0a381947edc408d7e76f8238de65",
-		"source": "CI run 41914867017 步骤 \"Build & run UI self-check\"（job: BFF contract / page UI）日志尾部"
+		"sha256": "41782ee26609bfed8290c0a602dc4046ec3c95dfcd1a3ce54d07f26b14dbd51c",
+		"source": "CI run 41923275927 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-04 回填）"
 	}
 }

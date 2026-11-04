@@ -1,5 +1,5 @@
 # key: typecheck
-# source: 本地 `pnpm typecheck` 真实输出尾部（2026-11-04 重采）
-# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+# source: CI run 41923275927 步骤 "Typecheck"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-04 回填）
+# 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 $ vue-tsc -b --pretty
 ▎ TNB ACTIVE — `typescript` is the tsgo-backed fork

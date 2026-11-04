@@ -31,14 +31,16 @@
 //   ⑯ 清单里每条 sha256 与样本字节一致
 //   ⑰ 清单里的 source 与样本 `# source:` 行一致（两个来源互相印证）
 //
-// 重采样：`node scripts/check-ci-summary.mjs --write-fixtures` 会重跑 lint / typecheck /
-// i18n / governance 四步并把真实输出尾部写回样本，随后自动封存清单；bff / ui 需要构建
-// 产物 + 真浏览器，只能从 `gh run view <id> --log` 里取对应步骤尾部手工替换，替换后跑
-// `node scripts/check-ci-summary.mjs --seal` 重新封存清单。
+// 一个回填断言（样本来源不能随手编）：
+//   ⑱ `--from-ci` 表里的步骤名与产物名都在 ci.yml 里存在（改名即红，回填不会写出假出处）
 //
-// 重采的两道自检（失败即退出码 1，但已成功的样本照常写入并封存）：
-//   · 不绿不写：某步 exit≠0 时跳过该 key，绝不把失败输出固化成「真实日志样本」；
-//   · 写回即回放：新样本立刻用表里的正则 `grep -aE` 一遍，措辞漂移在重采当场就报。
+// 重采样（两条路，都不需要手抄日志）：
+//   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
+//                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
+//   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部六个 key，
+//                        包含本地跑不了的 bff / ui；步骤名与 job 名取自这次的 `gh run view`。
+// 两条路都会在写回后立刻把正则回放一遍，措辞漂移当场就报；任一不过退出码 1。
+// `--seal` 只重封清单、不碰样本（手工改过样本时用）。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -62,6 +64,45 @@ const fixtureKeysOnDisk = () =>
 		.sort();
 const sha256 = (p) => createHash("sha256").update(readFileSync(join(ROOT, p))).digest("hex");
 const sourceOf = (p) => (readFileSync(join(ROOT, p), "utf8").match(/^# source: (.*)$/m) ?? ["", ""])[1];
+
+/** 从一段真实日志里取要写进样本的那几行（与 ci.yml 里 `tee` 出来的文件同源） */
+function pickTail(text, { tail, keepBanner = false, keep }) {
+	return text
+		.split("\n")
+		.map((l) => l.replace(/\s+$/, ""))
+		.filter((l) => l.length > 0 && (keepBanner || !l.startsWith("$ ")) && (!keep || keep.test(l)))
+		.slice(-tail);
+}
+
+function writeFixture(key, source, hint, body) {
+	const header = [`# key: ${key}`, `# source: ${source}`, `# 更新方式：${hint}`];
+	writeFileSync(join(ROOT, fixturePath(key)), `${header.join("\n")}\n${body.join("\n")}\n`);
+}
+
+/** 把刚写回的样本立刻喂回表里的正则：措辞漂移要在这里喊，而不是等下一次跑断言 */
+function replayFixture(key) {
+	const re = spawnSync("sh", [TABLE_SCRIPT, key], { cwd: ROOT, encoding: "utf8" }).stdout?.trim() ?? "";
+	return { re, hit: spawnSync("grep", ["-aE", re, join(ROOT, fixturePath(key))]).status === 0 };
+}
+
+// `--from-ci` 表：key → 产物名 + 产物内文件名 + 该步骤在 ci.yml 里的 name。
+// 步骤名写进 `# source:`，所以它必须与 ci.yml 一致（⑱ 静态校验），回填时还要在这次运行里
+// 真的找到同名步骤（证明出处不是编的）。产物名同理。
+const CI_ARTIFACTS = [
+	{ key: "lint", artifact: "check-logs-quality", file: "lint.log", step: "Lint", tail: 6, keepBanner: true },
+	{ key: "typecheck", artifact: "check-logs-quality", file: "typecheck.log", step: "Typecheck", tail: 6, keepBanner: true },
+	{ key: "i18n", artifact: "check-logs-quality", file: "i18n.log", step: "Text (i18n) guard", tail: 8 },
+	{
+		key: "governance",
+		artifact: "check-logs-quality",
+		file: "governance.log",
+		step: "Governance guard",
+		tail: 12,
+		keep: /结果：|自测|项通过/
+	},
+	{ key: "bff", artifact: "check-logs-runtime", file: "check-bff.log", step: "Gateway contract checks", tail: 8 },
+	{ key: "ui", artifact: "check-logs-runtime", file: "check-ui.log", step: "Page UI checks", tail: 8 }
+];
 
 /** 把当前样本的 sha256 + source 封存进清单；样本任何字节改动都会与清单对不上 */
 function seal() {
@@ -92,12 +133,7 @@ if (process.argv.includes("--write-fixtures")) {
 	const collected = [];
 	for (const { key, cmd, tail, keep, keepBanner } of jobs) {
 		const r = spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
-		const body = `${r.stdout ?? ""}${r.stderr ?? ""}`
-			.split("\n")
-			.map((l) => l.replace(/\s+$/, ""))
-			.filter((l) => l.length > 0 && (keepBanner || !l.startsWith("$ ")) && (!keep || keep.test(l)))
-			.slice(-tail);
-		collected.push({ key, cmd, status: r.status, body });
+		collected.push({ key, cmd, status: r.status, body: pickTail(`${r.stdout ?? ""}${r.stderr ?? ""}`, { tail, keep, keepBanner }) });
 	}
 
 	let problems = 0;
@@ -108,21 +144,109 @@ if (process.argv.includes("--write-fixtures")) {
 			console.log(`❌ 跳过 ${fixturePath(key)}：\`${cmd}\` exit ${status}，不把失败输出固化成样本（先让这步本地变绿再重采）`);
 			continue;
 		}
-		const header = [
-			`# key: ${key}`,
-			`# source: 本地 \`${cmd}\` 真实输出尾部（${new Date().toISOString().slice(0, 10)} 重采）`,
-			"# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures"
-		];
-		writeFileSync(join(ROOT, FIXTURE_DIR, `${key}.log`), `${header.join("\n")}\n${body.join("\n")}\n`);
+		const source = `本地 \`${cmd}\` 真实输出尾部（${new Date().toISOString().slice(0, 10)} 重采）`;
+		writeFixture(key, source, "node scripts/check-ci-summary.mjs --write-fixtures", body);
 		console.log(`✅ 已刷新 ${fixturePath(key)}（${cmd} exit 0，${body.length} 行）`);
-		// 重采当场就把新样本喂回正则：措辞变了要在这里喊，而不是等下一次跑断言
-		const re = spawnSync("sh", [TABLE_SCRIPT, key], { cwd: ROOT, encoding: "utf8" }).stdout?.trim() ?? "";
-		if (spawnSync("grep", ["-aE", re, join(ROOT, fixturePath(key))]).status !== 0) {
+		const { re, hit } = replayFixture(key);
+		if (!hit) {
 			problems++;
 			console.log(`   ⚠️ 正则不再命中新样本：key=${key} 正则=${JSON.stringify(re)} — 同步更新 ${TABLE_SCRIPT} 里这条正则`);
 		}
 	}
-	console.log("\n⚠️  bff / ui 需构建产物 + 真浏览器，无法本地重采：从 `gh run view <id> --log` 取对应步骤尾部手工替换后跑 --seal。");
+	console.log("\n⚠️  bff / ui 需构建产物 + 真浏览器，本地跑不了：用 `--from-ci [run-id]` 从 CI 产物回填（别再手抄）。");
+	seal();
+	process.exit(problems > 0 ? 1 : 0);
+}
+
+// `--from-ci`：把「机器抓的日志」回填成样本 —— 从该次运行的产物里取 ci.yml 用 tee 落盘的那份，
+// 所以样本出处不再是「某人从 gh run view 里挑了几行粘过来」（唯一能手工伪造的环节）。
+if (process.argv.includes("--from-ci")) {
+	const argv = process.argv.slice(2);
+	const at = argv.indexOf("--from-ci");
+	const explicit = argv[at + 1];
+	// 子进程失败要能干净地报错，而不是抛栈
+	const gh = (...args) => spawnSync("gh", args, { cwd: ROOT, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+	const fail = (msg) => {
+		console.log(`❌ ${msg}`);
+		process.exit(1);
+	};
+
+	const runId = explicit && /^\d+$/.test(explicit)
+		? explicit
+		: (gh("run", "list", "--limit", "1", "--json", "databaseId", "--jq", ".[0].databaseId").stdout ?? "").trim();
+	if (!runId)
+		fail("拿不到 run id：gh 未登录、无运行记录，或参数不是数字（用法：--from-ci [run-id]）");
+
+	// 该运行里真实存在的「步骤名 → job 名」：`# source:` 要写这两个名字，必须是这次真跑过的
+	const view = gh("run", "view", runId, "--json", "jobs,headSha");
+	if (view.status !== 0)
+		fail(`gh run view ${runId} 失败：${(view.stderr ?? "").trim().split("\n")[0]}`);
+	let jobsMeta = [];
+	try {
+		jobsMeta = JSON.parse(view.stdout).jobs ?? [];
+	} catch {
+		fail(`gh run view ${runId} 的输出不是 JSON`);
+	}
+	const stepToJob = new Map();
+	for (const job of jobsMeta) {
+		for (const step of job.steps ?? []) stepToJob.set(step.name, job.name);
+	}
+
+	const dir = join(ROOT, "ci-logs/downloads", runId);
+	rmSync(dir, { recursive: true, force: true });
+	const dl = gh("run", "download", runId, "-D", dir);
+	if (dl.status !== 0)
+		fail(`gh run download ${runId} 失败（产物可能已过期）：${(dl.stderr ?? "").trim().split("\n")[0]}`);
+
+	/** 产物布局随 upload-artifact 版本变过（v4 起剥掉公共前缀），按 basename 兜底找 */
+	const findArtifactFile = (artifact, file) => {
+		const root = join(dir, artifact);
+		const walk = (d) => {
+			let entries = [];
+			try {
+				entries = readdirSync(d, { withFileTypes: true });
+			} catch {
+				return null;
+			}
+			for (const e of entries) {
+				const p = join(d, e.name);
+				if (e.isDirectory()) {
+					const found = walk(p);
+					if (found) return found;
+				} else if (e.name === file) {
+					return p;
+				}
+			}
+			return null;
+		};
+		return walk(root);
+	};
+
+	let problems = 0;
+	for (const { key, artifact, file, step, tail, keep, keepBanner } of CI_ARTIFACTS) {
+		const jobName = stepToJob.get(step);
+		if (!jobName) {
+			problems++;
+			console.log(`❌ 跳过 ${fixturePath(key)}：run ${runId} 里找不到名为「${step}」的步骤（步骤改名了？同步 CI_ARTIFACTS）`);
+			continue;
+		}
+		const path = findArtifactFile(artifact, file);
+		if (!path) {
+			problems++;
+			console.log(`❌ 跳过 ${fixturePath(key)}：产物 ${artifact}/${file} 不存在（产物过期？或 ci.yml 改了产物路径）`);
+			continue;
+		}
+		const body = pickTail(readFileSync(path, "utf8"), { tail, keep, keepBanner });
+		const source = `CI run ${runId} 步骤 "${step}"（job: ${jobName}）产物 ${artifact}/${file} 尾部（${new Date().toISOString().slice(0, 10)} 回填）`;
+		writeFixture(key, source, "node scripts/check-ci-summary.mjs --from-ci [run-id]", body);
+		console.log(`✅ 已回填 ${fixturePath(key)}（run ${runId} / ${step}，${body.length} 行）`);
+		const { re, hit } = replayFixture(key);
+		if (!hit) {
+			problems++;
+			console.log(`   ⚠️ 正则不再命中回填的样本：key=${key} 正则=${JSON.stringify(re)} — 同步更新 ${TABLE_SCRIPT} 里这条正则`);
+		}
+	}
+	console.log(`\n📦 产物留在 ${dir.replace(`${ROOT}/`, "")}（已 gitignore）`);
 	seal();
 	process.exit(problems > 0 ? 1 : 0);
 }
@@ -346,6 +470,23 @@ wiring(
 	"每份样本都带 `# source:` 出处（防止凭空编造的样本冒充真实输出）",
 	fixtureKeys.length > 0 && noSource.length === 0,
 	noSource.map((k) => `${fixturePath(k)} 缺 \`# source:\` 行`).join("\n")
+);
+
+// ⑱ 回填表 ↔ ci.yml：`--from-ci` 把步骤名与产物名写进 `# source:`，两者都必须在 ci.yml 里存在，
+// 否则改完 workflow 就会「从产物里回填出一份出处编造的样本」（或者直接下载失败）。
+const ciText = ciLines.join("\n");
+const backfillMiss = CI_ARTIFACTS.flatMap(({ key, artifact, step }) => {
+	const miss = [];
+	if (!ciText.includes(`\n      - name: ${step}\n`))
+		miss.push(`${key}: ci.yml 没有名为「${step}」的步骤`);
+	if (!ciText.includes(`name: ${artifact}`))
+		miss.push(`${key}: ci.yml 没有上传名为 ${artifact} 的产物`);
+	return miss;
+});
+wiring(
+	`--from-ci 回填表里的步骤名与产物名都在 ${CI_YML} 里存在（${CI_ARTIFACTS.length} 条）`,
+	CI_ARTIFACTS.length > 0 && backfillMiss.length === 0,
+	backfillMiss.join("\n")
 );
 
 // ── 清单断言：SHA256 与 source 双源互证 ──

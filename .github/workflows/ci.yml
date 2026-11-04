@@ -82,6 +82,8 @@ jobs:
           sh scripts/ci-summary.sh "governance guard" ci-logs/governance.log --expect "$(sh scripts/ci-expectations.sh governance)" || status=1
           exit $status
 
+      # 产物同时是回归样本的来源：`node scripts/check-ci-summary.mjs --from-ci <run-id>`
+      # 直接下载这里的日志回填 scripts/fixtures/ci-logs/*.log（bff / ui 只能这样取，别再手抄）。
       - name: Upload quality check logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -173,6 +175,8 @@ jobs:
           path: ui-check.png
           if-no-files-found: ignore
 
+      # 产物同时是回归样本的来源：`node scripts/check-ci-summary.mjs --from-ci <run-id>`
+      # 回填 scripts/fixtures/ci-logs/*.log 时，bff / ui 两份就是从这里取的。
       - name: Upload runtime check logs
         if: always()
         uses: actions/upload-artifact@v7

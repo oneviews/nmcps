@@ -1,6 +1,6 @@
 # key: i18n
-# source: 本地 `pnpm check:i18n` 真实输出尾部（2026-11-04 重采）
-# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+# source: CI run 41923275927 步骤 "Text (i18n) guard"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-04 回填）
+# 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ cn / en 键集合一致 — 745 个键
 ✅ cn.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 745 个值
 ✅ en.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 745 个值
