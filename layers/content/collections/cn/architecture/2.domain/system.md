@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.5.7
+version: 0.6.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -21,7 +21,7 @@ dependsOn:
   - NMCPS-GOV-003
   - NMCPS-ARCH-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-03"
+updatedAt: "2026-11-04"
 icon: "carbon:settings"
 tags:
   - "领域基准"
@@ -33,7 +33,7 @@ tags:
 
 > **本文职责**：`domain.system` 域的唯一权威，定义系统管理——系统日志、策略管理、用户与权限管理。身份与访问控制的架构基准见 `NMCPS-ARCH-003`。
 > **目标读者**：实施工程师 / AI 助手。
-> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关，第六 / 七 / 八 / 九节的端点与字段（`/api/v1/account`、`/api/v1/role`、`/api/v1/audit`、`accountLevel`、`/abac/rule`、`/access/dryrun`、`/audit/export`、`/audit/verify`）对应**旧代**，须按新代契约（`iam` / `audit` 命名空间）重写；重写完成前以联调实测为准，切换的记录见记录层索引（`NMCPS-GOV-003`）。
+> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关。**第六节已于 0.6.0 按新代 `iam/users` 重写**；第七 / 八 / 九节仍写的是旧代（`/api/v1/role`、`/api/v1/permission`、`/api/v1/abac/rule`、`/api/v1/access/dryrun`、`/api/v1/audit`、`/audit/export`、`/audit/verify`），须按 `iam` / `audit` 命名空间重写（C4b / C4c，`NMCPS-ADR-0018`）；那三节在重写完成前以联调实测为准。
 
 ---
 
@@ -84,69 +84,73 @@ tags:
 
 ## 六、`/system/user` 用户管理（落码基准）
 
-> 口径来源：2026-11-01 与 **2026-11-03 复测**对 `http://192.168.1.55:8888/api/v1` 的实调（超级管理员 / 租户管理员双身份穷举）+ swagger 比对。与契约不符处登记在 `NMCPS-REC-002`（`layers/content/collections/cn/records/defects/account-upstream-defects.md`），本节只写「页面能依赖什么」。
+> 口径来源：**2026-11-04** 对 `http://192.168.1.55:8888/api/v1` 的实调（`/swagger/openapi.json` + 真实响应）。
+> 契约映射见 `NMCPS-ADR-0018` §4.2；本节只写「页面能依赖什么」。
+> 旧代（`/account`、`/tenant`）的字段口径与缺陷记录仍在 `NMCPS-REC-002`，但作为**历史**保留（已标 `superseded`）。
 
 ### 6.1 数据源与端点
 
 | 能力 | BFF 路径 | 上游 | 说明 |
 | :--- | :--- | :--- | :--- |
-| 列表 | `GET /api/account` | `GET /api/v1/account` | `page` / `pageSize` / `keyword` / `accountLevel` / `status` |
-| 建号 | `POST /api/account` | `POST /api/v1/account` | `accountName` / `displayName` / `password` / `accountLevel` 必填；**超级管理员另需 `tenantId`**（正值，`0` 视同缺省）；`mfaEnabled` / `mustResetPassword` 可选 |
-| 改状态 | `PUT /api/account/{accountCode}/status` | 同 | body `{ status }`，返回 `{ ok: true }` |
-| 详情 | `GET /api/account/{accountCode}` | 同 | 页面不单独调用：列表已含全部展示字段 |
-| 租户列表 | `GET /api/tenant` | 同 | 超级管理员建号时选 `tenantId` 的唯一来源；返回 `list` / `total` / `page` / `pageSize`，条目含 `tenantId` / `tenantCode` / `tenantName` |
+| 列表 | `GET /api/iam/users` | `GET /api/v1/iam/users` | `page` / `page_size` / `keyword` / `status` / `department_id` |
+| 建号 | `POST /api/iam/users` | 同 | `username` / `password` 必填；`email` / `display_name` / `department_id` 可选。**没有 `tenant_id`** |
+| 详情 | `GET /api/iam/users/{id}` | 同 | 实测存在；页面仍只读列表（列表已含全部展示字段） |
+| 改资料 / 改状态 | `PUT /api/iam/users/{id}` | 同 | body 里 `id` 也是必填；可写 `department_id` / `email` / `phone` / `display_name` / `status` / `mfa_enabled` |
+| 删号 | `DELETE /api/iam/users/{id}` | 同 | 软删（`deleted_at`），列表默认不再返回 |
+| 租户列表 | `GET /api/iam/tenants` | 同 | 只用于把行上的 `tenant_id` 翻成租户名 |
+| 部门列表 | `GET /api/iam/departments` | 同 | 建号候选 + 归属过滤；条目自带 `tenant_id` |
 
-- 路径段 `{id}` 实为 `accountCode`（`ACC…`），不是 `accountId`。
-- **没有改资料端点**（无 `PUT /api/v1/account/{id}`），也没有删号端点：`displayName` 建号后不可改，「删除」语义由 `status=2`（禁用）承接。
-- BFF 白名单需含 `account`（`shared/types/api.ts` 的 `GATEWAY_RESOURCES`），否则一律 `404 bff_resource_not_allowed`。
+- 路径段 `{id}` 是用户主键（`u_…`），不是旧代的 `accountCode`（`ACC…`）。
+- 列表空结果是 `list: null`：BFF 在出口归一为 `[]`（`NMCPS-ADR-0018` D6），页面可以直接 `.map`。
+- BFF 白名单需含 `iam`（`shared/types/api.ts` 的 `GATEWAY_RESOURCES`），否则一律 `404 bff_resource_not_allowed`。
 
 ### 6.2 字段口径
 
-- `accountLevel`：`0` 平台超级管理员（`tenantId: 0`）/ `1` 租户管理员 / `2`–`3` 租户层下级账号 / `4` 服务账号（上游原文「服务账号由系统自动开通」，手工建号回 `20102`）。**建号可选等级 = 严格低于自己**（数字更大）且 `≤ 3`：超级管理员 `1`–`3`，租户管理员 `2`–`3`；同级或更高回 `20103`「只能向下管控」。列表里 `1`–`3` 之外的等级仍按「未定义等级」只读展示。
-- `status`：`1` 启用 / `2` 禁用 / `3` 锁定 / `4` 待激活（swagger 口径）。写入 `0` 或 `5` → `10101`；`4` 由建号时的 `mustResetPassword` 决定，页面不主动写 `4`。
-- `createdAt`：`GET` 返回本地时、`POST` 返回 UTC（同一字段两种时区）→ 页面原样展示，不做时区换算（UP-ACC-05）。
-- 列表**不含** `tenantId` / `tenantCode` / `email` / `phone`：页面不展示租户归属，也不做「邮箱 / 手机」列（v1 那套字段上游没有）。
-- `accountName` 唯一：重复 → `10302`；`accountLevel=0` 作为**过滤条件**会被上游当「未提供」（零值）→ 返回全量，页面不提供「只看超级管理员」筛选项（UP-ACC-02）。
+- `username`：唯一，重复建号回 `10002 用户已存在`；建号后不可改（`PUT` 请求体里没有它）。
+- `status`：字符串枚举 `active` / `disabled` / `locked`（`chk_sys_user_status`）。页面只写 `active` ↔ `disabled`；`locked` 由上游在失败登录时置位。
+- `tenant_id` / `department_id`：列表**自带**这两个字段，未分配时为 `null`；部门自带租户，所以页面用「选部门」表达归属。旧代缺口 `UP-ACC-05`（列表缺租户归属）在此闭环。
+- `mfa_enabled`：只读展示（缺口 G8：新代没有 MFA 绑定端点，不提供绑定流程）。
+- `created_at` / `updated_at`：RFC3339 带偏移（`2026-11-03T18:59:06+08:00`）→ 原样展示，不做时区换算。
+- **没有 `accountLevel`**（缺口 G1）：等级模型整体退役，页面不展示、不筛选、也不在请求体里出现该字段。
+- 口令策略：实测「密码长度应为 6-128 字符」（`40001`），旧代的复杂度 / 历史重复校验不再适用。
 
-### 6.3 权限矩阵（实测）
+### 6.3 页面收敛（不是安全边界）
 
-| 动作 | 超级管理员（`accountLevel: 0`，`tenantId: 0`） | 租户管理员（`accountLevel: 1`，`tenantId ≥ 1`） |
+| 动作 | 平台级账号（会话 `tenant_id: null`） | 租户级账号（会话带 `tenant_id`） |
 | :--- | :--- | :--- |
-| 列表范围 | 全平台 | 仅本租户 |
-| 建号 | 可建 `1`–`3`，**必须显式带 `tenantId`**（`0` 或缺失 → `10101 缺少必填参数 tenantId`） | 可建 `2` / `3`（`tenantId` 由令牌推断，无需传）；`0` / `1` → `20103 只能向下管控` |
-| 建号等级上限 | `4` → `20102 账号等级与归属层不匹配…服务账号由系统自动开通`；`> 4` → `10101` | 同 |
-| 改状态 | 任意账号 | 仅本租户账号，跨租户 → `10301` |
-| 角色分配 `POST /api/account/role` | 恒 `10201`（域拒绝） | 本租户账号可分配 / 解除 |
-| 租户成员 `POST /api/tenant/{id}/member` | 可调 | 本租户可调 |
+| 列表范围 | 上游返回的全平台 | 上游限定在可见范围 |
+| 筛选 | `keyword` / `status` / `department_id` | 同（受范围约束） |
+| 建号 | `username` + `password` + 可选部门 | 同 |
+| 改资料 / 改状态 | 任意用户（本人除外） | 范围内用户（本人除外） |
+| 删号 | 任意用户（本人除外） | 范围内用户（本人除外） |
 
-> 2026-11-03 复测更正：0.5.6 之前矩阵里「租户管理员实测可建 `0` / `2` / `4`（应拒绝）」已经过期 —— 上游现在按「只能向下管控」拦同级与更高等级（`20103`），并把 `4` 归为「服务账号由系统自动开通」（`20102`）。同一轮复测还发现建号新增了 `tenantId` 必填，超级管理员不带该字段时**建号必然失败**（`10101`），这条缺口登记为 `UP-ACC-07`。
-
-客户端收敛（**不是安全边界**，只为不引导用户做出上游会拒或会越权的操作）：
-
-1. 等级下拉按身份收敛为「严格低于自己且 `≤ 3`」：超级管理员 `L1`–`L3`，租户管理员 `L2`–`L3`，默认取最低一档（数字最大）之外的第一项。0.5.6 之前只给 `1`（租户管理员）与 `0` / `1`（超级管理员），等于让两种身份都只能提交上游必拒的值（`20103`）。
-2. 超级管理员建号必须选租户：`GET /api/tenant` 拉列表（本环境只有 `default` 一个），`tenantId` 随建号一起提交；租户管理员不出现该字段（上游从令牌推断，多传反而越界）。
-3. 行内「变更状态」对本人账号（`accountCode` 等于会话账号）禁用，避免自锁 / 自禁。
-4. 不提供角色绑定与租户成员入口：前者超级管理员被上游 `10201` 拒绝，后者列表缺 `tenantId` 无法定位目标；两块归 `/system/permission` 与租户域。
-5. 上游仍是唯一鉴权点：BFF 只做白名单透传，客户端收敛不改变后端判定结果。
+1. 归属维度只有「部门」一个下拉：新代 `POST /iam/users` 没有 `tenant_id`，多给一个租户下拉只会产生传不上去的字段。
+2. 本人账号的「改状态 / 删号」两个入口直接禁用，避免自锁 / 自删。
+3. 删号走独立确认弹窗（软删不可从本页撤销），与「禁用」分开讲，不再把禁用当删号的替代。
+4. 角色绑定（`subject-roles`）本页仍不提供：读写对称的入口需要与 `/system/permission` 一起设计（C4c）。
+5. `isSuperAdmin` 目前是**近似**：会话 `tenant_id === null` 即平台级。按角色（`platform_admin`）判定需要新 ADR，见缺口 G1。
+6. 上游仍是唯一鉴权点：BFF 只做白名单透传，客户端收敛不改变后端判定结果。
 
 ### 6.4 错误码 → 页面处置
 
 | 码 | 上游含义 | 页面处置 |
 | :--- | :--- | :--- |
-| `10302` | 账号名已存在 | `accountName` 字段内联错误 |
-| `20101` | 口令不满足复杂度 / 有效期策略 | `password` 字段内联错误 |
-| `20102` | 账号等级与归属层不匹配（`4` 服务账号由系统开通） | 「本级不能建该等级」提示，指向等级字段 |
-| `20103` | 只能向下管控：不可操作同级或更高权限的账号 | 「等级必须低于自己」提示，指向等级字段 |
-| `10101` | 参数不合法（等级越界 / **缺 `tenantId`**） | 参数不合法提示；缺 `tenantId` 时文案点名该字段 |
-| `10301` | 目标不存在或不在当前租户域 | 「账号不存在或无权限」 |
-| `10201` | 未认证 / 域拒绝 | 「会话失效或当前身份无此权限」 |
-| `10509` | 上游内部错误（缺必填、等级越界） | 通用失败提示 + 检查必填项 |
+| `10002` | 用户已存在 | `username` 字段内联错误 |
+| `40001` | 字段校验失败（`message` 点名具体字段，如「密码长度应为 6-128 字符」） | 按 `message` 关键字内联到 `username` / `password`，其余整体提示并显示上游原文 |
+| `10003` | 账号或密码错误（改密旧口令错同码） | 通用失败提示 |
+| `10007` / `40101` / `401` | 会话失效 | 交给 `useApi` 的单飞刷新；仍失败则提示重新登录 |
+| `10301` / `404` | 目标不存在 / 跨范围 | 「用户不存在或无权限」 |
+| `10201` / `403` | 域拒绝 | 「当前身份无此权限」 |
+| `10509` / `500` | 上游内部错误 | 通用失败提示 + 检查必填项 |
+| `0` | 网络层失败（非信封） | 网络异常提示 |
 
 上游未配置 / 掉线 / 超时沿用 `upstreamHintKey()` 的运维指引（与登录页、`/user/security` 同一套文案）。
 
-### 6.5 已知缺口
+### 6.5 缺口现状
 
-`UP-ACC-01`～`UP-ACC-08` 见 `NMCPS-REC-002`：租户管理员越级建号（**已于 2026-11-03 复测确认闭环**：`20103` 生效）、`accountLevel=0` 过滤失效、缺字段 / 越界等级报 `500`、无改资料与删号端点、列表缺租户归属与时区不一致、超级管理员无法分配角色、建号新增 `tenantId` 必填（`UP-ACC-07`）、`4` 改由「服务账号自动开通」承接（`UP-ACC-08`）。页面只依赖已确认可用的四个端点，不把上述缺口当契约。
+- **已闭环**：`UP-ACC-04`（无改资料 / 无删号端点 → `PUT` + `DELETE`）、`UP-ACC-05`（列表缺租户归属 → 自带 `tenant_id` / `department_id`）。
+- **仍开放**：`G1`（无 `accountLevel`，角色化判定待新 ADR）、`G2`（无 `mustResetPassword`）、`G8`（无 MFA 绑定端点）。
+- 旧代 `UP-ACC-01`～`UP-ACC-08` 作为历史记录保留在 `NMCPS-REC-002`（`status: superseded`），不再作为本页的契约依据。
 
 ---
 
@@ -364,5 +368,4 @@ tags:
 | 2026-11-02 | 0.5.5 | **§9.3 第 2 条：时间范围浮层改为「快捷项列 + 双月日历」**。原先浮层里只有一列快捷按钮和两个 `datetime-local`，选「上周三到上周五」这种区间必须手填两个时间串。现在抽出 `components/Audit/RangePicker.vue`（形态照 Nuxt UI dashboard 模板的 `HomeDateRangePicker`）：左侧快捷项列（命中项底色高亮，窄屏隐藏）+ 双月 `UCalendar range` 日历，日历下方保留两个到秒的 `datetime-local` 补手；选日按整日窗口落 `00:00:00` … `23:59:59`，点一天 = 从那天起、点第二天才收尾（留空终点，reka 的区间选择才能继续）。三条入口（快捷项 / 日历 / 手填）只改同一个 `start` / `end` / `preset`，取数仍由页面既有的 `watch` 落地。渲染细节与两个实测坑见 `NMCPS-ARCH-006` §4.1（0.2.15）。 |
 | 2026-11-03 | 0.5.6 | **每页条数从筛选浮层移到列表栏尾部，四个列表页统一默认 15 条**。三个实测问题：① 选中行底色在浅 / 深两模式都读不出（`bg-elevated/60` 叠在白面板上几乎同色），已由 `NMCPS-ARCH-006` 0.2.16 改为 `bg-accented`；② 每页条数原先默认 20、只有 `/system/log` 在筛选浮层里有一个，`/system/user` 与 `/system/permission` 连入口都没有，`/system/policy` 则完全不分页 —— 现在统一 `DEFAULT_PAGE_SIZE = 15`（选项 15 / 30 / 50 / 100，来源 `shared/constants/paging.ts`），四页都在列表尾提供选择器；③ 列表尾高度统一 49px（`--app-list-footer-h`）。本文件相应更新：§6 端点表口径不变，§7.3 第 3 条补「客户端分页只切渲染层，深链仍对全量生效」、§9.2 的 `pageSize` 选项改为 15 / 30 / 50 / 100、§9.3 第 2 条把每页条数移出筛选浮层、第 6 条补尾部三条断言。 |
 | 2026-11-03 | 0.5.7 | **§6 用户管理建号口径按 2026-11-03 复测更正（修「租户管理员建号必失败」）**。现象：租户管理员在 `?id=new` 建号，表单只提供 `1`（= 自身等级），提交一律回 `20103 只能向下管控`，可见的「账号等级」下拉等于没有可选项。复测三条结论：① 等级必须**严格低于自己**（超级管理员 `1`–`3`、租户管理员 `2`–`3`），同级或更高 → `20103`；`4` → `20102`（服务账号由系统开通）；② `POST /account` 新增 `tenantId` 必填（`0` 视同缺省），超级管理员不带该字段直接 `10101`，因此页面新增「所属租户」下拉，来源 `GET /api/tenant`；③ `UP-ACC-01`（租户越级建号）由上游闭环，§6.5 与 `NMCPS-REC-002` 同步更新，新增 `UP-ACC-07`（`tenantId` 必填）/ `UP-ACC-08`（`4` 归服务账号）。§6.1 端点表加租户列表、§6.2 等级语义改写、§6.3 矩阵重写并补客户端收敛 1 / 2 两条、§6.4 错误码加 `20102` / `20103`。 |
-
-
+| 2026-11-04 | 0.6.0 | **§6 用户管理按新代 `iam/users` 重写（C4a）**：端点表换成 `GET|POST /iam/users`、`GET|PUT|DELETE /iam/users/{id}`、`GET /iam/tenants`、`GET /iam/departments`；字段口径改 snake_case（`id` / `username` / `display_name` / `status: active|disabled|locked` / `mfa_enabled` / `tenant_id` / `department_id`），`pageSize` → `page_size`，`list: null` 由 BFF 出口归一为 `[]`；**等级模型（`accountLevel`）整段退役**（缺口 G1），建号归属改由「部门」表达（`POST /iam/users` 实测没有 `tenant_id`）；新增删号（`DELETE`，软删 `deleted_at`，旧代 `UP-ACC-04` 闭环）与「列表自带租户归属」（`UP-ACC-05` 闭环）；错误码表改为实测的 `10002` / `40001` / `10003` / `10007` / `10301` 组合，口令策略按实测「6-128 字符」；`POST /access/dryrun` 入口与弹窗随缺口 G5 下线。 |

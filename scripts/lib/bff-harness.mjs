@@ -146,6 +146,39 @@ export async function startUpstream(port) {
 	];
 
 	/**
+	 * 新代 iam 假数据（`GET /iam/users|tenants|departments`，2026-11-04 实测字段）：给
+	 * `/system/user` 两栏自查用。三条硬要求，否则用例测不出真伪：
+	 *   - 列表对 `keyword` / `status` / `department_id` 真有筛选效果；
+	 *   - 分页字段是 `page_size`（旧代 `pageSize`），`total` 要能分页；
+	 *   - 空结果回 `list: null`（实测口径），顺带验证 BFF 出口归一成 `[]`。
+	 */
+	const iamTenants = [
+		{ id: "tnt_default", name: "默认租户", code: "default", status: "active", description: "示例租户", device_quota: 500, storage_quota: 0, api_quota: 0, deleted_at: null, created_at: "2026-11-03T18:59:06+08:00" },
+		{ id: "t_isp_a", name: "ISP-A Network Solutions", code: "isp-a", status: "active", description: "互联网服务提供商", device_quota: 200, storage_quota: 0, api_quota: 0, deleted_at: null, created_at: "2026-11-03T18:59:06+08:00" }
+	];
+
+	const iamDepartments = [
+		{ id: "dept_default_tech", tenant_id: "tnt_default", name: "技术部", code: "tech", sort_order: 1, deleted_at: null },
+		{ id: "dept_default_ops", tenant_id: "tnt_default", name: "运维部", code: "ops", sort_order: 2, deleted_at: null },
+		{ id: "dept_isp_hq", tenant_id: "t_isp_a", name: "总部", code: "hq", sort_order: 1, deleted_at: null }
+	];
+
+	const iamUsers = [
+		{ id: "u_alice", tenant_id: "tnt_default", department_id: "dept_default_tech", username: "alice", email: "alice@nms.local", display_name: "Alice", status: "active", mfa_enabled: true, last_login_at: null, created_at: "2026-11-01T09:00:00+08:00", deleted_at: null },
+		{ id: "u_bob", tenant_id: "tnt_default", department_id: "dept_default_tech", username: "bob", email: "bob@nms.local", display_name: "Bob", status: "disabled", mfa_enabled: false, last_login_at: null, created_at: "2026-11-02T10:00:00+08:00", deleted_at: null },
+		{ id: "u_carol", tenant_id: "t_isp_a", department_id: "dept_isp_hq", username: "carol", email: "carol@isp-a.example", display_name: "Carol", status: "locked", mfa_enabled: false, last_login_at: null, created_at: "2026-11-03T11:00:00+08:00", deleted_at: null }
+	];
+
+	/** 新代分页信封：`page_size`（不是 `pageSize`），`list` 空时给 `null`（真实上游口径） */
+	const iamPaged = (records, url) => {
+		const page = Math.max(1, Number(url.searchParams.get("page") ?? 1));
+		const pageSize = Math.max(1, Number(url.searchParams.get("page_size") ?? 20));
+		const start = (page - 1) * pageSize;
+		const slice = records.slice(start, start + pageSize);
+		return { list: slice.length ? slice : null, total: records.length, page, page_size: pageSize };
+	};
+
+	/**
 	 * 审计域假数据（`GET /audit`、`GET /audit/{logCode}`）：给 `/system/log` 工具栏自查
 	 * （`NMCPS-DESIGN-005` §9.3 第 2 条）用 —— `category` 要与真实上游一样**精确匹配**、
 	 * 时间窗要按字面字符串比较，否则「切类别 / 选快捷区间后请求参数真的变了」这条用例测不出真伪。
@@ -438,6 +471,91 @@ export async function startUpstream(port) {
 				account.password = body.new_password;
 				return send(200, { code: 0, message: "success", data: null });
 			}
+
+			// ── 新代用户 / 租户 / 部门（`/system/user` 自查用；2026-11-04 实测口径）─────────
+			// `GET /iam/users`：`keyword` 命中 username / display_name / email，`status` 精确匹配，
+			// `department_id` 精确匹配；空结果 `list: null`（BFF 出口归一为 `[]`）
+			if (url.pathname === "/iam/users" && req.method === "GET") {
+				const keyword = (url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+				const status = (url.searchParams.get("status") ?? "").trim();
+				const departmentId = (url.searchParams.get("department_id") ?? "").trim();
+
+				const filtered = iamUsers.filter((item) => {
+					const matchedKeyword = !keyword
+						|| item.username.toLowerCase().includes(keyword)
+						|| (item.display_name ?? "").toLowerCase().includes(keyword)
+						|| (item.email ?? "").toLowerCase().includes(keyword);
+
+					return matchedKeyword
+						&& (!status || item.status === status)
+						&& (!departmentId || item.department_id === departmentId);
+				});
+
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			// `POST /iam/users`：重复用户名 200 / 10002、缺字段 200 / 40001（实测口径）；
+			// 成功回 `{ code, message, id }` —— **没有 `data`**，页面靠 keyword 回读
+			if (url.pathname === "/iam/users" && req.method === "POST") {
+				if (!body?.username || !body?.password)
+					return send(200, { code: 40001, message: body?.username ? "密码不能为空" : "用户名不能为空", id: "" });
+				if (iamUsers.some((item) => item.username === body.username))
+					return send(200, { code: 10002, message: "用户已存在", id: "" });
+
+				const created = {
+					id: `u_${body.username}`,
+					tenant_id: iamDepartments.find((item) => item.id === body.department_id)?.tenant_id ?? null,
+					department_id: body.department_id ?? null,
+					username: body.username,
+					email: body.email ?? "",
+					display_name: body.display_name ?? "",
+					status: "active",
+					mfa_enabled: false,
+					last_login_at: null,
+					created_at: "2026-11-04T09:00:00+08:00",
+					deleted_at: null
+				};
+				iamUsers.push(created);
+				return send(200, { code: 0, message: "success", id: created.id });
+			}
+
+			const iamUserPath = url.pathname.match(/^\/iam\/users\/([^/]+)$/);
+			if (iamUserPath) {
+				const id = decodeURIComponent(iamUserPath[1]);
+				const record = iamUsers.find((item) => item.id === id);
+
+				if (!record)
+					// 实测：目标不存在时上游回 **HTTP 400 + 纯文本「记录不存在」**（非信封）
+					return send(400, { code: 400, message: "记录不存在" });
+
+				if (req.method === "PUT") {
+					if (body?.status && !["active", "disabled", "locked"].includes(body.status))
+						return send(200, { code: 40001, message: "status 取值不合法", id: "" });
+					for (const key of ["department_id", "email", "phone", "display_name", "status", "mfa_enabled"]) {
+						if (body?.[key] !== undefined)
+							record[key] = body[key];
+					}
+					// 改部门会连带改租户归属（部门自带租户），与真实上游一致
+					if (body?.department_id)
+						record.tenant_id = iamDepartments.find((item) => item.id === body.department_id)?.tenant_id ?? record.tenant_id;
+					return send(200, { code: 0, message: "success" });
+				}
+
+				if (req.method === "DELETE") {
+					// 软删：从列表移除（`deleted_at` 有值，列表默认过滤已删记录）
+					record.deleted_at = "2026-11-04T09:30:00+08:00";
+					iamUsers.splice(iamUsers.indexOf(record), 1);
+					return send(200, { code: 0, message: "success" });
+				}
+
+				return send(404, { code: 10404, message: "iam_path_not_found" });
+			}
+
+			if (url.pathname === "/iam/tenants" && req.method === "GET")
+				return send(200, { code: 0, message: "success", data: iamPaged(iamTenants, url) });
+
+			if (url.pathname === "/iam/departments" && req.method === "GET")
+				return send(200, { code: 0, message: "success", data: iamPaged(iamDepartments, url) });
 
 			return send(404, { code: 10404, message: "iam_path_not_found" });
 		}

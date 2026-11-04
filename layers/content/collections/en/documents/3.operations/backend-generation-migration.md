@@ -39,7 +39,9 @@ After touching `NUXT_BFF_*`, run `pnpm exec nuxt prepare` before `pnpm typecheck
 | C1 | `fix(bff): session-invalid codes become 40101, business errors never read as success` ✅ | `shared/utils/apiGuard.ts`, `server/utils/bff/auth.ts`, `app/composables/useAuth.ts`, `scripts/lib/bff-harness.mjs`, `scripts/check-bff.mjs`, `.env*` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` |
 | C2 | `feat(bff): authenticate against the iam namespace` ✅ | `shared/types/auth.ts`, `server/utils/bff/{auth,authSchema}.ts`, `server/api/auth/*` (incl. deleting `mfa/`), `app/{composables,pages/auth,constants}`, the affected `layers/{user,system}` pages, `scripts/{check-bff,check-ui}` + fake upstream, i18n | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` (74/74) + `pnpm check:ui` (103/103) + a live login |
 | C3 | `feat(bff): rebuild the gateway allow-list on the new namespaces, normalise and mask at the exit` ✅ | `shared/types/api.ts`, `server/utils/bff/{gateway,proxy}.ts`, `scripts/{check-bff,lib/bff-harness}.mjs` | `pnpm build:server && pnpm check:bff` (82/82) + `pnpm check:ui` (103/103) |
-| C4 | `refactor(system): rewrite the four system pages against iam/audit` | `shared/types/{account,policy,audit,tenant}.ts`, `layers/system/app/composables/*`, `layers/system/app/pages/system/*.vue` | `pnpm check:ui` + manual pass |
+| C4a | `refactor(system): point user management at iam/users, drop the dry-run with G5` ✅ | `shared/types/{account,tenant,department}.ts`, `layers/system/app/{composables/useAccounts,composables/useTenants,composables/useDepartments,composables/usePolicies,utils/accountError}.ts`, `layers/system/app/components/User/*`, `layers/system/app/pages/system/user.vue`, `pages/system/policy.vue` (dry-run entry removed), `shared/types/policy.ts`, i18n, `scripts/{check-ui,check-bff}.mjs`, `scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` (84/84) + `pnpm check:ui` (103/103) |
+| C4b | `refactor(system): point the audit page at audit/operation-logs and archiving` | `shared/types/audit.ts`, `composables/{useAuditLogs,useAuditExport}.ts`, `pages/system/log.vue`, fake upstream and self-check | `pnpm check:ui` + a manual pass over `/system/log` |
+| C4c | `refactor(system): point the policy and permission pages at iam/roles and iam/policies, delete the legacy allow-list group` | `shared/types/policy.ts`, `composables/{usePolicies,usePermissions}.ts`, `pages/system/{policy,permission}.vue`, `shared/types/api.ts` (legacy group deleted), `check:bff` (legacy-name 404 assertions) | `pnpm check:bff` + `pnpm check:ui` + a manual pass over both pages |
 
 ---
 
@@ -266,11 +268,13 @@ export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): re
 The `username` form field and the snake_case `useAuthTokens()` keys belong to C2 (shipped with `IamTokens`).
 
 
-### 3.8 `layers/system/app/composables/*.ts` (C4)
+### 3.8 `layers/system/app/composables/*.ts` (C4a / C4b / C4c, C4a shipped)
 
 | File | Endpoint change |
 | :--- | :--- |
-| `useAccounts.ts` | `/api/account` → `/api/iam/users`; `pageSize` → `page_size`; status via `PUT /api/iam/users/{id}` |
+| `useAccounts.ts` ✅ | `/api/account` → `/api/iam/users`; `pageSize` → `page_size`; status via `PUT /api/iam/users/{id}`; `DELETE /iam/users/{id}` added (soft delete); `POST` answers `{ code, message, id }` (no `data`), so the composable re-reads the row with `keyword` |
+| `useTenants.ts` ✅ | `/api/tenant` → `/api/iam/tenants` (only used to translate `tenant_id` into a tenant name) |
+| `useDepartments.ts` ✅ (new) | `GET /api/iam/departments`: creation candidates and the ownership filter; each row carries `tenant_id` |
 | `useTenants.ts` | `/api/tenant` → `/api/iam/tenants` |
 | `usePolicies.ts` | `/api/role` → `/api/iam/roles`; `/api/abac/rule` and `/api/access/dryrun` removed; add `policies` / `role-policies` |
 | `usePermissions.ts` | catalogue block removed; matrix reads `role-policies` + policy `actions` |
@@ -291,11 +295,14 @@ Unwrap uniformly: `normalizeList(res.data?.list)` and read `res.data?.page` / `p
 | C2 | `scripts/check-bff.mjs` ⑦ | "refresh rotates" | **inverted to "refresh does not rotate"**: the same `refresh_token` twice still returns 200 and the cookie value is unchanged; plus "bogus refresh token `200 + 10007` → BFF 401", "password `PUT` + snake_case" and "logout is idempotent" |
 | C3 | `scripts/lib/bff-harness.mjs` | no `asset` or new-generation audit route | add `GET /asset/device` (snake_case + plaintext `snmp_*_pass`) and `GET /audit/operation-logs` (empty result as `list: null`); both tolerate the `/api/v1` prefix |
 | C3 | `scripts/check-bff.mjs` ⑧ | — | eight new assertions: "`asset` allowed and proxied", "`snmp_auth_pass` → `***`", "`snmp_priv_pass` → `***`", "other fields untouched", "no plaintext credential in the body", "`list: null` → `[]`", "paging fields unaffected", "`system` / `transmission` are allow-listed" |
+| C4a | `scripts/lib/bff-harness.mjs` | no `iam/users` / `iam/tenants` / `iam/departments` | three new routes: the list really filters on `keyword` / `status` / `department_id`, pages with `page_size`, and returns `list: null` when empty; `POST` answers `{ code, message, id }`, a duplicate username gives `200 + 10002`, a missing field gives `200 + 40001`; `PUT` / `DELETE /iam/users/{id}` (a missing target answers `400` with "record does not exist") |
+| C4a | `scripts/check-ui.mjs` ③ | fixed fake account set `ACC-1001…`, level-candidate assertions | user set becomes `u_alice` / `u_bob` / `u_carol`; the level-candidate case became "the creation form has exactly one select: department"; the creation case fills `username` / display name / email / password and asserts the `id` read-back plus the `?id` replace |
 
 Measured with C1 in place (2026-11-04): `pnpm check:bff` 83/83, `pnpm check:ui` 105/105.
 Measured with C2 in place (2026-11-04, same upstream): `pnpm check:bff` 74/74, `pnpm check:ui` 103/103
 — the totals dropped because the MFA binding (G8), forced reset (G2), rotation and `whoami` cases retired with the capability.
 Measured with C3 in place (2026-11-04): `pnpm check:bff` 82/82 (74 + 8), `pnpm check:ui` 103/103, `pnpm lint` / `pnpm typecheck` clean.
+Measured with C4a in place (2026-11-04): `pnpm check:bff` 84/84 (82 + 2: `iam/users` passes snake_case through, and an empty `list: null` is normalised to `[]`), `pnpm check:ui` 103/103 (the level-candidate case became "the creation form has exactly one select: department", the creation case now asserts the `id` read-back and the `?id` replace, so the assertion count is unchanged), `pnpm lint` / `pnpm typecheck` / `pnpm build:server` silent.
 
 Changing the assertion count means updating the `N/N` in the script summary and any counts quoted in the architecture docs (`.clinerules` "CI self-check conventions").
 

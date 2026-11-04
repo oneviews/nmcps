@@ -2,7 +2,7 @@
 	<div class="flex min-h-0 flex-1 flex-col">
 		<!--
 			页面根显式取 `flex-1 min-h-0`（NMCPS-ARCH-006 §3.3）：definite height 链在这里落定。
-			身份 / 范围说明下移到详情栏顶部（见 `#detail`，NMCPS-DESIGN-005 §6.3）：
+			身份 / 范围说明在详情栏顶部（见 `#detail`，NMCPS-DESIGN-005 §6.3）：
 			页面顶部只留工具栏与两栏骨架，不再被一条横幅压掉左栏第一行。
 		-->
 		<!--
@@ -40,7 +40,7 @@
 						:aria-label="$t('pages.system-user.filter.title')"
 					/>
 					<template #content>
-						<!-- 只有 keyword / status 可靠（`accountLevel=0` 被上游当未提供，见 NMCPS-REC-002 UP-ACC-02） -->
+						<!-- 只有 keyword / status / department_id 是新代登记过的过滤参数（NMCPS-ADR-0018 §4.2） -->
 						<div class="w-56 space-y-3 p-3">
 							<p class="text-xs font-medium">
 								{{ $t("pages.system-user.filter.title") }}
@@ -53,11 +53,11 @@
 								:aria-label="$t('pages.system-user.filter.status')"
 							/>
 							<USelect
-								v-model="levelFilter"
-								:items="levelFilterItems"
+								v-model="departmentFilter"
+								:items="departmentFilterItems"
 								size="sm"
 								class="w-full"
-								:aria-label="$t('pages.system-user.filter.level')"
+								:aria-label="$t('pages.system-user.filter.department')"
 							/>
 							<UButton
 								v-if="filtersActive"
@@ -113,21 +113,35 @@
 				>
 					<UButton
 						size="sm"
-						:color="targetStatus === ACCOUNT_STATUS.DISABLED ? 'error' : 'neutral'"
+						:color="targetStatus === IAM_USER_STATUS.DISABLED ? 'error' : 'neutral'"
 						variant="outline"
-						:icon="targetStatus === ACCOUNT_STATUS.DISABLED ? 'carbon:locked' : 'carbon:unlocked'"
-						:label="targetStatus === ACCOUNT_STATUS.DISABLED
+						:icon="targetStatus === IAM_USER_STATUS.DISABLED ? 'carbon:locked' : 'carbon:unlocked'"
+						:label="targetStatus === IAM_USER_STATUS.DISABLED
 							? $t('pages.system-user.status.disabled')
-							: $t('pages.system-user.status.enabled')"
+							: $t('pages.system-user.status.active')"
 						:disabled="isSelf(selected)"
-						@click="openStatus()"
+						@click="openStatus"
 					/>
 				</UTooltip>
-				<!-- 覆盖式详情态不再给「新建」：那属于列表面板的动作（§4.4）；view 态无 primary，故 outline -->
+				<!-- 删号：新代 `DELETE /iam/users/{id}`（旧代缺口 UP-ACC-04 闭环），只在选中记录上出现 -->
+				<UTooltip
+					v-if="selected"
+					:text="isSelf(selected) ? $t('pages.system-user.selfHint') : $t('pages.system-user.deleteHint')"
+				>
+					<UButton
+						size="sm"
+						color="error"
+						variant="ghost"
+						icon="carbon:trash-can"
+						:aria-label="$t('pages.system-user.delete')"
+						:disabled="isSelf(selected)"
+						@click="openDelete"
+					/>
+				</UTooltip>
+				<!-- 覆盖式详情态不再给「新建」：那属于列表面板的动作（§4.4） -->
 				<UButton
 					v-if="toolbarPane === 'list'"
 					size="sm"
-					variant="outline"
 					icon="carbon:add"
 					:label="$t('pages.system-user.create')"
 					@click="startCreate"
@@ -192,31 +206,31 @@
 					@keydown="onListKeydown"
 				>
 					<li
-						v-for="(account, index) in displayRows"
-						:key="account.accountCode"
-						:ref="(element) => setRowRef(account.accountCode, element)"
+						v-for="(userRow, index) in displayRows"
+						:key="userRow.id"
+						:ref="(element) => setRowRef(userRow.id, element)"
 						role="option"
-						:aria-selected="account.accountCode === selectedId"
-						:tabindex="account.accountCode === selectedId || (!selectedId && index === 0) ? 0 : -1"
-						:title="`${account.displayName || account.accountName} · ${account.accountCode}`"
+						:aria-selected="userRow.id === selectedId"
+						:tabindex="userRow.id === selectedId || (!selectedId && index === 0) ? 0 : -1"
+						:title="`${userRow.display_name || userRow.username} · ${userRow.id}`"
 						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-						:class="account.accountCode === selectedId
+						:class="userRow.id === selectedId
 							? 'border-primary bg-accented'
 							: 'border-transparent'"
-						@click="selection.select(account)"
-						@keydown.enter.prevent="selection.select(account)"
-						@keydown.space.prevent="selection.select(account)"
+						@click="selection.select(userRow)"
+						@keydown.enter.prevent="selection.select(userRow)"
+						@keydown.space.prevent="selection.select(userRow)"
 					>
 						<div class="flex min-w-0 items-center justify-between gap-2">
 							<p class="truncate text-sm font-medium">
-								{{ account.accountName }}
+								{{ userRow.username }}
 							</p>
-							<UBadge :color="accountStatusColor(account.status)" variant="subtle" size="sm">
-								{{ $t(accountStatusKey(account.status), { status: account.status }) }}
+							<UBadge :color="accountStatusColor(userRow.status)" variant="subtle" size="sm">
+								{{ $t(accountStatusKey(userRow.status), { status: userRow.status }) }}
 							</UBadge>
 						</div>
 						<p class="truncate text-xs text-(--ui-text-muted)">
-							{{ account.displayName || account.accountCode }}
+							{{ rowSubtitle(userRow) }}
 						</p>
 					</li>
 				</ul>
@@ -238,8 +252,7 @@
 				<div class="flex min-h-full flex-col">
 					<!--
 						身份 / 范围说明（NMCPS-DESIGN-005 §6.3）：放在详情栏顶部，
-						它回答的是「这批账号在什么范围内可见」，属于所选记录的上下文而不是页面级横幅；
-						因此三种详情状态（含未选中空态）都在最上面看到它，覆盖式下随详情页一起出现。
+						它回答的是「这批用户在什么范围内可见」，属于所选记录的上下文而不是页面级横幅。
 					-->
 					<div v-if="loaded" class="shrink-0 px-4 pt-4">
 						<UAlert
@@ -250,6 +263,7 @@
 							:description="$t(scopeAlert.description)"
 						/>
 					</div>
+
 					<!-- create 态：原建号弹窗改为右栏内联表单（D3 / 附录 B） -->
 					<div v-if="isCreating" class="max-w-[640px] px-4 pt-4">
 						<h2 class="text-base font-semibold">
@@ -259,9 +273,8 @@
 					<UserAccountCreateForm
 						v-if="isCreating"
 						ref="createFormRef"
-						:level-options="levelOptions"
-						:tenant-options="tenantOptions"
-						:tenant-loading="tenantsLoading"
+						:department-options="departmentOptions"
+						:department-loading="departmentsLoading"
 						@created="onCreated"
 					/>
 
@@ -286,45 +299,52 @@
 						</UAlert>
 					</div>
 
-					<!-- view 态：只读详情（无编辑入口，D3 的 `edit` 三态在两栏首例挂起） -->
+					<!-- view 态：只读详情（改资料走 `PUT`，本页暂不提供编辑态，见 C4b） -->
 					<div v-else-if="selected" class="max-w-[640px] space-y-5 p-4">
-						<!-- 内容区标题（§4 / §5.3）：记录标题不进工具栏，覆盖式下它就是「我在看哪一条」 -->
 						<div class="min-w-0">
 							<h2 class="truncate text-base font-semibold">
-								{{ selected.displayName || selected.accountName }}
+								{{ selected.display_name || selected.username }}
 							</h2>
 							<p class="truncate font-mono text-xs text-(--ui-text-muted)">
-								{{ selected.accountCode }}
+								{{ selected.id }}
 							</p>
 						</div>
 						<dl class="grid grid-cols-[minmax(5rem,auto)_1fr] items-baseline gap-x-4 gap-y-3 text-sm">
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-user.columns.accountName") }}
+								{{ $t("pages.system-user.columns.username") }}
 							</dt>
 							<dd class="break-all font-mono">
-								{{ selected.accountName }}
+								{{ selected.username }}
 							</dd>
 
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-user.columns.accountCode") }}
+								{{ $t("pages.system-user.columns.id") }}
 							</dt>
 							<dd class="break-all font-mono text-xs">
-								{{ selected.accountCode }}
+								{{ selected.id }}
 							</dd>
 
 							<dt class="text-(--ui-text-muted)">
 								{{ $t("pages.system-user.columns.displayName") }}
 							</dt>
-							<dd>{{ selected.displayName }}</dd>
+							<dd>{{ selected.display_name || "—" }}</dd>
 
 							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-user.columns.accountLevel") }}
+								{{ $t("pages.system-user.columns.email") }}
 							</dt>
-							<dd>
-								<UBadge :color="accountLevelColor(selected.accountLevel)" variant="subtle">
-									{{ $t(accountLevelKey(selected.accountLevel), { level: selected.accountLevel }) }}
-								</UBadge>
+							<dd class="break-all">
+								{{ selected.email || "—" }}
 							</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.tenant") }}
+							</dt>
+							<dd>{{ tenantName(selected.tenant_id) }}</dd>
+
+							<dt class="text-(--ui-text-muted)">
+								{{ $t("pages.system-user.columns.department") }}
+							</dt>
+							<dd>{{ departmentName(selected.department_id) }}</dd>
 
 							<dt class="text-(--ui-text-muted)">
 								{{ $t("pages.system-user.columns.status") }}
@@ -338,14 +358,14 @@
 							<dt class="text-(--ui-text-muted)">
 								{{ $t("pages.system-user.columns.mfa") }}
 							</dt>
-							<dd>{{ selected.mfaEnabled ? $t("pages.system-user.mfaOn") : $t("pages.system-user.mfaOff") }}</dd>
+							<dd>{{ selected.mfa_enabled ? $t("pages.system-user.mfaOn") : $t("pages.system-user.mfaOff") }}</dd>
 
 							<dt class="text-(--ui-text-muted)">
 								{{ $t("pages.system-user.columns.createdAt") }}
 							</dt>
-							<!-- 上游同一字段两种时区（UP-ACC-05）：原样展示，不换算也不加 (UTC) -->
+							<!-- 上游 RFC3339 带偏移（`2026-11-03T18:59:06+08:00`）：原样展示，不换算也不加 (UTC) -->
 							<dd class="font-mono text-xs">
-								{{ selected.createdAt }}
+								{{ selected.created_at || "—" }}
 							</dd>
 						</dl>
 
@@ -356,7 +376,7 @@
 
 					<!-- 无选中：右栏空态（D3）。「新建」只在工具栏一处入口（§4），空态里不再重复 -->
 					<div v-else class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-						<UIcon name="carbon:document-blank" class="size-8 text-(--ui-text-muted)" />
+						<UIcon name="carbon:document-blank" class="size-7 text-(--ui-text-muted)" />
 						<p class="text-sm font-medium">
 							{{ $t("pages.system-user.detailEmpty") }}
 						</p>
@@ -371,38 +391,44 @@
 		<!-- 破坏性确认：动作入口在右栏工具栏，弹窗只确认这一次写操作（D7） -->
 		<UserAccountStatusModal
 			v-model:open="statusOpen"
-			:account="statusTarget"
-			:target-status="targetStatus"
+			:user="statusTarget"
+			mode="status"
 			@updated="reload"
+		/>
+		<UserAccountStatusModal
+			v-model:open="deleteOpen"
+			:user="statusTarget"
+			mode="delete"
+			@updated="onDeleted"
 		/>
 	</div>
 </template>
 
 <script setup lang="ts">
-	import type { AccountStatus, AccountSummary } from "~~/shared/types/account";
-	import type { TenantSummary } from "~~/shared/types/tenant";
+	import type { IamUser } from "~~/shared/types/account";
+	import type { IamDepartment } from "~~/shared/types/department";
+	import type { IamTenant } from "~~/shared/types/tenant";
 	import { DEFAULT_PAGE_SIZE } from "~~/shared/constants/paging";
-	import { ACCOUNT_LEVEL, ACCOUNT_STATUS, creatableAccountLevels } from "~~/shared/types/account";
+	import { IAM_USER_STATUS } from "~~/shared/types/account";
 
 	/**
 	 * `/system/user` 用户管理（两栏落码，NMCPS-ADR-0017 迁移步骤 4）。
 	 *
-	 * 设计基准：NMCPS-ARCH-006 §3（`layers/content/collections/cn/architecture/1.architecture/ui-architecture.md`）
-	 * 领域口径：NMCPS-DESIGN-005 §六（`layers/content/collections/cn/architecture/2.domain/system.md`）
-	 * 上游缺陷：NMCPS-REC-002（`layers/content/collections/cn/records/defects/account-upstream-defects.md`）
+	 * 设计基准：NMCPS-ARCH-006 §3（layers/content/collections/cn/architecture/1.architecture/ui-architecture.md）
+	 * 领域口径：NMCPS-DESIGN-005 §六（layers/content/collections/cn/architecture/2.domain/system.md）
+	 * 契约来源：NMCPS-ADR-0018 §4.2（`/account` → `iam/users`）
 	 *
-	 * ── 决策矩阵：两个身份下本页暴露什么（实测口径，详见 §6.3）───────────────
-	 * | 能力 | 超级管理员（level 0） | 租户管理员（level 1） |
+	 * ── 新代能力矩阵（2026-11-04 实测 192.168.1.55:8888）─────────────────────
+	 * | 能力 | 旧代 | 新代 |
 	 * | :--- | :--- | :--- |
-	 * | 列表范围 | 全平台 | 仅本租户（上游强约束） |
-	 * | 筛选 keyword / status | 可用 | 可用（受租户范围约束） |
-	 * | 筛选 accountLevel | 只提供「租户管理员」项：`0` 被上游当未提供（UP-ACC-02） | 同 |
-	 * | 新建账号 | 可建 `L1`–`L3`，**必须选所属租户**（缺 `tenantId` → `10101`，UP-ACC-07） | 可建 `L2` / `L3`（同级 / 更高级回 `20103`） |
-	 * | 变更状态 | 任意账号 | 本租户账号；跨租户上游回 `10301`（客户端不预判） |
-	 * | 变更本人状态 | 禁用（防自锁） | 禁用（防自锁） |
-	 * | 编辑资料 | 不提供：上游无 `PUT /account/{code}`（UP-ACC-04）→ 右栏无「编辑」入口 |
-	 * | 删除账号 | 不提供：用「禁用」承接（`status=2`） |
-	 * | 角色绑定 / 租户成员 | 不提供：超级管理员调 `/account/role` 恒 `10201`、列表无 `tenantId` 无法定位（UP-ACC-06） |
+	 * | 列表 / 搜索 | `accountName` | `keyword` 命中 `username` / `display_name` / `email` |
+	 * | 状态过滤 | 数值 `1/2/3/4` | 字符串 `active` / `disabled` / `locked` |
+	 * | 归属过滤 | 无（列表缺 `tenantId`，UP-ACC-05） | `department_id`（部门自带租户） |
+	 * | 建号 | `accountName` + `accountLevel` + `tenantId` | `username` / `password` / `email?` / `display_name?` / `department_id?` |
+	 * | 改资料 | **无端点**（UP-ACC-04） | `PUT /iam/users/{id}`（本页右栏仍只读，见 C4b） |
+	 * | 改状态 | `PUT /account/{code}/status` | `PUT /iam/users/{id}` |
+	 * | 删号 | **无端点**（用禁用替代） | `DELETE /iam/users/{id}`（软删 `deleted_at`） |
+	 * | 等级 | `accountLevel` 0–4 | **不存在**（缺口 G1）：等级模型被角色取代 |
 	 *
 	 * 这些收敛**只是不引导用户踩上游缺口**，不是安全边界：BFF 只做白名单透传，鉴权仍在上游。
 	 */
@@ -415,7 +441,7 @@
 	/** 当前形态（由 `Layout/Split.vue` 判定并外抛）：决定 `?id` 写历史时用 `replace` 还是 `push` */
 	const shape = ref<"two" | "overlay">("two");
 
-	const rows = ref<AccountSummary[]>([]);
+	const rows = ref<IamUser[]>([]);
 	const total = ref(0);
 	const page = ref(1);
 	const pageSize = ref(DEFAULT_PAGE_SIZE);
@@ -423,12 +449,12 @@
 	const errorMessage = ref<string>();
 
 	/**
-	 * 列表展示顺序的**唯一来源**（NMCPS-ARCH-006 §3.6）：默认选中必须与展示顺序同源，
-	 * 否则会出现「默认选中的不是第一行」。当前没有客户端排序（上游无排序参数），
-	 * 因此这里只是把「顺序」具名化：将来加排序只改这一处，`defaultRecord` 自动跟随。
+	 * 列表展示顺序的**唯一来源**（NMCPS-ARCH-006 §3.6）：默认选中必须与展示顺序同源。
+	 * 上游新代支持 `sort_by` / `sort_order`，但本页暂不提供客户端排序，因此这里只是把
+	 * 「顺序」具名化：将来加排序只改这一处，`defaultRecord` 自动跟随。
 	 */
-	function byListOrder(accountList: AccountSummary[]): AccountSummary[] {
-		return accountList;
+	function byListOrder(userList: IamUser[]): IamUser[] {
+		return userList;
 	}
 
 	const displayRows = computed(() => byListOrder(rows.value));
@@ -436,36 +462,34 @@
 	/**
 	 * 记录选择契约（NMCPS-ARCH-006 §5.2 / NMCPS-ADR-0017 D2 / D6）：`?id` 是「当前选中哪条」的唯一事实源。
 	 *
-	 * - 命中判定只在当前页 `displayRows` 里做：上游没有详情端点，列表结果是唯一可靠来源；
-	 *   `?id` **不进** `list()` 的请求参数，因此改选中 / 深链进入都不会重新拉列表。
-	 * - `?id` 不在当前结果集时只出空态提示，**不静默翻页去捞**（会让筛选状态与 URL 不一致）。
-	 * - `autoSelect` 开启：两栏形态落第一行（右栏默认只读，选中即得上下文）；覆盖式形态由
-	 *   composable 自行跳过（否则首屏直接进详情，看不到列表）。
+	 * - 命中判定只在当前页 `displayRows` 里做：`?id` **不进** `list()` 的请求参数，
+	 *   因此改选中 / 深链进入都不会重新拉列表；
+	 * - `?id` 不在当前结果集时只出空态提示，**不静默翻页去捞**（会让筛选状态与 URL 不一致）；
 	 * - `createId: "new"`：`?id=new` 是「新建」状态（D6），不参与命中判定，也不报「记录不存在」。
 	 */
-	const selection = useRecordSelection<AccountSummary>({
+	const selection = useRecordSelection<IamUser>({
 		rows: displayRows,
-		getId: (account) => account.accountCode,
-		getLabel: (account) => account.displayName || account.accountName,
+		getId: (record) => record.id,
+		getLabel: (record) => record.display_name || record.username,
 		isLoading: loading,
 		isOverlay: () => shape.value === "overlay",
 		autoSelect: true,
-		defaultRecord: (accountList) => byListOrder(accountList)[0],
+		defaultRecord: (userList) => byListOrder(userList)[0],
 		createId: "new"
 	});
 
 	const { selectedId, selected, isMissing, isCreating, clear: clearSelection } = selection;
 
 	const hasSelection = computed(() => !!selectedId.value);
-	/** 右栏工具栏只在「有内容可操作」时渲染（D5：空工具栏不渲染背景与分隔线） */
+
 	/**
 	 * 工具栏内容跟随当前面板（NMCPS-ARCH-006 §4.4）：两栏 = 左区集合域 + 右区记录域同屏；
-	 * 覆盖式列表态只给集合域动作（含「新建」），详情态左区换成唯一「返回」、右区只给记录域 / 提交域动作。
+	 * 覆盖式列表态只给集合域动作（含「新建」），详情态左区换成唯一「返回」、右区只给记录域动作。
 	 */
 	const toolbarPane = computed<"list" | "detail">(() =>
 		shape.value === "overlay" && (hasSelection.value || isCreating.value) ? "detail" : "list");
 
-	/** 面包屑记录段（§5.1）：create 态显示「新建账号」，否则显示选中记录名 */
+	/** 面包屑记录段（§5.1）：create 态显示「新建用户」，否则显示选中记录名 */
 	const recordLabel = computed(() => isCreating.value
 		? t("pages.system-user.createForm.title")
 		: selection.label.value);
@@ -479,44 +503,44 @@
 	/** 行元素（`<li role="option">`）：`↑/↓/Home/End` 要能把焦点搬到目标行 */
 	const rowElements = new Map<string, HTMLElement>();
 
-	function setRowRef(code: string, element: unknown): void {
+	function setRowRef(id: string, element: unknown): void {
 		if (element instanceof HTMLElement)
-			rowElements.set(code, element);
+			rowElements.set(id, element);
 		else
-			rowElements.delete(code);
+			rowElements.delete(id);
 	}
 
 	/** `↑/↓/Home/End` 移动焦点并同步选中（selection follows focus）；`Enter` / `Space` 由行自己处理 */
 	function onListKeydown(event: KeyboardEvent): void {
-		const codes = displayRows.value.map((account) => account.accountCode);
-		if (codes.length === 0)
+		const ids = displayRows.value.map((record) => record.id);
+		if (ids.length === 0)
 			return;
 
-		const current = selectedId.value ? codes.indexOf(selectedId.value) : -1;
+		const current = selectedId.value ? ids.indexOf(selectedId.value) : -1;
 		let next: number;
 
 		switch (event.key) {
 		case "ArrowDown":
-			next = current < 0 ? 0 : Math.min(codes.length - 1, current + 1);
+			next = current < 0 ? 0 : Math.min(ids.length - 1, current + 1);
 			break;
 		case "ArrowUp":
-			next = current < 0 ? codes.length - 1 : Math.max(0, current - 1);
+			next = current < 0 ? ids.length - 1 : Math.max(0, current - 1);
 			break;
 		case "Home":
 			next = 0;
 			break;
 		case "End":
-			next = codes.length - 1;
+			next = ids.length - 1;
 			break;
 		default:
 			return;
 		}
 
 		event.preventDefault();
-		const code = codes[next]!;
-		selection.set(code);
+		const id = ids[next]!;
+		selection.set(id);
 		// v-for 重渲染可能替换节点，聚焦放到下一拍
-		void nextTick(() => rowElements.get(code)?.focus());
+		void nextTick(() => rowElements.get(id)?.focus());
 	}
 
 	// ── 新建（`?id=new` → 右栏 create 态）────────────────────────────────────
@@ -524,39 +548,42 @@
 	const createFormRef = ref<{ submit: () => Promise<void>, submitting: boolean }>();
 	const createSubmitting = computed(() => createFormRef.value?.submitting === true);
 
-	/** 「新建」是集合域动作（左栏工具栏与右栏空态 CTA 是同一语义的两个入口）；覆盖式下 `push` 进详情 */
+	/** 「新建」是集合域动作；覆盖式下 `push` 进详情 */
 	function startCreate(): void {
 		selection.set("new");
 	}
 
 	/**
-	 * 建号成功（D3 / D6）：先把新账号就地 patch 进列表，再 `replace` `?id` 为真实标识，
+	 * 建号成功（D3 / D6）：先把新用户就地 patch 进列表，再 `replace` `?id` 为真实主键，
 	 * 最后静默刷新校准 —— 不重置滚动、不清空选中。
+	 *
+	 * 新代 `POST /iam/users` 回的是 `{ code, message, id }`（没有 `data`），composable 用
+	 * `keyword` 回读刚建好的那一行；拿不到时回落到整表刷新（不做猜测式选中）。
 	 */
-	function onCreated(account: AccountSummary): void {
-		if (!account?.accountCode) {
-			// 上游若没回账号体，只能靠重新拉列表来定位（不做猜测式选中）
+	function onCreated(created: IamUser | undefined): void {
+		if (!created?.id) {
 			reload();
 			return;
 		}
 
-		rows.value = [account, ...rows.value];
+		rows.value = [created, ...rows.value];
 		total.value += 1;
-		selection.set(account.accountCode);
+		selection.set(created.id);
 		reload();
 	}
 
-	// ── 变更状态（危险动作在右栏工具栏，弹窗只确认）──────────────────────────
+	// ── 写操作（危险动作在右栏工具栏，弹窗只确认）────────────────────────────
 	const statusOpen = ref(false);
-	const statusTarget = ref<AccountSummary | null>(null);
+	const deleteOpen = ref(false);
+	const statusTarget = ref<IamUser | null>(null);
 
-	/** 唯一可写的账号变更是状态：启用 ↔ 禁用（「锁定」由上游在失败登录时置位，页面不写） */
-	const targetStatus = computed<AccountStatus>(() =>
-		selected.value?.status === ACCOUNT_STATUS.ENABLED ? ACCOUNT_STATUS.DISABLED : ACCOUNT_STATUS.ENABLED);
+	/** 目标状态：`active` → `disabled`，其余 → `active`（与 `AccountStatusModal` 的口径一致） */
+	const targetStatus = computed<string>(() =>
+		selected.value?.status === IAM_USER_STATUS.ACTIVE ? IAM_USER_STATUS.DISABLED : IAM_USER_STATUS.ACTIVE);
 
-	/** 本人账号：状态变更会自锁，按钮直接禁用 */
-	function isSelf(account: AccountSummary): boolean {
-		return !!user.value?.username && user.value.username === account.accountName;
+	/** 本人账号：改状态 / 删号都会自锁，两个入口直接禁用 */
+	function isSelf(record: IamUser): boolean {
+		return !!user.value?.username && user.value.username === record.username;
 	}
 
 	function openStatus(): void {
@@ -567,79 +594,79 @@
 		statusOpen.value = true;
 	}
 
-	// ── 筛选 ──────────────────────────────────────────────────────────────────
-	// 输入态与生效态分开：搜索防抖 300ms 才落生效（D2），改筛选一律回到第一页
-	const keyword = ref("");
-	/** `0` = 不限（上游会把 `status: 0` 报 `10101`，所以 `0` 不会被发出去） */
-	const statusFilter = ref<number>(0);
-	/** `0` = 不限；等级 `0`（超级管理员）不作为过滤值，见 UP-ACC-02 */
-	const levelFilter = ref<number>(0);
-	const applied = ref<{ keyword: string, status: number, level: number }>({ keyword: "", status: 0, level: 0 });
-
-	const filtersActive = computed(() =>
-		applied.value.keyword !== "" || applied.value.status !== 0 || applied.value.level !== 0);
-
-	const statusFilterItems = computed(() => [
-		{ label: t("pages.system-user.filter.anyStatus"), value: 0 },
-		{ label: t("pages.system-user.status.enabled"), value: ACCOUNT_STATUS.ENABLED },
-		{ label: t("pages.system-user.status.disabled"), value: ACCOUNT_STATUS.DISABLED },
-		{ label: t("pages.system-user.status.locked"), value: ACCOUNT_STATUS.LOCKED },
-		{ label: t("pages.system-user.status.pending"), value: ACCOUNT_STATUS.PENDING }
-	]);
-
-	/** 只提供有语义、且上游确实能过滤的等级：`0` 会被当「未提供」，`2`–`4` 语义未定义 */
-	const levelFilterItems = computed(() => [
-		{ label: t("pages.system-user.filter.anyLevel"), value: 0 },
-		{ label: t("pages.system-user.level.tenantAdmin"), value: ACCOUNT_LEVEL.TENANT_ADMIN }
-	]);
-
-	/** 建号可选等级 = **严格低于自己且 ≤ 3**（2026-11-03 复测口径，NMCPS-DESIGN-005 §6.3） */
-	const creatableLevels = computed(() =>
-		creatableAccountLevels(ACCOUNT_LEVEL.TENANT_ADMIN));
-
-	/**
-	 * 建号等级下拉按身份推导：超级管理员 `L1`–`L3`、租户管理员 `L2`–`L3`。
-	 *
-	 * 2026-11-03 前这里写死「超级管理员 `0`/`1`、租户管理员只有 `1`」：上游改成
-	 * 「只能向下管控」（同级 / 更高回 `20103`）之后，两种身份的下拉都只剩必被拒的值，
-	 * 租户管理员建号 100% 失败。等级是上游归属层决定的，不该由页面写死。
-	 */
-	const levelOptions = computed(() => creatableLevels.value.map((level) => ({
-		label: `L${level}`,
-		value: level
-	})));
-
-	/** 超级管理员建号的「所属租户」候选（`GET /api/tenant`，UP-ACC-07）；租户管理员不需要 */
-	const { list: listTenants } = useTenants();
-	const tenants = ref<TenantSummary[]>([]);
-	const tenantsLoading = ref(false);
-	const tenantOptions = computed(() => tenants.value.map((tenant) => ({
-		label: `${tenant.tenantName}（${tenant.tenantCode}）`,
-		value: tenant.tenantId
-	})));
-
-	/** 只有超级管理员才拉租户列表：租户管理员的租户由上游按令牌推断，多发一次请求没有意义 */
-	watch(isSuperAdmin, (superAdmin) => {
-		if (!superAdmin || tenants.value.length || tenantsLoading.value)
+	function openDelete(): void {
+		if (!selected.value || isSelf(selected.value))
 			return;
 
-		tenantsLoading.value = true;
-		void listTenants()
-			.then((list) => {
-				tenants.value = list;
-			})
-			// 租户列表拉不到时不阻断列表：表单会因无候选而提交不了，提示语由表单给出
-			.catch(() => {
-				tenants.value = [];
+		statusTarget.value = selected.value;
+		deleteOpen.value = true;
+	}
+
+	/** 删号成功后当前选中记录已不存在：清掉 `?id` 再刷新，避免停在「记录不存在」空态 */
+	function onDeleted(): void {
+		clearSelection();
+		reload();
+	}
+
+	// ── 归属维度：部门（建号候选 + 过滤）与租户（展示名翻译）────────────────
+	const { list: listDepartments } = useDepartments();
+	const { list: listTenants } = useTenants();
+
+	const departments = ref<IamDepartment[]>([]);
+	const departmentsLoading = ref(false);
+	const tenants = ref<IamTenant[]>([]);
+
+	/** 租户 / 部门名翻译：取不到就显示原始标识，不伪造名称 */
+	function tenantName(id: string | null | undefined): string {
+		if (!id)
+			return t("pages.system-user.platformScope");
+
+		return tenants.value.find((item) => item.id === id)?.name ?? id;
+	}
+
+	function departmentName(id: string | null | undefined): string {
+		if (!id)
+			return t("pages.system-user.noDepartment");
+
+		return departments.value.find((item) => item.id === id)?.name ?? id;
+	}
+
+	/** 行副标题：显示名 · 租户 / 部门（左栏只有两行，第三个信息必须最有用） */
+	function rowSubtitle(record: IamUser): string {
+		const parts = [record.display_name || record.username];
+		if (record.tenant_id)
+			parts.push(tenantName(record.tenant_id));
+		if (record.department_id)
+			parts.push(departmentName(record.department_id));
+
+		return parts.join(" · ");
+	}
+
+	/** 建号候选：部门自带租户，标签写成「租户 / 部门」让人看得懂归属 */
+	const departmentOptions = computed(() => departments.value.map((item) => ({
+		label: `${tenantName(item.tenant_id)} / ${item.name}`,
+		value: item.id
+	})));
+
+	/** 归属一次性拉齐（当前环境 3 个租户 / 4 个部门）；失败不阻断列表 —— 表单会因无候选而提交不了 */
+	onMounted(() => {
+		departmentsLoading.value = true;
+		void Promise.allSettled([listDepartments(), listTenants()])
+			.then(([departmentResult, tenantResult]) => {
+				departments.value = departmentResult.status === "fulfilled" ? departmentResult.value : [];
+				tenants.value = tenantResult.status === "fulfilled" ? tenantResult.value : [];
 			})
 			.finally(() => {
-				tenantsLoading.value = false;
+				departmentsLoading.value = false;
 			});
-	}, { immediate: true });
+	});
 
 	/**
-	 * 身份说明三态：`0` / `1` 以外的等级（上游接受 `2`–`4` 但无语义）不能冒充租户管理员来说，
-	 * 否则页面上写的「受租户范围约束」会变成未经验证的断言。
+	 * 身份说明三态：平台级（`tenant_id: null`）/ 租户级 / 未登录。
+	 *
+	 * 注意这是**近似**：新代没有 `accountLevel`（缺口 G1），角色化判定要读
+	 * `subject-roles` + `roles`（"platform_admin" 之类），规则本身需要新 ADR，
+	 * 因此本页暂时只按「平台级 vs 租户级」讲范围，不宣称权限等级。
 	 */
 	const scopeAlert = computed(() => {
 		if (user.value && isSuperAdmin.value)
@@ -661,6 +688,15 @@
 			: t("pages.system-user.errors.failed");
 	}
 
+	// ── 筛选状态（声明在 `load()` 之前：`load` 读 `applied`，先声明再取数）───────────
+	// 输入态与生效态分开：搜索防抖 300ms 才落生效（D2），改筛选一律回到第一页
+	const keyword = ref("");
+	/** `""` = 不限（新代 `status` 是字符串枚举，没有旧代那种「0 被当未提供」的坑） */
+	const statusFilter = ref<string>("");
+	/** `""` = 不限；其余是 `department_id`（部门自带租户，所以这一个筛选覆盖「归属」维度） */
+	const departmentFilter = ref<string>("");
+	const applied = ref<{ keyword: string, status: string, department: string }>({ keyword: "", status: "", department: "" });
+
 	// ── 取数 ──────────────────────────────────────────────────────────────────
 	async function load(): Promise<void> {
 		if (loading.value)
@@ -672,11 +708,11 @@
 		try {
 			const result = await list({
 				page: page.value,
-				pageSize: pageSize.value,
+				page_size: pageSize.value,
 				keyword: applied.value.keyword || undefined,
-				// `0` 是「不限」哨兵：不能透传（`status: 0` → 10101、`accountLevel: 0` → 被忽略）
+				// 空串是「不限」哨兵：不发出去（上游对 `status=""` 不过滤，但没必要多带参数）
 				status: applied.value.status || undefined,
-				accountLevel: applied.value.level || undefined
+				department_id: applied.value.department || undefined
 			});
 
 			rows.value = result.list ?? [];
@@ -702,12 +738,29 @@
 		void load();
 	}
 
+	// ── 筛选选项与生效 ─────────────────────────────────────────────────────────
+	const filtersActive = computed(() =>
+		applied.value.keyword !== "" || applied.value.status !== "" || applied.value.department !== "");
+
+	const statusFilterItems = computed(() => [
+		{ label: t("pages.system-user.filter.anyStatus"), value: "" },
+		{ label: t("pages.system-user.status.active"), value: IAM_USER_STATUS.ACTIVE },
+		{ label: t("pages.system-user.status.disabled"), value: IAM_USER_STATUS.DISABLED },
+		{ label: t("pages.system-user.status.locked"), value: IAM_USER_STATUS.LOCKED }
+	]);
+
+	/** 部门候选来自同一个 `GET /iam/departments`（与建号表单共用），标签带租户前缀 */
+	const departmentFilterItems = computed(() => [
+		{ label: t("pages.system-user.filter.anyDepartment"), value: "" },
+		...departmentOptions.value
+	]);
+
 	/** 落生效态并重新取第一页（`page` 变了由 `watch(page)` 触发加载，避免重复请求） */
 	function applyFilters(): void {
 		applied.value = {
 			keyword: keyword.value.trim(),
 			status: statusFilter.value,
-			level: levelFilter.value
+			department: departmentFilter.value
 		};
 
 		if (page.value !== 1) {
@@ -720,15 +773,15 @@
 
 	function resetFilters(): void {
 		keyword.value = "";
-		statusFilter.value = 0;
-		levelFilter.value = 0;
+		statusFilter.value = "";
+		departmentFilter.value = "";
 		applyFilters();
 	}
 
 	// 搜索框防抖 300ms（D2）：输入即生效，不需要再点「筛选」
 	watchDebounced(keyword, () => applyFilters(), { debounce: 300 });
 	// 两个下拉是离散选择，改完立刻生效
-	watch([statusFilter, levelFilter], () => applyFilters());
+	watch([statusFilter, departmentFilter], () => applyFilters());
 	// 单页条数变化同样走 `applyFilters()`：换条数后 `page * pageSize` 的偏移必然错位，必须回第一页
 	watch(pageSize, () => applyFilters());
 

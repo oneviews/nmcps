@@ -1,113 +1,101 @@
 // shared/types/account.ts
-// 账号域契约（上游 `/api/v1/account` ↔ BFF `/api/account`）：`app/` 与 `server/` 同构引用。
+// 用户域契约（上游 `/api/v1/iam/users` ↔ BFF `/api/iam/users`）：`app/` 与 `server/` 同构引用。
 //
-// 设计基准：NMCPS-DESIGN-005 §六（layers/content/collections/cn/architecture/2.domain/system.md）
-// 字段口径来自 2026-11-01 对上游的实测：与契约不符的 6 项缺口登记在
-// NMCPS-REC-002（layers/content/collections/cn/records/defects/account-upstream-defects.md）。
+// 设计基准：NMCPS-DESIGN-005 §六（layers/content/collections/cn/architecture/2.domain/system.md）、
+// NMCPS-ADR-0018 §4.2（旧代 `/account` → 新代 `iam/users` 的逐字段映射）。
+// 字段口径来自 2026-11-04 对 `192.168.1.55:8888` 的实测（`GET /iam/users` 真实返回）：
+// snake_case，主键从 `accountCode`（`ACC…`）变为 `id`（`u_…`）。
 //
-// 约定：字段名沿用上游 camelCase，不做蛇形转换；BFF 只把错误信封的 `msg` 归一为 `message`。
-
-/** 账号状态（上游 swagger 口径：`0` / `5` 写入会报 `10101`，故不登记） */
-export const ACCOUNT_STATUS = {
-	/** 启用 */
-	ENABLED: 1,
-	/** 禁用（「删号」的替代：上游没有 DELETE 端点） */
-	DISABLED: 2,
-	/** 锁定 */
-	LOCKED: 3,
-	/** 待激活（建号带 `mustResetPassword` 时的初始状态之一） */
-	PENDING: 4
-} as const;
-
-/** 账号等级：只登记有语义的两档，`2`–`4` 上游接受但无语义定义 */
-export const ACCOUNT_LEVEL = {
-	/** 平台超级管理员（`tenantId` 恒为 0） */
-	SUPER_ADMIN: 0,
-	/** 租户管理员 */
-	TENANT_ADMIN: 1
-} as const;
+// 与旧代契约的三处结构性差异（页面据此降级，不做字段猜测）：
+//   - **没有 `accountLevel`**（缺口 G1）：等级模型被角色取代，页面不再展示 / 过滤等级；
+//   - **没有 `POST` 侧的 `tenant_id`**（实测请求体只登记 `department_id`）：租户归属由部门携带，
+//     部门对象自带 `tenant_id`（`shared/types/department.ts`）；
+//   - **有 `DELETE /iam/users/{id}`**（软删 `deleted_at`）：旧代缺口 `UP-ACC-04`（无删号端点）闭环。
+//
+// 约定：字段名沿用上游 snake_case，不做驼峰转换；BFF 只把错误信封的 `msg` 归一为 `message`。
 
 /**
- * 建号可选等级的**上限**。
+ * 用户状态（上游 `chk_sys_user_status` 约束的字符串枚举，实测只有这三档）。
  *
- * 上游把等级按归属层划分（2026-11-03 实测文案：「平台层仅可建 L0，租户层为 L1-L3，
- * 服务账号由系统自动开通」），因此 `4` 不是手工可建等级：提交 `accountLevel: 4` 回 `20102`。
- * 见 NMCPS-DESIGN-005 §6.2 / NMCPS-REC-002 UP-ACC-08。
+ * 与旧代数值枚举（`1` 启用 / `2` 禁用 / `3` 锁定 / `4` 待激活）不同：这里没有「待激活」——
+ * 新代没有 `mustResetPassword`（缺口 G2），也就不存在由它派生的初始状态。
  */
-export const ACCOUNT_CREATABLE_MAX_LEVEL = 3;
+export const IAM_USER_STATUS = {
+	ACTIVE: "active",
+	DISABLED: "disabled",
+	LOCKED: "locked"
+} as const;
 
-/**
- * 建号可选等级：**严格低于自己**（数字更大）且 `≤ ACCOUNT_CREATABLE_MAX_LEVEL`。
- *
- * 上游「只能向下管控」（`20103`）——同级与更高等级一律拒绝，所以下拉里放自身等级
- * 只会让人提交必然失败的值（2026-11-03 前的缺陷：租户管理员只看到 `1`，建号必失败）。
- * 超级管理员（`0`）→ `1/2/3`，租户管理员（`1`）→ `2/3`，未知等级按同一条规则递推且可能为空。
- */
-export function creatableAccountLevels(selfLevel: number): number[] {
-	const start = Math.max(ACCOUNT_LEVEL.SUPER_ADMIN, Math.trunc(selfLevel)) + 1;
-	return Array.from({ length: Math.max(0, ACCOUNT_CREATABLE_MAX_LEVEL - start + 1) }, (_, index) => start + index);
+/** 状态取值 */
+export type IamUserStatus = (typeof IAM_USER_STATUS)[keyof typeof IAM_USER_STATUS];
+
+/** 列表 / 详情返回的用户（`GET /iam/users`、`GET /iam/users/{id}` 同一形态） */
+export interface IamUser {
+	/** 主键（`u_…`）；路径段与角色绑定都用它，旧代的 `accountCode` 不再存在 */
+	id: string
+	/** 归属租户；平台级用户为 `null`。列表自带该字段（旧代缺口 `UP-ACC-05` 闭环） */
+	tenant_id?: string | null
+	/** 归属部门；未指定为 `null`，而部门对象自带 `tenant_id` */
+	department_id?: string | null
+	username: string
+	email?: string
+	phone?: string
+	display_name?: string
+	/** @see IAM_USER_STATUS */
+	status: string
+	mfa_enabled: boolean
+	last_login_at?: string | null
+	created_at?: string
+	updated_at?: string
+	/** 软删时间；列表默认不含已删用户 */
+	deleted_at?: string | null
 }
 
-/** 状态枚举取值 */
-export type AccountStatus = (typeof ACCOUNT_STATUS)[keyof typeof ACCOUNT_STATUS];
-
-/** 列表 / 详情返回的账号（上游不返回 `tenantId` / `email` / `phone`） */
-export interface AccountSummary {
-	accountId: number
-	/** 路径段用的稳定标识（`ACC…`），不是 `accountId` */
-	accountCode: string
-	accountName: string
-	displayName: string
-	/** `0` 超级管理员 / `1` 租户管理员；其余等级语义未定义 */
-	accountLevel: number
-	/** @see ACCOUNT_STATUS */
-	status: number
-	mfaEnabled: boolean
-	/** 上游 `GET` 返回本地时、`POST` 返回 UTC（UP-ACC-05），页面原样展示 */
-	createdAt: string
-}
-
-/** `GET /api/account` 查询参数（`accountLevel=0` 会被上游当「未提供」，见 UP-ACC-02） */
-export interface AccountListQuery {
+/** `GET /api/iam/users` 查询参数（实测只有这五个） */
+export interface IamUserListQuery {
 	page: number
-	pageSize: number
+	page_size: number
 	keyword?: string
-	accountLevel?: number
-	status?: number
+	/** @see IAM_USER_STATUS */
+	status?: string
+	department_id?: string
 }
 
-/** `GET /api/account` 的 `data` */
-export interface AccountListResult {
-	list: AccountSummary[]
+/** `GET /api/iam/users` 的 `data`（`list` 空结果为 `null`，BFF 出口归一为 `[]`） */
+export interface IamUserListResult {
+	list: IamUser[]
 	total: number
 	page: number
-	pageSize: number
+	page_size: number
 }
 
 /**
- * `POST /api/account` 入参。
+ * `POST /api/iam/users` 入参。
  *
- * `accountName` / `displayName` / `password` / `accountLevel` 必填（缺任一项上游报 `10509`，UP-ACC-03）；
- * `tenantId` 是**超级管理员**必填（`0` 或缺失 → `10101 缺少必填参数 tenantId`，UP-ACC-07），
- * 租户管理员不能传（上游从令牌推断租户）。
+ * 实测请求体**没有 `tenant_id`**：租户归属由 `department_id` 携带（部门自带租户）。
+ * `username` / `password` 是建号的最小必填集；`status` / `mfa_enabled` 不给，
+ * 新号一律由上游置 `active` + 未绑定 MFA。
  */
-export interface AccountCreatePayload {
-	accountName: string
-	displayName: string
+export interface IamUserCreatePayload {
+	username: string
 	password: string
-	accountLevel: number
-	/** 超级管理员建号时必须指定归属租户（来源 `GET /api/tenant`） */
-	tenantId?: number
-	mfaEnabled?: boolean
-	mustResetPassword?: boolean
+	email?: string
+	display_name?: string
+	department_id?: string
 }
 
-/** `PUT /api/account/{accountCode}/status` 入参 */
-export interface AccountStatusPayload {
-	status: AccountStatus
+/** `PUT /api/iam/users/{id}` 入参（`id` 必填，其余按需；同时承接「改资料」与「改状态」） */
+export interface IamUserUpdatePayload {
+	id: string
+	department_id?: string
+	email?: string
+	phone?: string
+	display_name?: string
+	status?: IamUserStatus
+	mfa_enabled?: boolean
 }
 
-/** `PUT /api/account/{accountCode}/status` 的 `data` */
-export interface AccountOkResult {
-	ok: boolean
+/** 写操作的 `data`：上游 `iam_IdResp` 把新主键放在**信封顶层**（`{ code, message, id }`，无 `data`） */
+export interface IamCreatedId {
+	id: string
 }

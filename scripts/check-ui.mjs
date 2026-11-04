@@ -558,7 +558,7 @@ log(
 );
 
 // 7.3 用户管理两栏（NMCPS-ARCH-006 §3 / NMCPS-ADR-0017）：`?id` 选择契约 + 两栏 / 覆盖式两种形态。
-// 只在自建模式跑：用例依赖假上游的固定账号集（ACC-1001…）与可控的窄视口。
+// 只在自建模式跑：用例依赖假上游的固定用户集（u_alice / u_bob / u_carol）与可控的窄视口。
 if (upstreamPort) {
 	const readUserPage = () => page.evaluate(() => {
 		const root = document.querySelector("[data-split='user']");
@@ -566,7 +566,7 @@ if (upstreamPort) {
 			shape: root?.getAttribute("data-split-shape") ?? null,
 			search: location.search,
 			rows: Array.from(root?.querySelectorAll("[role='option']") ?? []).map((el) => ({
-				// 行 `title` 形如「Alice · ACC-1001」：取末段作为记录标识
+				// 行 `title` 形如「Alice · u_alice」：取末段作为记录标识
 				code: (el.getAttribute("title") ?? "").split("·").pop()?.trim() ?? "",
 				selected: el.getAttribute("aria-selected") === "true"
 			})),
@@ -589,33 +589,33 @@ if (upstreamPort) {
 	const firstLoad = await openUserPage();
 	log(
 		"用户管理两栏形态默认选中第一行并 `replace` `?id`",
-		firstLoad.shape === "two" && firstLoad.search.includes("id=ACC-1001") && firstLoad.rows[0]?.selected === true,
+		firstLoad.shape === "two" && firstLoad.search.includes("id=u_alice") && firstLoad.rows[0]?.selected === true,
 		`shape=${firstLoad.shape} url="${firstLoad.search}" 选中首行=${firstLoad.rows[0]?.selected ?? "无行"}`
 	);
 
 	// 3.2 深链：`?id` 直接命中当前页行 —— 不重新拉列表、也不发详情请求（命中判定只在 `rows` 里做）
-	const deepLink = await openUserPage("?id=ACC-1002");
-	const deepRow = deepLink.rows.find((row) => row.code === "ACC-1002");
+	const deepLink = await openUserPage("?id=u_bob");
+	const deepRow = deepLink.rows.find((row) => row.code === "u_bob");
 	log(
 		"深链 `?id` 命中列表行并渲染右栏详情",
-		deepLink.shape === "two" && deepRow?.selected === true && deepLink.text.includes("ACC-1002") && deepLink.text.includes("Bob"),
+		deepLink.shape === "two" && deepRow?.selected === true && deepLink.text.includes("u_bob") && deepLink.text.includes("Bob"),
 		`url="${deepLink.search}" 命中=${deepRow?.selected ?? "无此行"}`
 	);
 
 	// 3.3 `?id` 不在当前结果内：只出空态提示，不清 URL、不静默翻页去捞、不发详情请求
 	const detailRequests = [];
 	const recordDetailRequest = (request) => {
-		if (/^\/api\/account\/[^/]+$/.test(new URL(request.url()).pathname))
+		if (/^\/api\/iam\/users\/[^/]+$/.test(new URL(request.url()).pathname))
 			detailRequests.push(request.url());
 	};
 	page.on("request", recordDetailRequest);
-	const missing = await openUserPage("?id=ACC-9999");
+	const missing = await openUserPage("?id=u_missing");
 	page.off("request", recordDetailRequest);
 	log(
 		"`?id` 不在当前结果内时给出空态提示且保留 URL",
-		missing.search.includes("id=ACC-9999")
+		missing.search.includes("id=u_missing")
 		&& missing.text.includes("不在当前结果内")
-		&& missing.text.includes("ACC-9999")
+		&& missing.text.includes("u_missing")
 		&& detailRequests.length === 0,
 		`url="${missing.search}" 详情请求=${detailRequests.length}`
 	);
@@ -626,49 +626,42 @@ if (upstreamPort) {
 	log(
 		"`?id=new` 落右栏内联建号态（不弹窗）",
 		creating.search.includes("id=new")
-		&& creating.text.includes("新建账号")
-		&& creating.text.includes("账号名")
+		&& creating.text.includes("新建用户")
+		&& creating.text.includes("用户名")
 		&& createDialogs === 0,
-		`弹窗=${createDialogs} 表单=${creating.text.includes("账号名")}`
+		`弹窗=${createDialogs} 表单=${creating.text.includes("用户名")}`
 	);
 
-	// 3.4.1 建号等级候选 = **严格低于自己且 ≤ 3**（NMCPS-DESIGN-005 §6.3）。
-	// 上游按「只能向下管控」判定（同级 / 更高回 20103），候选里一旦还留着自身等级，
-	// 租户管理员每次建号都必然失败 —— 这条用例钉住候选集合本身，而不是某次提交的结果。
-	const levelSelect = page.locator("[data-split='user'] form [role='combobox']").first();
-	const levelDefault = (await levelSelect.textContent() ?? "").trim();
-	await levelSelect.click();
-	await page.waitForTimeout(300);
-	// 只取等级项：本页列表行同样是 `[role='option']`，混进来会把候选集合量错
-	const levelChoices = await page.evaluate(() =>
-		Array.from(document.querySelectorAll("[role='listbox'] [role='option']"))
-			.map((el) => (el.textContent ?? "").trim())
-			.filter((text) => /^L\d+$/.test(text)));
-	await page.keyboard.press("Escape");
-	await page.waitForTimeout(200);
+	// 3.4.1 建号表单的字段集对齐新代 `POST /iam/users`（NMCPS-ADR-0018 §4.2）：
+	// 只有「所属部门」一个下拉（部门自带租户）；等级（G1）与租户两个旧代字段必须彻底消失 ——
+	// 它们在新代请求体里不存在，留着只会让人填了也传不上去。
+	const formSelects = page.locator("[data-split='user'] form [role='combobox']");
+	const formSelectCount = await formSelects.count();
+	const formLabels = await page.evaluate(() =>
+		Array.from(document.querySelectorAll("[data-split='user'] form label"))
+			.map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim()));
+	const hasDepartment = formLabels.some((label) => label.includes("所属部门"));
+	const hasLegacyFields = formLabels.some((label) => /等级|所属租户/.test(label));
 	log(
-		"建号等级候选严格低于当前身份（租户管理员 L2 / L3，不含 L1 与 L4）",
-		levelDefault === "L2" && levelChoices.join(",") === "L2,L3",
-		`默认=${levelDefault} 候选=[${levelChoices.join(" / ")}]`
+		"建号表单只剩「所属部门」一个下拉（等级 / 租户随旧代退役）",
+		formSelectCount === 1 && hasDepartment && !hasLegacyFields,
+		`下拉=${formSelectCount} 字段=[${formLabels.join(" / ")}]`
 	);
 
-	// 3.4.2 真建一次号：假上游已按真实规则拦同级 / 更高与 L4，能建成说明「只能向下管控」
-	// 与页面候选集合是一致的（此前候选只有 L1，提交必回 20103：「创建失败」）。
+	// 3.4.2 真建一次号：假上游按实测口径回 `{ code, message, id }`（没有 `data`），
+	// 页面用 keyword 回读新记录再 `replace` `?id` —— 建成并选中说明这条链路成立。
 	const createInputs = page.locator("[data-split='user'] form input");
 	await createInputs.nth(0).fill("uicheck-ops");
 	await createInputs.nth(1).fill("联调建号");
-	await createInputs.nth(2).fill("Check@123456");
-	await levelSelect.click();
-	await page.waitForTimeout(300);
-	await page.locator("[role='listbox'] [role='option']").filter({ hasText: /^L3$/ }).click();
-	await page.waitForTimeout(200);
+	await createInputs.nth(2).fill("uicheck-ops@nms.local");
+	await createInputs.nth(3).fill("Check@123456");
 	await page.getByRole("button", { name: "创建", exact: true }).click();
 	await page.waitForTimeout(1500);
 	const afterCreate = await readUserPage();
-	const createdRow = afterCreate.rows.find((row) => row.code === "ACC-1004");
+	const createdRow = afterCreate.rows.find((row) => row.code === "u_uicheck-ops");
 	log(
-		"租户管理员用 L3 建号成功并选中新账号",
-		createdRow?.selected === true && afterCreate.text.includes("ACC-1004"),
+		"新建用户成功并选中新记录（`id` 回读 + `?id` replace）",
+		createdRow?.selected === true && afterCreate.search.includes("id=u_uicheck-ops"),
 		`url="${afterCreate.search}" 新行=${createdRow ? "已出现" : "未见"}`
 	);
 
@@ -687,7 +680,7 @@ if (upstreamPort) {
 	const overlayDetail = await readUserPage();
 	log(
 		"覆盖式点选写入 `?id` 并显示详情面板",
-		overlayDetail.search.includes("id=ACC-1001") && visiblePanes(overlayDetail) === "detail",
+		overlayDetail.search.includes("id=u_alice") && visiblePanes(overlayDetail) === "detail",
 		`url="${overlayDetail.search}" 可见=${visiblePanes(overlayDetail)}`
 	);
 
@@ -745,7 +738,7 @@ if (upstreamPort) {
 		&& toolbarState.leftInputs === 1
 		&& toolbarState.leftButtons.includes("筛选条件")
 		&& toolbarState.leftButtons.includes("刷新")
-		&& toolbarState.rightText.includes("新建账号")
+		&& toolbarState.rightText.includes("新建用户")
 		&& toolbarState.rightText.includes("禁用"),
 		`h=${toolbarState.height} 左区按钮=${toolbarState.leftButtons.join("/")} 右区="${toolbarState.rightText}"`
 	);
@@ -809,7 +802,7 @@ if (upstreamPort) {
 		&& sidebarBar.bars === 1
 		&& sidebarBar.height >= 44
 		&& sidebarBar.leftKids > 0
-		&& sidebarBar.rightText.includes("新建账号"),
+		&& sidebarBar.rightText.includes("新建用户"),
 		`mode=${sidebarBar.mode} 条数=${sidebarBar.bars} h=${sidebarBar.height} 左区子节点=${sidebarBar.leftKids} 右区="${sidebarBar.rightText}"`
 	);
 

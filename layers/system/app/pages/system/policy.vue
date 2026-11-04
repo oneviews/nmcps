@@ -45,19 +45,10 @@
 			</template>
 		</Teleport>
 
-		<!-- 右区 = 记录域：本域没有写端点（UP-POL-01），唯一动作是只读的授权试算 -->
-		<Teleport to="#app-toolbar-right">
-			<UTooltip :text="$t('pages.system-policy.dryrun.open')">
-				<UButton
-					size="sm"
-					variant="outline"
-					icon="carbon:play"
-					:label="$t('pages.system-policy.dryrun.open')"
-					:disabled="!canUseDomain"
-					@click="dryrunOpen = true"
-				/>
-			</UTooltip>
-		</Teleport>
+		<!--
+			本域在新代没有任何写端点（`iam/roles` / `iam/policies` 的迁移见 C4c），
+			因此右区不再挂「授权试算」按钮：`POST /access/dryrun` 在新代不存在（缺口 G5）。
+		-->
 
 		<!-- 两栏骨架（NMCPS-ARCH-006 §3 / NMCPS-ADR-0017 D1） -->
 		<LayoutSplit
@@ -274,9 +265,6 @@
 				</div>
 			</template>
 		</LayoutSplit>
-
-		<!-- 授权试算：纯计算端点，不落库；没有创建 / 修改 / 删除入口（UP-POL-01） -->
-		<PolicyDryrunModal v-model:open="dryrunOpen" />
 	</div>
 </template>
 
@@ -299,7 +287,7 @@
 	 * | 新建规则 | 不提供 | **不提供**：规则建了既不能改也不能删（`PUT`/`DELETE` 实测 `404`，UP-POL-01），且 `conditionDsl` 不做语法校验（UP-POL-02） |
 	 * | 修改 / 删除规则 | 不提供 | 不提供：同上，端点不存在 |
 	 * | 启停规则 | 不提供 | 不提供：`status` 只能由上游改库 |
-	 * | 授权试算 | 不提供 | 可用：`POST /access/dryrun` 纯计算、不落库；只发实测参与判定的三个字段（UP-POL-06） |
+	 * | 授权试算 | 不提供 | **下线**：`POST /access/dryrun` 在新代不存在（缺口 G5），入口与弹窗一并移除 |
 	 *
 	 * 这些收敛**只是不引导用户踩上游缺口**，不是安全边界：BFF 只做白名单透传，鉴权仍在上游。
 	 * 尤其「新建规则」：一个只能创建、不能回收的写入口，比没有入口更危险，故本页不提供。
@@ -531,9 +519,6 @@
 
 	// 搜索框防抖 300ms（D2）：输入即生效，不需要再点「筛选」
 	watchDebounced(keyword, () => applyKeyword(), { debounce: 300 });
-
-	// ── 授权试算 ──────────────────────────────────────────────────────────────
-	const dryrunOpen = ref(false);
 
 	/** 复制 DSL 原文：`navigator.clipboard` 在非安全上下文不可用，失败要说出口而不是静默 */
 	async function copyDsl(dsl: string): Promise<void> {

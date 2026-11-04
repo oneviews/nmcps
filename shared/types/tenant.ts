@@ -1,27 +1,38 @@
 // shared/types/tenant.ts
-// 租户域契约（上游 `/api/v1/tenant` ↔ BFF `/api/tenant`）。
+// 租户域契约（上游 `/api/v1/iam/tenants` ↔ BFF `/api/iam/tenants`）。
 //
-// 用途只有一个：`/system/user` 建号时给超级管理员选 `tenantId` —— 上游 `POST /account`
-// 对平台层身份要求显式 `tenantId`（缺省 → `10101 缺少必填参数 tenantId`，见 NMCPS-REC-002 UP-ACC-07），
-// 而 `GET /account` 列表并不返回租户字段，因此这是唯一可用的取值来源。
+// 设计基准：NMCPS-ADR-0018 §4.2（`GET /tenant` → `GET /iam/tenants`）。
+// 字段口径来自 2026-11-04 实测（`192.168.1.55:8888` 的 `GET /iam/tenants`）：snake_case，主键从
+// 数值 `tenantId` 变为字符串 `id`（`tnt_default` / `t_isp_a`）。
 //
-// 设计基准：NMCPS-DESIGN-005 §6.1（layers/content/collections/cn/architecture/2.domain/system.md）。
+// 用途两处：`/system/user` 把用户行上的 `tenant_id` 翻成租户名，以及部门候选分组显示。
+// 页面**不再**在建号时提交租户：新代 `POST /iam/users` 没有 `tenant_id`，归属由部门携带。
 
-/** `GET /api/tenant` 的列表项（上游 2026-11-03 实测字段） */
-export interface TenantSummary {
-	tenantId: number
-	tenantCode: string
-	tenantName: string
+/** `GET /api/iam/tenants` 的列表项（实测字段；未赋值的联系人与配额字段可能整体缺省） */
+export interface IamTenant {
+	id: string
+	name: string
+	/** 租户编码（`platform` / `default` / `isp-a`），租户内唯一 */
+	code: string
+	/** `active` / `disabled`（自由字符串，页面原样展示） */
+	status?: string
 	description?: string
-	status?: number
-	isDefault?: boolean
-	createdAt?: string
+	contact_person?: string
+	contact_phone?: string
+	contact_email?: string
+	address?: string
+	device_quota?: number
+	storage_quota?: number
+	api_quota?: number
+	created_at?: string
+	updated_at?: string
+	deleted_at?: string | null
 }
 
-/** `GET /api/tenant` 的 `data`（与账号列表一致：`list` / `total` / `page` / `pageSize`） */
-export interface TenantListResult {
-	list: TenantSummary[]
+/** `GET /api/iam/tenants` 的 `data`（`list` 空结果为 `null`，BFF 出口归一为 `[]`） */
+export interface IamTenantListResult {
+	list: IamTenant[]
 	total: number
 	page: number
-	pageSize: number
+	page_size: number
 }

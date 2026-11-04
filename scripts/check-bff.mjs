@@ -503,8 +503,13 @@ try {
 		const logs = await request(exitPort, "/api/audit/operation-logs?page=1&page_size=1");
 		log("上游 data.list:null → 出口归一为 []", logs.status === 200 && Array.isArray(logs.json?.data?.list) && logs.json.data.list.length === 0, describe(logs.json?.data?.list));
 		log("归一不影响 data 内分页字段（page / page_size / total）", logs.json?.data?.page === 1 && logs.json?.data?.page_size === 1 && logs.json?.data?.total === 0, describe(logs.json?.data));
+		const users = await request(exitPort, "/api/iam/users?page=1&page_size=2");
+		log("iam/users 放行并透传 snake_case（id / page_size 不被改写）", users.status === 200 && users.json?.data?.list?.[0]?.id === "u_alice" && users.json?.data?.page_size === 2, `${users.status} ${describe(users.json?.data?.page_size)}`);
+		const emptyUsers = await request(exitPort, "/api/iam/users?page=1&page_size=2&keyword=nobody");
+		log("iam/users 空结果同样归一为 []（消费面可直接 .map）", Array.isArray(emptyUsers.json?.data?.list) && emptyUsers.json.data.list.length === 0, describe(emptyUsers.json?.data?.list));
 
 		const systemNamespace = await request(exitPort, "/api/system/overview");
+
 		const transmissionNamespace = await request(exitPort, "/api/transmission/sites");
 		log("system / transmission 命名空间在白名单内（非 resource_not_allowed）", [systemNamespace, transmissionNamespace].every((res) => res.status !== 404 || res.json?.message !== "bff_resource_not_allowed"), `${describe(systemNamespace.json?.message)} / ${describe(transmissionNamespace.json?.message)}`);
 	});

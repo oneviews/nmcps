@@ -161,34 +161,6 @@ export interface AbacRuleListResult {
 	pageSize: number
 }
 
-/**
- * `POST /api/access/dryrun` 入参。
- *
- * 必填只有 `accountId` / `path` / `method`；其余四个字段上游**接受但实测不参与判定**
- * （UP-POL-06），因此页面不提供这几个输入。
- */
-export interface AccessDryrunPayload {
-	accountId: number
-	/** 完整上游路径（`/api/v1/device/list`）：不带 `/api/v1` 前缀会按「未授权」判 */
-	path: string
-	method: string
-	clientIp?: string
-	deviceCode?: string
-	resourceTags?: string[]
-	accountLevel?: number
-}
-
-/** `POST /api/access/dryrun` 的 `data`：RBAC 与 ABAC 的合并判定结果 */
-export interface AccessDryrunResult {
-	allow: boolean
-	/** 命中的 ABAC 规则编码；空串 = 未命中任何规则 */
-	matchedRule: string
-	/** 拒绝原因（`RBAC 未授权该资源与动作` / `账号未绑定任何角色`）；允许时为空串 */
-	denyReason: string
-	/** 字段级白名单；上游恒回 `null`（未见非空样本） */
-	allowedFields: string[] | null
-}
-
 /** 角色 / 授权 / 删除类写操作的 `data`（上游统一 `{ ok: true }`） */
 export interface PolicyOkResult {
 	ok: boolean

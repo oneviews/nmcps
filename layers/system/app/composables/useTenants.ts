@@ -1,21 +1,22 @@
 // layers/system/app/composables/useTenants.ts
-// 租户列表（`GET /api/tenant`）：只为 `/system/user` 建号时的「所属租户」下拉供数。
+// 租户列表（`GET /api/iam/tenants`）：`/system/user` 用它把用户行上的 `tenant_id` 翻成租户名。
 //
-// 设计基准：NMCPS-DESIGN-005 §6.1 / §6.3（layers/content/collections/cn/architecture/2.domain/system.md）
-// 缺陷背景：NMCPS-REC-002 UP-ACC-07（建号 `tenantId` 必填，且只有 `/tenant` 能给出取值）。
-// 口径：页面上只有超级管理员需要它；租户管理员的租户由上游按令牌推断，不发这个请求。
-import type { TenantListResult, TenantSummary } from "~~/shared/types/tenant";
+// 设计基准：NMCPS-ADR-0018 §4.2（`GET /tenant` → `GET /iam/tenants`）。
+// 与旧代用途的差别：以前这里给建号表单供「所属租户」候选（旧代 `POST /account` 要求显式
+// `tenantId`）；新代 `POST /iam/users` 没有 `tenant_id`，归属改由部门携带（`useDepartments`），
+// 因此本 composable 现在只服务于**展示**（租户名翻译）。
+import type { IamTenant, IamTenantListResult } from "~~/shared/types/tenant";
 
-/** 上游 `pageSize` 上限，与账号列表保持同一夹取口径 */
+/** 上游 `page_size` 上限，与用户列表保持同一夹取口径 */
 const MAX_PAGE_SIZE = 100;
 
 export function useTenants() {
 	const api = useApi();
 
-	/** 拉全量租户（当前环境只有 `default`，一次请求足够；将来变多也先按 100 条取首页） */
-	async function list(): Promise<TenantSummary[]> {
-		const result = await api.get<TenantListResult>("/api/tenant", {
-			query: { page: 1, pageSize: MAX_PAGE_SIZE }
+	/** 拉全量租户（当前环境 3 个，一次请求足够；将来变多也先按 100 条取首页） */
+	async function list(): Promise<IamTenant[]> {
+		const result = await api.get<IamTenantListResult>("/api/iam/tenants", {
+			query: { page: 1, page_size: MAX_PAGE_SIZE }
 		});
 
 		return result.list ?? [];

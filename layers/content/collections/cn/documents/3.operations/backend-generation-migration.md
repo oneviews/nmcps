@@ -39,7 +39,9 @@ tags:
 | C1 | `fix(bff): 会话失效码换 40101，业务错误不判成功` ✅ | `shared/utils/apiGuard.ts`、`server/utils/bff/auth.ts`、`app/composables/useAuth.ts`、`scripts/lib/bff-harness.mjs`、`scripts/check-bff.mjs`、`.env*` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` |
 | C2 | `feat(bff): 认证对接 iam 命名空间` ✅ | `shared/types/auth.ts`、`server/utils/bff/{auth,authSchema}.ts`、`server/api/auth/*`（含删除 `mfa/`）、`app/{composables,pages/auth,constants}`、`layers/{user,system}` 受影响页、`scripts/{check-bff,check-ui}` + 假上游、i18n | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（74/74）+ `pnpm check:ui`（103/103）+ 真实登录 |
 | C3 | `feat(bff): 网关白名单按新代命名空间重建，出口归一与脱敏` ✅ | `shared/types/api.ts`、`server/utils/bff/{gateway,proxy}.ts`、`scripts/{check-bff,lib/bff-harness}.mjs` | `pnpm build:server && pnpm check:bff`（82/82）+ `pnpm check:ui`（103/103） |
-| C4 | `refactor(system): 四个系统页面按 iam/audit 契约重写` | `shared/types/{account,policy,audit,tenant}.ts`、`layers/system/app/composables/*`、`layers/system/app/pages/system/*.vue` | `pnpm check:ui` + 手测四页 |
+| C4a | `refactor(system): 用户管理改接 iam/users，试算随 G5 下线` ✅ | `shared/types/{account,tenant,department}.ts`、`layers/system/app/{composables/useAccounts,composables/useTenants,composables/useDepartments,composables/usePolicies,utils/accountError}.ts`、`layers/system/app/components/User/*`、`layers/system/app/pages/system/user.vue`、`pages/system/policy.vue`（移除试算入口）、`shared/types/policy.ts`、i18n、`scripts/{check-ui,check-bff}.mjs`、`scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（84/84）+ `pnpm check:ui`（103/103） |
+| C4b | `refactor(system): 审计页改接 audit/operation-logs 与归档` | `shared/types/audit.ts`、`composables/{useAuditLogs,useAuditExport}.ts`、`pages/system/log.vue`、假上游与自检 | `pnpm check:ui` + 手测 `/system/log` |
+| C4c | `refactor(system): 策略与权限页改接 iam/roles 与 iam/policies，删除旧代白名单组` | `shared/types/policy.ts`、`composables/{usePolicies,usePermissions}.ts`、`pages/system/{policy,permission}.vue`、`shared/types/api.ts`（旧代组删除）、`check:bff`（旧名 404 断言） | `pnpm check:bff` + `pnpm check:ui` + 手测两页 |
 
 ---
 
@@ -264,11 +266,13 @@ export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): re
 登录表单字段改 `username`、`useAuthTokens()` 键改 snake_case 属 C2（与 `IamTokens` 同批）。
 
 
-### 3.8 `layers/system/app/composables/*.ts`（C4）
+### 3.8 `layers/system/app/composables/*.ts`（C4a / C4b / C4c，C4a 已落码）
 
 | 文件 | 端点变化 |
 | :--- | :--- |
-| `useAccounts.ts` | `/api/account` → `/api/iam/users`；`pageSize` → `page_size`；状态改 `PUT /api/iam/users/{id}` |
+| `useAccounts.ts` ✅ | `/api/account` → `/api/iam/users`；`pageSize` → `page_size`；状态改 `PUT /api/iam/users/{id}`；新增 `DELETE /iam/users/{id}`（软删）；`POST` 回的是 `{ code, message, id }`（没有 `data`），用 `keyword` 回读新记录 |
+| `useTenants.ts` ✅ | `/api/tenant` → `/api/iam/tenants`（只用于把 `tenant_id` 翻成租户名） |
+| `useDepartments.ts` ✅（新增） | `GET /api/iam/departments`：建号候选 + 归属过滤，条目自带 `tenant_id` |
 | `useTenants.ts` | `/api/tenant` → `/api/iam/tenants` |
 | `usePolicies.ts` | `/api/role` → `/api/iam/roles`；`/api/abac/rule` 与 `/api/access/dryrun` 删除；新增 `policies` / `role-policies` |
 | `usePermissions.ts` | 权限目录段删除；矩阵改读 `role-policies` + 策略 `actions` |
@@ -289,11 +293,14 @@ export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): re
 | C2 | `scripts/check-bff.mjs` ⑦ | 「刷新即轮换」 | **改为「刷新不轮换」**：同 `refresh_token` 二次刷新仍 200、cookie 值不变；另加「坏刷新令牌 `200 + 10007` → BFF 401」「改密 `PUT` + snake_case」「登出幂等」 |
 | C3 | `scripts/lib/bff-harness.mjs` | 无 `asset` / 新代审计路由 | 新增 `GET /asset/device`（snake_case + 明文 `snmp_*_pass`）与 `GET /audit/operation-logs`（空结果 `list: null`），两处都容忍 `/api/v1` 前缀 |
 | C3 | `scripts/check-bff.mjs` ⑧ | — | 新增 8 条：「asset 放行并透传」「`snmp_auth_pass` → `***`」「`snmp_priv_pass` → `***`」「其余字段原样」「响应体无明文凭据」「`list: null` → `[]`」「分页字段不受影响」「`system` / `transmission` 在白名单内」 |
+| C4a | `scripts/lib/bff-harness.mjs` | 无 `iam/users` / `iam/tenants` / `iam/departments` | 新增三条：列表按 `keyword` / `status` / `department_id` 真过滤、`page_size` 分页、空结果 `list: null`；`POST` 回 `{ code, message, id }`、重复用户名 `200 + 10002`、缺字段 `200 + 40001`；`PUT` / `DELETE /iam/users/{id}`（目标不存在回 `400` +「记录不存在」） |
+| C4a | `scripts/check-ui.mjs` ③ | 假上游固定账号集 `ACC-1001…`、等级候选断言 | 用户集换 `u_alice` / `u_bob` / `u_carol`；等级候选用例改为「建号表单只剩部门一个下拉」；建号用例改填 `username` / 显示名 / 邮箱 / 口令，断言 `id` 回读与 `?id` replace |
 
 C1 落码实测（2026-11-04）：`pnpm check:bff` 83/83、`pnpm check:ui` 105/105。
 C2 落码实测（2026-11-04，同一上游）：`pnpm check:bff` 74/74、`pnpm check:ui` 103/103
 —— 断言总数下降是因为 MFA 绑定（G8）、强制改密（G2）、刷新轮换与 whoami 相关用例随能力退场被删除。
 C3 落码实测（2026-11-04）：`pnpm check:bff` 82/82（74 + 8）、`pnpm check:ui` 103/103、`pnpm lint` / `pnpm typecheck` 无输出。
+C4a 落码实测（2026-11-04）：`pnpm check:bff` 84/84（82 + 2：`iam/users` 透传 snake_case、空结果归一 `[]`）、`pnpm check:ui` 103/103（等级候选用例改成「建号表单只剩部门一个下拉」，建号用例改为断言 `id` 回读 + `?id` replace，断言总数不变）、`pnpm lint` / `pnpm typecheck` / `pnpm build:server` 无输出。
 
 断言数变化须同步更新脚本自身摘要的 `N/N` 与相关架构文档里的计数（`.clinerules`「CI self-check conventions」）。
 

@@ -3,27 +3,39 @@
 		破坏性确认（NMCPS-ARCH-006 §3.7「Modal = 破坏性确认」/ NMCPS-ADR-0017 D7）。
 		动作入口在**右栏工具栏**的「记录域」（D5：危险动作不得下行到行内），
 		本弹窗只负责「确认这一次写操作」，不再提供状态下拉：
-		同一时刻列出三种状态会让「改哪一条、改成什么」出现两处来源。
+		同一时刻列出多种状态会让「改哪一条、改成什么」出现两处来源。
+
+		两种模式共用一个确认壳（`mode`）：
+		- `status`：启用 ↔ 禁用（`PUT /iam/users/{id}`），禁用即「停用登录」；
+		- `delete`：真删号（`DELETE /iam/users/{id}`，软删 `deleted_at`）——新代才有这个端点，
+		旧代缺口 `UP-ACC-04` 已闭环，所以这里不再把「禁用」当成删号的唯一替代。
 	-->
 	<UModal
 		v-model:open="open"
 		:title="copy.title"
-		:description="account ? copy.description(account.displayName || account.accountName) : undefined"
+		:description="user ? copy.description(user.display_name || user.username) : undefined"
 		:dismissible="!submitting"
 		:ui="{ footer: 'justify-end' }"
 	>
 		<template #body>
-			<div v-if="account" class="space-y-4">
+			<div v-if="user" class="space-y-4">
 				<div class="flex items-center justify-between gap-3 rounded-md border border-(--ui-border) px-3 py-2">
 					<span class="text-sm text-(--ui-text-muted)">{{ t("pages.system-user.statusModal.current") }}</span>
-					<UBadge :color="accountStatusColor(account.status)" variant="subtle">
-						{{ t(accountStatusKey(account.status), { status: account.status }) }}
+					<UBadge :color="accountStatusColor(user.status)" variant="subtle">
+						{{ t(accountStatusKey(user.status), { status: user.status }) }}
 					</UBadge>
 				</div>
 
-				<!-- 上游没有 DELETE 端点：禁用就是「删号」的替代语义，必须明说 -->
 				<UAlert
-					v-if="targetStatus === ACCOUNT_STATUS.DISABLED"
+					v-if="mode === 'delete'"
+					color="error"
+					variant="subtle"
+					icon="carbon:trash-can"
+					:description="t('pages.system-user.statusModal.deleteHint')"
+				/>
+
+				<UAlert
+					v-else-if="targetStatus === IAM_USER_STATUS.DISABLED"
 					color="warning"
 					variant="subtle"
 					icon="carbon:information"
@@ -50,10 +62,10 @@
 				@click="open = false"
 			/>
 			<UButton
-				:color="targetStatus === ACCOUNT_STATUS.DISABLED ? 'error' : 'primary'"
+				:color="mode === 'delete' || targetStatus === IAM_USER_STATUS.DISABLED ? 'error' : 'primary'"
 				:label="copy.submit"
 				:loading="submitting"
-				:disabled="!account"
+				:disabled="!user"
 				@click="submit"
 			/>
 		</template>
@@ -61,21 +73,21 @@
 </template>
 
 <script setup lang="ts">
-	import type { AccountStatus, AccountSummary } from "~~/shared/types/account";
-	import { ACCOUNT_STATUS } from "~~/shared/types/account";
+	import type { IamUser } from "~~/shared/types/account";
+	import { IAM_USER_STATUS } from "~~/shared/types/account";
 
 	/**
-	 * 变更账号状态确认（`PUT /api/account/{accountCode}/status`）。
+	 * 用户写操作确认：改状态（`PUT /api/iam/users/{id}`）或删号（`DELETE /api/iam/users/{id}`）。
 	 *
-	 * 设计基准：NMCPS-DESIGN-005 §6.1 / §6.2（layers/content/collections/cn/architecture/2.domain/system.md）
-	 * - 上游只有这一个写入口，因此「编辑资料 / 删号」都用它承接（删号 ≡ 禁用）；
+	 * 设计基准：NMCPS-ADR-0018 §4.2（`PUT /account/{code}/status` → `PUT /iam/users/{id}`，
+	 * 并新增 `DELETE /iam/users/{id}`）。
 	 * - 目标状态由调用方给定（右栏工具栏的「禁用 / 启用」），弹窗不再提供下拉；
-	 * - `4`（待激活）由建号时 `mustResetPassword` 决定，`0` / `5` 上游报 `10101`，两者都不出现。
+	 * - 新代状态是字符串 `active` / `disabled` / `locked`：`locked` 由上游在失败登录时置位，页面不写。
 	 */
 	const props = defineProps<{
-		account: AccountSummary | null
-		/** 本次要写入的目标状态（禁用 / 启用） */
-		targetStatus: AccountStatus
+		user: IamUser | null
+		/** `status`：启用 ↔ 禁用；`delete`：软删该账号 */
+		mode: "status" | "delete"
 	}>();
 
 	const emit = defineEmits<{ updated: [] }>();
@@ -84,23 +96,40 @@
 
 	const { t } = useI18n();
 	const toast = useToast();
-	const { updateStatus } = useAccounts();
+	const { updateStatus, remove } = useAccounts();
 
 	const submitting = ref(false);
 	const submitError = ref<string>();
 
-	/** 两种目标状态各一套文案：禁用有删号语义，启用没有 */
-	const copy = computed(() => (props.targetStatus === ACCOUNT_STATUS.DISABLED
-		? {
-			title: t("pages.system-user.statusModal.disableTitle"),
-			description: (value: string) => t("pages.system-user.statusModal.disableDescription", { name: value }),
-			submit: t("pages.system-user.statusModal.disableSubmit")
+	/**
+	 * 状态模式下的目标状态：`active` → `disabled`，其余 → `active`。
+	 * 已锁定（`locked`）的账号同样按「启用」处理：让用户从锁定态恢复是运维诉求。
+	 */
+	const targetStatus = computed<string>(() =>
+		props.user?.status === IAM_USER_STATUS.ACTIVE ? IAM_USER_STATUS.DISABLED : IAM_USER_STATUS.ACTIVE);
+
+	/** 三种模式各一套文案：删号最重，禁用次之，启用无风险 */
+	const copy = computed(() => {
+		if (props.mode === "delete") {
+			return {
+				title: t("pages.system-user.statusModal.deleteTitle"),
+				description: (value: string) => t("pages.system-user.statusModal.deleteDescription", { name: value }),
+				submit: t("pages.system-user.statusModal.deleteSubmit")
+			};
 		}
-		: {
-			title: t("pages.system-user.statusModal.enableTitle"),
-			description: (value: string) => t("pages.system-user.statusModal.enableDescription", { name: value }),
-			submit: t("pages.system-user.statusModal.enableSubmit")
-		}));
+
+		return props.user?.status === IAM_USER_STATUS.ACTIVE
+			? {
+				title: t("pages.system-user.statusModal.disableTitle"),
+				description: (value: string) => t("pages.system-user.statusModal.disableDescription", { name: value }),
+				submit: t("pages.system-user.statusModal.disableSubmit")
+			}
+			: {
+				title: t("pages.system-user.statusModal.enableTitle"),
+				description: (value: string) => t("pages.system-user.statusModal.enableDescription", { name: value }),
+				submit: t("pages.system-user.statusModal.enableSubmit")
+			};
+	});
 
 	watch(open, (value) => {
 		if (value)
@@ -118,11 +147,11 @@
 	}
 
 	async function submit(): Promise<void> {
-		if (!props.account || submitting.value)
+		if (!props.user || submitting.value)
 			return;
 
-		// 目标状态与当前一致时没必要发请求（上游会 `ok`，但白改一次没意义）
-		if (props.targetStatus === props.account.status) {
+		// 状态模式：目标与当前一致时没必要发请求（上游会 `ok`，但白改一次没意义）
+		if (props.mode === "status" && props.user.status === targetStatus.value) {
 			open.value = false;
 			return;
 		}
@@ -131,8 +160,17 @@
 		submitError.value = undefined;
 
 		try {
-			await updateStatus(props.account.accountCode, props.targetStatus);
-			toast.add({ title: t("pages.system-user.statusModal.success"), color: "success" });
+			if (props.mode === "delete")
+				await remove(props.user.id);
+			else
+				await updateStatus(props.user.id, targetStatus.value);
+
+			toast.add({
+				title: t(props.mode === "delete"
+					? "pages.system-user.statusModal.deleteSuccess"
+					: "pages.system-user.statusModal.success"),
+				color: "success"
+			});
 			open.value = false;
 			emit("updated");
 		} catch (error) {
