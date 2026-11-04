@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.11
+version: 0.39.12
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -201,3 +201,4 @@ tags:
 | 2026-11-04 | 0.39.9 | **正则收敛为单一事实源**：六条 `--expect` 正则从 `ci.yml` 内联搬到新文件 `scripts/ci-expectations.sh`（`sh scripts/ci-expectations.sh <key>` 打印正则、`--list` 列出 `key<TAB>正则`、unknown key 退出 2），`ci.yml` 七个调用点改成 `--expect "$(sh scripts/ci-expectations.sh <key>)"`。`pnpm check:ci-summary` 由 6 项扩到 11 项：新增 ⑤ 类静态接线断言——⑦ 每处调用都带该形式 ⑧ 每处以 `\|\| status=1` 收尾（仅已红分支允许 `\|\| true`，靠回溯最近的 `if [ "$status" -ne 0 ]` 判定）⑨ ci.yml 用到的 key 与 `--list` 表双向一致（无死条目、无未登记 key）⑩ 每个 key 解析出非空正则 ⑪ unknown key 报错。负例实测：删掉一行的 `--expect` → 9/11；把 page UI 成功分支的 `\|\| status=1` 改成 `\|\| true` → 10/11。 |
 | 2026-11-04 | 0.39.10 | **正则回放真实日志**：新增 `scripts/fixtures/ci-logs/<key>.log` 六份样本（各步骤真实日志尾部，头部 `# source:` 写出处与重采方式），`pnpm check:ci-summary` 由 11 项扩到 14 项：⑫ 样本与表 key 双向一致（缺样本 / 孤儿样本都红）⑬ 每条正则用 `grep -aE`（与 `ci-summary.sh` 同工具同参数）在对应样本上命中 ⑭ 每份样本都带 `# source:` 行（防编造）。补上「接线对但正则匹配不上今天措辞」的盲区。重采入口 `node scripts/check-ci-summary.mjs --write-fixtures` 重跑 lint / typecheck / i18n / governance 四步写回尾部（先跑完再统一落盘，避免中途改样本让 `check:governance` 假红）；bff / ui 需构建产物 + 真浏览器，从 `gh run view <id> --log` 手工取。负例实测：删 `ui.log` → 12/14；把 `116/116 项通过` 改成 `116/116 cases passed` → 12/14；删 `bff.log` 的 `# source:` 行 → 13/14。 |
 | 2026-11-04 | 0.39.11 | **样本清单双源互证**：新增 `scripts/fixtures/ci-logs/.manifest.json`，每条记录样本的 `sha256` 与它声称的 `source`；`pnpm check:ci-summary` 由 14 项扩到 17 项：⑮ 清单与样本文件双向一致（漏封 / 多出记录都红）⑯ 每条 `sha256` 与样本字节一致（手改样本没重封即红）⑰ 清单 `source` 与样本 `# source:` 行一致（只改头部也会被两处 source 打架抓出）。补上上一轮遗留的「`# source:` 只是备注，改样本的人顺手也能改」的漏洞。封存入口：`--write-fixtures` 重采四步后自动封存，新增 `--seal` 只重封清单不跑命令（供手工替换 bff / ui 样本后用）。负例实测：改 `ui.log` 的 `116/116`→`118/118` 不重封 → 16/17；只改 `bff.log` 第 2 行 source → 15/17（⑯⑰ 同红）；删清单里 i18n 记录 → 14/17。 |
+| 2026-11-04 | 0.39.12 | **重采自带两道自检**：`--write-fixtures` 从「先跑完再统一落盘」升级为「不绿不写 + 写回即回放」——某步 `exit≠0` 时跳过该 key（失败输出绝不固化成「真实日志样本」，上一轮就踩过 lint 红输出被写进 `lint.log` 的坑），已绿的 key 照常写入并封存；每份新样本写回后立刻用 `scripts/ci-expectations.sh` 的该条正则 `grep -aE` 一遍，措辞漂移在重采当场就报出来，而不是等下一次跑断言。任一不过 → 退出码 1（样本仍保持自洽，断言依旧 17/17）。负例实测：临时加一条 `no-unused-vars` 违规 → `❌ 跳过 lint.log`、lint.log 字节未变（sha256 一致）、其余三步刷新、exit 1；临时把表里 `typecheck` 正则改成 `vue-tsc-nonexistent` → `⚠️ 正则不再命中新样本：key=typecheck` + 下游 governance 因 ⑬ 变红被跳过、exit 1。 |

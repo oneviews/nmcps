@@ -35,6 +35,10 @@
 // i18n / governance 四步并把真实输出尾部写回样本，随后自动封存清单；bff / ui 需要构建
 // 产物 + 真浏览器，只能从 `gh run view <id> --log` 里取对应步骤尾部手工替换，替换后跑
 // `node scripts/check-ci-summary.mjs --seal` 重新封存清单。
+//
+// 重采的两道自检（失败即退出码 1，但已成功的样本照常写入并封存）：
+//   · 不绿不写：某步 exit≠0 时跳过该 key，绝不把失败输出固化成「真实日志样本」；
+//   · 写回即回放：新样本立刻用表里的正则 `grep -aE` 一遍，措辞漂移在重采当场就报。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -48,6 +52,7 @@ const SCRIPT = "scripts/ci-summary.sh";
 const OK_LOG = "结果：967 通过 / 0 失败 / 0 告警\n文档体系自测 4/4 通过\n";
 const PLAIN_LOG = "$ vue-tsc -b --pretty\n▎ TNB ACTIVE — tsconfig ok\n";
 const FIXTURE_DIR = "scripts/fixtures/ci-logs";
+const TABLE_SCRIPT = "scripts/ci-expectations.sh";
 const MANIFEST = `${FIXTURE_DIR}/.manifest.json`;
 const fixturePath = (key) => `${FIXTURE_DIR}/${key}.log`;
 const fixtureKeysOnDisk = () =>
@@ -94,18 +99,32 @@ if (process.argv.includes("--write-fixtures")) {
 			.slice(-tail);
 		collected.push({ key, cmd, status: r.status, body });
 	}
+
+	let problems = 0;
 	for (const { key, cmd, status, body } of collected) {
+		// 不绿不写：失败的输出一旦写成样本，就成了「真实日志」的赝品，后面谁也看不出来
+		if (status !== 0) {
+			problems++;
+			console.log(`❌ 跳过 ${fixturePath(key)}：\`${cmd}\` exit ${status}，不把失败输出固化成样本（先让这步本地变绿再重采）`);
+			continue;
+		}
 		const header = [
 			`# key: ${key}`,
 			`# source: 本地 \`${cmd}\` 真实输出尾部（${new Date().toISOString().slice(0, 10)} 重采）`,
 			"# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures"
 		];
 		writeFileSync(join(ROOT, FIXTURE_DIR, `${key}.log`), `${header.join("\n")}\n${body.join("\n")}\n`);
-		console.log(`✅ 已刷新 ${FIXTURE_DIR}/${key}.log（${cmd} exit ${status}，${body.length} 行）`);
+		console.log(`✅ 已刷新 ${fixturePath(key)}（${cmd} exit 0，${body.length} 行）`);
+		// 重采当场就把新样本喂回正则：措辞变了要在这里喊，而不是等下一次跑断言
+		const re = spawnSync("sh", [TABLE_SCRIPT, key], { cwd: ROOT, encoding: "utf8" }).stdout?.trim() ?? "";
+		if (spawnSync("grep", ["-aE", re, join(ROOT, fixturePath(key))]).status !== 0) {
+			problems++;
+			console.log(`   ⚠️ 正则不再命中新样本：key=${key} 正则=${JSON.stringify(re)} — 同步更新 ${TABLE_SCRIPT} 里这条正则`);
+		}
 	}
 	console.log("\n⚠️  bff / ui 需构建产物 + 真浏览器，无法本地重采：从 `gh run view <id> --log` 取对应步骤尾部手工替换后跑 --seal。");
 	seal();
-	process.exit(0);
+	process.exit(problems > 0 ? 1 : 0);
 }
 
 const dir = mkdtempSync(join(tmpdir(), "ci-summary-selftest-"));
@@ -208,7 +227,6 @@ try {
 // 漏一处就静默退化。这层断言让「漏写 --expect / 漏写 || status=1 / key 写错 / 表里的
 // key 没调用点」在本地就变红。
 const CI_YML = ".github/workflows/ci.yml";
-const TABLE_SCRIPT = "scripts/ci-expectations.sh";
 const EXPECT_CALL = /--expect "\$\(sh scripts\/ci-expectations\.sh ([a-z0-9-]+)\)"/;
 
 const ciLines = readFileSync(join(ROOT, CI_YML), "utf8").split("\n");
