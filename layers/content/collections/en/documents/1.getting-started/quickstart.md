@@ -36,6 +36,7 @@ Listens on `http://localhost:3000` (strictPort).
 pnpm typecheck        # type check
 pnpm lint             # ESLint (including i18n key order)
 pnpm check:doc-system # doc-system guard (six assertions: uniqueness / completeness / closure / acyclicity / tier validity / staleness)
+pnpm check:i18n       # copy self-check (ten assertion groups: key sets / no CJK in en values / value shape / placeholders / system-page references / site-wide t() references / no CJK in templates)
 pnpm build:server     # build the BFF artifact first; check:bff consumes .output/server
 pnpm check:bff        # BFF gateway contract (allowlists / verbs / traversal / CORS / envelope / readiness probe / SSE, per NMCPS-ADR-0007 and NMCPS-ADR-0010)
 pnpm check:ui         # page checks (Playwright; needs a running server, defaults to http://192.168.1.90:3000)
