@@ -16,6 +16,8 @@
 //   ⑦ 认证会话（NMCPS-ADR-0011 的 cookie / 单飞 / CSRF 条款 + NMCPS-ADR-0018 的新代接口事实）：
 //      web HttpOnly 三 cookie（at / rt / ui）/ desktop body 令牌、会话由 user_info 派生（无 whoami）、
 //      刷新**不轮换**、业务错误 `200 + code≠0` 还原为 4xx、CSRF 403、登出幂等恒 ok
+//   ⑧ 出口归一与脱敏（NMCPS-ADR-0018 D6 / D7）：新命名空间放行、`data.list: null` → `[]`、
+//      `snmp_auth_pass` / `snmp_priv_pass` 掩码 `***` 且明文不出网
 import { existsSync } from "node:fs";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
@@ -484,6 +486,27 @@ try {
 			cookie: `${atPair}; ${uiPair}`
 		});
 		log("重复登出仍 200 { ok:true }（上游幂等，BFF 兜底）", logoutAgain.status === 200 && logoutAgain.json?.data?.ok === true, `${logoutAgain.status} ${describe(logoutAgain.json?.data)}`);
+	});
+
+	// ── ⑧ 出口归一与脱敏（NMCPS-ADR-0018 D6 / D7） ───────────────
+	// 上游空结果是 `list: null`、资产设备明文吐 SNMP 凭据：两者都必须在 BFF 出口一次做完，
+	// 否则消费面 `.map` 崩、明文凭据已经过网。
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase }, async (exitPort) => {
+		const asset = await request(exitPort, "/api/asset/device?page=1&page_size=10");
+		const device = asset.json?.data?.list?.[0];
+		log("新命名空间 asset 放行并透传（白名单 = 十二命名空间）", asset.status === 200 && asset.json?.code === 0 && device?.id === "dev-1001", `${asset.status} ${describe(device?.id)}`);
+		log("snmp_auth_pass 出口掩码为 ***（上游明文不过网）", device?.snmp_auth_pass === "***", describe(device?.snmp_auth_pass));
+		log("snmp_priv_pass 出口掩码为 ***", device?.snmp_priv_pass === "***", describe(device?.snmp_priv_pass));
+		log("掩码不影响其它字段（name / status 原样）", device?.name === "核心交换机" && device?.status === "online", describe(device));
+		log("响应体不出现明文凭据", !asset.text.includes("auth-secret-1") && !asset.text.includes("priv-secret-1"), asset.text.slice(0, 200));
+
+		const logs = await request(exitPort, "/api/audit/operation-logs?page=1&page_size=1");
+		log("上游 data.list:null → 出口归一为 []", logs.status === 200 && Array.isArray(logs.json?.data?.list) && logs.json.data.list.length === 0, describe(logs.json?.data?.list));
+		log("归一不影响 data 内分页字段（page / page_size / total）", logs.json?.data?.page === 1 && logs.json?.data?.page_size === 1 && logs.json?.data?.total === 0, describe(logs.json?.data));
+
+		const systemNamespace = await request(exitPort, "/api/system/overview");
+		const transmissionNamespace = await request(exitPort, "/api/transmission/sites");
+		log("system / transmission 命名空间在白名单内（非 resource_not_allowed）", [systemNamespace, transmissionNamespace].every((res) => res.status !== 404 || res.json?.message !== "bff_resource_not_allowed"), `${describe(systemNamespace.json?.message)} / ${describe(transmissionNamespace.json?.message)}`);
 	});
 } finally {
 	await closeUpstream(upstream);

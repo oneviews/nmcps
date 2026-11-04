@@ -442,6 +442,22 @@ export async function startUpstream(port) {
 			return send(404, { code: 10404, message: "iam_path_not_found" });
 		}
 
+		// ── /asset/device：新代资产域（snake_case；`snmp_*_pass` 是明文，NMCPS-ADR-0018 D7
+		//    要求 BFF 出口掩码，故这里故意给真值，让 check:bff 断言「掩码后仍是 ***」） ──
+		const assetDevicePath = url.pathname.match(/^\/(?:api\/v1\/)?asset\/device$/);
+		if (assetDevicePath && req.method === "GET") {
+			return send(200, {
+				code: 0,
+				message: "success",
+				data: {
+					list: [{ id: "dev-1001", name: "核心交换机", status: "online", snmp_auth_pass: "auth-secret-1", snmp_priv_pass: "priv-secret-1" }],
+					page: 1,
+					page_size: 10,
+					total: 1
+				}
+			});
+		}
+
 		if (url.pathname === "/device/ok")
 			return send(200, { id: "dev-1", name: "ok" });
 		if (url.pathname === "/device/envelope")
@@ -473,6 +489,11 @@ export async function startUpstream(port) {
 		const auditPath = url.pathname.match(/^\/(?:api\/v1\/)?audit(\/.*)?$/);
 		if (auditPath) {
 			const rest = auditPath[1] ?? "";
+
+			// 新代 `GET /audit/operation-logs`：实测空结果给 `list: null`（NMCPS-ADR-0018 D6），
+			// 专门给 check:bff 断言「BFF 出口把它归一成 []」用
+			if (rest === "/operation-logs" && req.method === "GET")
+				return send(200, { code: 0, message: "success", data: { list: null, page: 1, page_size: 1, total: 0 } });
 
 			if (rest === "" && req.method === "GET") {
 				const category = (url.searchParams.get("category") ?? "").trim();

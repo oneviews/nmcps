@@ -23,6 +23,15 @@ const STREAM_CONTENT_TYPE = "text/event-stream";
 /** 单次请求体上限（BFF 对公网暴露时的基础防护；上传类端点需单独放宽） */
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
+/**
+ * 出口掩码字段（`NMCPS-ADR-0018` D7）：上游 `GET /asset/device` 明文吐出 SNMP 凭据，
+ * 掩码只能做在 BFF —— 放到前端意味着明文已经过网。
+ */
+const MASKED_FIELDS = new Set(["snmp_auth_pass", "snmp_priv_pass"]);
+
+/** 掩码替身（前端只读，不回写） */
+const MASK_VALUE = "***";
+
 export interface BffProxyOptions {
 	/** 上游路径段（已解码；由本函数逐段编码后拼接） */
 	path: string | string[]
@@ -133,11 +142,59 @@ function normalizeUpstreamEnvelope<T>(payload: unknown, status: number): ApiResp
 	} as ApiResponse<T>;
 }
 
+/**
+ * `data.list === null` → `[]`（`NMCPS-ADR-0018` D6）。
+ *
+ * 新代上游空结果是 `null` 而不是 `[]`（实测 `GET /audit/operation-logs` 空集），
+ * 消费面的 `.map` / 长度判断会直接崩。归一放在 BFF 出口一次做完，前端不必逐页判空。
+ */
+function normalizeEmptyList<T>(data: T): T {
+	const record = asRecord(data);
+	if (!record || !("list" in record) || record.list !== null) {
+		return data;
+	}
+
+	return { ...record, list: [] } as T;
+}
+
+/**
+ * 敏感字段出口掩码（`NMCPS-ADR-0018` D7）：深走对象与数组，命中 `MASKED_FIELDS`
+ * 且值为非空字符串的替换成 `***`；空串保持原样（无凭据可掩）。
+ */
+function maskSensitiveFields(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map((item) => maskSensitiveFields(item));
+	}
+
+	const record = asRecord(value);
+	if (!record) {
+		return value;
+	}
+
+	const masked: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(record)) {
+		masked[key] = MASKED_FIELDS.has(key) && typeof item === "string" && item.length > 0
+			? MASK_VALUE
+			: maskSensitiveFields(item);
+	}
+
+	return masked;
+}
+
+/** 成功信封的出口归一：空列表归一 + 敏感字段掩码（失败信封无 `data`，原样返回） */
+function normalizeExitBody<T>(body: ApiResponse<T>): ApiResponse<T> {
+	if (body.code !== 0 || body.data === undefined) {
+		return body;
+	}
+
+	return { ...body, data: maskSensitiveFields(normalizeEmptyList(body.data)) as T };
+}
+
 function respond<T>(event: H3Event, status: number, body: ApiResponse<T>): ApiResponse<T> {
 	setResponseStatus(event, status);
 	setResponseHeader(event, "content-type", "application/json; charset=utf-8");
 	setResponseHeader(event, "cache-control", "no-store");
-	return body;
+	return normalizeExitBody(body);
 }
 
 /**
@@ -244,6 +301,7 @@ function safeJsonParse(raw: string): unknown {
  * - 上游非 2xx → 保留真实 HTTP 状态码 + `warning`（4xx）/`error`（5xx）语义；
  * - 上游非 2xx 且带业务码（`code > 599`，如 iam 的 10003 / 40101）→ 保留业务码，便于 UI 分类；
  * - 上游裸 JSON → 包裹为 `{ code: 0, status: "success", data }`；已是信封则归一化后返回（`msg` → `message`）；
+ * - 成功信封在**出口统一归一**：`data.list: null` → `[]`（D6）、`snmp_auth_pass` / `snmp_priv_pass` 掩码 `***`（D7）；
  * - 上游 `2xx` + `text/event-stream` → 原样流式透传（不套信封，见 `streamResponse`）；
  * - 原始上游报文只在 dev 下进入 `error_detail`，生产不泄露内网细节。
  */

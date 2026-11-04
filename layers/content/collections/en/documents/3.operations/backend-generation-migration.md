@@ -38,52 +38,38 @@ After touching `NUXT_BFF_*`, run `pnpm exec nuxt prepare` before `pnpm typecheck
 | :---: | :--- | :--- | :--- |
 | C1 | `fix(bff): session-invalid codes become 40101, business errors never read as success` ✅ | `shared/utils/apiGuard.ts`, `server/utils/bff/auth.ts`, `app/composables/useAuth.ts`, `scripts/lib/bff-harness.mjs`, `scripts/check-bff.mjs`, `.env*` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` |
 | C2 | `feat(bff): authenticate against the iam namespace` ✅ | `shared/types/auth.ts`, `server/utils/bff/{auth,authSchema}.ts`, `server/api/auth/*` (incl. deleting `mfa/`), `app/{composables,pages/auth,constants}`, the affected `layers/{user,system}` pages, `scripts/{check-bff,check-ui}` + fake upstream, i18n | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` (74/74) + `pnpm check:ui` (103/103) + a live login |
-| C3 | `feat(bff): rebuild the gateway allow-list and mask sensitive fields` | `shared/types/api.ts`, `server/utils/bff/{gateway,proxy}.ts`, `scripts/check-bff.mjs` | `check:bff` green |
+| C3 | `feat(bff): rebuild the gateway allow-list on the new namespaces, normalise and mask at the exit` ✅ | `shared/types/api.ts`, `server/utils/bff/{gateway,proxy}.ts`, `scripts/{check-bff,lib/bff-harness}.mjs` | `pnpm build:server && pnpm check:bff` (82/82) + `pnpm check:ui` (103/103) |
 | C4 | `refactor(system): rewrite the four system pages against iam/audit` | `shared/types/{account,policy,audit,tenant}.ts`, `layers/system/app/composables/*`, `layers/system/app/pages/system/*.vue` | `pnpm check:ui` + manual pass |
 
 ---
 
 ## 3. Per-file diff drafts
 
-### 3.1 `shared/types/api.ts` (C3)
+### 3.1 `shared/types/api.ts` (C3, shipped)
 
-```diff
--export const GATEWAY_RESOURCES = [
--	"abac", "access", "account", "ai", "alarm", "alerts", "asset", "association",
--	"audit", "dashboard", "device", "devices", "edge", "flow", "frequency", "group",
--	"health", "iam", "menu", "metrics", "monitor", "ota", "permission", "product",
--	"protocol", "role", "rule", "simulation", "targets", "telemetry", "template",
--	"tenant", "thing-model", "topology", "user"
--] as const;
-+/** The twelve upstream service namespaces (NMS unified gateway; register new ones explicitly) */
-+export const GATEWAY_RESOURCES = [
-+	"alarm", "asset", "audit", "dashboard", "frequency",
-+	"health", "iam", "metric", "protocol", "system",
-+	"task", "topology", "transmission"
-+] as const;
-```
+The allow-list now registers two groups (`NMCPS-ADR-0018` D2): the twelve new namespaces + `health` are the
+**target set**, while the legacy names stay as a group annotated "delete as a whole once C4 finishes the client
+migration" — the client data layer still calls `/api/account`, `/api/role` and `/api/audit`, so dropping them
+now would break every system page between C3 and C4 (`check:ui` would go red immediately).
 
 ```ts
-export interface PagedData<T> {
-	list: T[]
-	page: number
-	page_size: number
-	total: number
-}
-
-export function isPagedData<T>(data: unknown): data is PagedData<T> {
-	const d = data as Partial<PagedData<T>> | null;
-	return !!d && Array.isArray(d.list)
-		&& typeof d.page === "number"
-		&& typeof d.page_size === "number"
-		&& typeof d.total === "number";
-}
-
-/** The upstream returns list: null for empty pages; normalise to [] at the boundary (D6) */
-export function normalizeList<T>(value: unknown): T[] {
-	return Array.isArray(value) ? value as T[] : [];
-}
+export const GATEWAY_RESOURCES = [
+	// ── the twelve new namespaces (NMCPS-ADR-0018 D2) + the readiness probe ──
+	"alarm", "asset", "audit", "dashboard", "frequency", "health",
+	"iam", "metric", "protocol", "system", "task", "topology", "transmission",
+	// ── legacy resource names (delete as a group once C4 migrates the client) ──
+	"abac", "access", "account", "ai", "alerts", "association", "device", "devices",
+	"edge", "flow", "group", "menu", "metrics", "monitor", "ota", "permission",
+	"product", "role", "rule", "simulation", "targets", "telemetry", "template",
+	"tenant", "thing-model", "user"
+] as const;
 ```
+
+Once C4 lands the legacy group disappears and `check:bff` must gain a "legacy name → 404" assertion (see §4).
+
+List normalisation does **not** live here: `list: null → []` happens in `proxy.ts`'s `respond()` (§3.6), so the
+front end only ever reads an `Array`. Helpers such as `PagedData` / `isPagedData` / `normalizeList` are left for
+the C4 consumers to pull in as needed.
 
 ### 3.2 `shared/types/auth.ts` (C2)
 
@@ -217,29 +203,42 @@ Desktop has no cookie semantics, so login also stores the identity in `auth.bin`
 | `password.post.ts` | ✅ `iam/password` (`PUT`); fields `old_password` / `new_password`; wrong old password `200 + 10003` → 400 + business code |
 | `mfa/*.ts` | ✅ directory deleted (gap G8); the `/user/security` two-factor block now states the upstream has no endpoint |
 
-### 3.6 `server/utils/bff/proxy.ts` (C3)
+### 3.6 `server/utils/bff/proxy.ts` (C3, shipped)
+
+Both behaviours hang off the **single exit** `respond()` rather than being scattered across handlers: `respond`
+is the last stop before h3 serialises, so the raw-JSON wrap, the already-an-envelope path and the error envelope
+all pass through it — missing one place would mean not doing it at all.
 
 ```ts
-/** Plaintext credential fields: always masked at the BFF boundary (NMCPS-ADR-0018 D7) */
-const SENSITIVE_KEYS = new Set(["snmp_auth_pass", "snmp_priv_pass"]);
+/** Fields masked at the exit (NMCPS-ADR-0018 D7) */
+const MASKED_FIELDS = new Set(["snmp_auth_pass", "snmp_priv_pass"]);
+const MASK_VALUE = "***";
 
-function maskSensitive(value: unknown): unknown {
-	if (Array.isArray(value))
-		return value.map(maskSensitive);
-	if (value && typeof value === "object") {
-		const out: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-			out[k] = SENSITIVE_KEYS.has(k) && typeof v === "string" && v
-				? "***"
-				: maskSensitive(v);
-		}
-		return out;
-	}
-	return value;
+/** `data.list === null` → `[]` (D6) */
+function normalizeEmptyList<T>(data: T): T { … }
+
+/** Walk objects / arrays; a sensitive key holding a non-empty string becomes `***` (D7) */
+function maskSensitiveFields(value: unknown): unknown { … }
+
+function normalizeExitBody<T>(body: ApiResponse<T>): ApiResponse<T> {
+	if (body.code !== 0 || body.data === undefined)
+		return body;
+	return { ...body, data: maskSensitiveFields(normalizeEmptyList(body.data)) as T };
+}
+
+function respond<T>(event: H3Event, status: number, body: ApiResponse<T>): ApiResponse<T> {
+	// …set status / content-type / no-store
+	return normalizeExitBody(body);
 }
 ```
 
-Hook: `proxyToUpstream` applies `maskSensitive` to `data` before wrapping it in the envelope; the SSE branch is untouched.
+Boundaries and trade-offs:
+
+- **Only successful envelopes** are normalised (`code === 0`); failure envelopes carry no `data` and must keep their semantics;
+- **The SSE branch never passes through `respond`** (`streamResponse` returns a `Response` directly), so event streams cannot be masked;
+- An **empty string stays empty**: there is no credential to hide, and `***` would suggest "a value exists but is hidden";
+- Normalising and masking at the BFF exit means the front end always sees an array `list` and `snmp_*_pass === "***"`;
+- Deep arrays are handled too (`asset/device` returns `data.list[]`, i.e. objects inside an array).
 
 ### 3.7 Guard layer and the envelope derivation (C1, **most delicate**)
 
@@ -290,11 +289,13 @@ Unwrap uniformly: `normalizeList(res.data?.list)` and read `res.data?.page` / `p
 | C1 | `scripts/check-bff.mjs` ⑦ | asserts `10201` / `20205` | switch to `40101`; **add** "upstream 200 + `code: 10003` → BFF `status=warning`, no cookie" |
 | C2 | `scripts/lib/bff-harness.mjs` | fake upstream routed by the old resource names (`auth` / `account`) | the auth section now routes on `iam` with snake_case fields (`account` / `audit` wait for C4) |
 | C2 | `scripts/check-bff.mjs` ⑦ | "refresh rotates" | **inverted to "refresh does not rotate"**: the same `refresh_token` twice still returns 200 and the cookie value is unchanged; plus "bogus refresh token `200 + 10007` → BFF 401", "password `PUT` + snake_case" and "logout is idempotent" |
-| C3 | new assertions | — | `list: null` → `[]` at the BFF boundary; `snmp_auth_pass` leaves as `***` |
+| C3 | `scripts/lib/bff-harness.mjs` | no `asset` or new-generation audit route | add `GET /asset/device` (snake_case + plaintext `snmp_*_pass`) and `GET /audit/operation-logs` (empty result as `list: null`); both tolerate the `/api/v1` prefix |
+| C3 | `scripts/check-bff.mjs` ⑧ | — | eight new assertions: "`asset` allowed and proxied", "`snmp_auth_pass` → `***`", "`snmp_priv_pass` → `***`", "other fields untouched", "no plaintext credential in the body", "`list: null` → `[]`", "paging fields unaffected", "`system` / `transmission` are allow-listed" |
 
 Measured with C1 in place (2026-11-04): `pnpm check:bff` 83/83, `pnpm check:ui` 105/105.
 Measured with C2 in place (2026-11-04, same upstream): `pnpm check:bff` 74/74, `pnpm check:ui` 103/103
 — the totals dropped because the MFA binding (G8), forced reset (G2), rotation and `whoami` cases retired with the capability.
+Measured with C3 in place (2026-11-04): `pnpm check:bff` 82/82 (74 + 8), `pnpm check:ui` 103/103, `pnpm lint` / `pnpm typecheck` clean.
 
 Changing the assertion count means updating the `N/N` in the script summary and any counts quoted in the architecture docs (`.clinerules` "CI self-check conventions").
 

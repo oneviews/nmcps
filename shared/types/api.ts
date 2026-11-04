@@ -35,43 +35,49 @@ export type GatewayMethod = (typeof GATEWAY_METHODS)[number];
  * 网关允许转发的上游资源（第一段路径）。
  *
  * 该清单是 BFF 的**出站白名单**：不在表内的资源一律 404，绝不做任意路径透传。
- * 取值对齐后端 go-zero 的资源命名（含 v1 遗留的 `monitor` / `protocol`），
  * 新增资源须显式修改本表，而不是放开为通配。
+ *
+ * 两组来源：
+ * 1. **新代命名空间**（`NMCPS-ADR-0018` D2）：8888 统一网关的十二个服务命名空间 + `health` 探针；
+ * 2. **旧代资源名**（go-zero 时代）：客户端数据层还没迁到 `iam` / `asset` / `audit`（C4），
+ *    保留只为不中途断链。C4 迁完即整组删除，届时由 `check:bff` 的「旧名 404」断言接手。
  */
 export const GATEWAY_RESOURCES = [
-	// 策略域：`/system/policy` 的 `GET|POST /api/abac/rule`、
-	// `POST /api/access/dryrun`（NMCPS-DESIGN-005 §7.1）
-	"abac",
-	"access",
-	// 账号域：`/system/user` 的 `GET /api/account`、`POST /api/account`、
-	// `PUT /api/account/{accountCode}/status`（NMCPS-DESIGN-005 §6.1）
-	"account",
-	"ai",
+	// ── 新代十二命名空间（NMCPS-ADR-0018 D2）+ 就绪探针 ──
 	"alarm",
-	"alerts",
+	// 资产域：`GET /asset/device`（设备台账；`snmp_*_pass` 明文，BFF 出口掩码，D7）
 	"asset",
-	"association",
-	// 审计域：`/system/log` 的 `GET /api/audit`、`GET /api/audit/{logCode}`、
-	// `POST /api/audit/verify`、`GET|POST /api/audit/export`（NMCPS-DESIGN-005 §9.1）
+	// 审计域：`GET /audit/{operation,security}-logs`、`/audit/archive/records`（D6 的空列表 `null` 源）
 	"audit",
 	"dashboard",
+	"frequency",
+	"health",
+	// 身份域：`iam/login|refresh|logout|password|users|roles|policies|tenants|subject-roles`
+	"iam",
+	"metric",
+	"protocol",
+	"system",
+	"task",
+	"topology",
+	"transmission",
+	// ── 旧代资源名（待 C4 客户端迁移后整组删除） ──
+	"abac",
+	"access",
+	"account",
+	"ai",
+	"alerts",
+	"association",
 	"device",
 	"devices",
 	"edge",
 	"flow",
-	"frequency",
 	"group",
-	"health",
-	"iam",
 	"menu",
 	"metrics",
 	"monitor",
 	"ota",
-	// 权限域：`/system/permission` 的 `GET|POST /api/permission`、`GET|POST /api/role`、
-	// `DELETE /api/role/{roleCode}`、`GET|POST|DELETE /api/role/{roleCode}/permission`（NMCPS-DESIGN-005 §8.1）
 	"permission",
 	"product",
-	"protocol",
 	"role",
 	"rule",
 	"simulation",
@@ -80,7 +86,6 @@ export const GATEWAY_RESOURCES = [
 	"template",
 	"tenant",
 	"thing-model",
-	"topology",
 	"user"
 ] as const;
 

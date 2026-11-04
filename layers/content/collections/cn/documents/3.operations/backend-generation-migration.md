@@ -38,54 +38,36 @@ tags:
 | :---: | :--- | :--- | :--- |
 | C1 | `fix(bff): 会话失效码换 40101，业务错误不判成功` ✅ | `shared/utils/apiGuard.ts`、`server/utils/bff/auth.ts`、`app/composables/useAuth.ts`、`scripts/lib/bff-harness.mjs`、`scripts/check-bff.mjs`、`.env*` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff` |
 | C2 | `feat(bff): 认证对接 iam 命名空间` ✅ | `shared/types/auth.ts`、`server/utils/bff/{auth,authSchema}.ts`、`server/api/auth/*`（含删除 `mfa/`）、`app/{composables,pages/auth,constants}`、`layers/{user,system}` 受影响页、`scripts/{check-bff,check-ui}` + 假上游、i18n | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（74/74）+ `pnpm check:ui`（103/103）+ 真实登录 |
-| C3 | `feat(bff): 网关白名单与敏感字段脱敏` | `shared/types/api.ts`、`server/utils/bff/{gateway,proxy}.ts`、`scripts/check-bff.mjs` | `check:bff` 全绿 |
+| C3 | `feat(bff): 网关白名单按新代命名空间重建，出口归一与脱敏` ✅ | `shared/types/api.ts`、`server/utils/bff/{gateway,proxy}.ts`、`scripts/{check-bff,lib/bff-harness}.mjs` | `pnpm build:server && pnpm check:bff`（82/82）+ `pnpm check:ui`（103/103） |
 | C4 | `refactor(system): 四个系统页面按 iam/audit 契约重写` | `shared/types/{account,policy,audit,tenant}.ts`、`layers/system/app/composables/*`、`layers/system/app/pages/system/*.vue` | `pnpm check:ui` + 手测四页 |
 
 ---
 
 ## 三、逐文件 diff 草案
 
-### 3.1 `shared/types/api.ts`（C3）
+### 3.1 `shared/types/api.ts`（C3，已落码）
 
-```diff
--export const GATEWAY_RESOURCES = [
--	"abac", "access", "account", "ai", "alarm", "alerts", "asset", "association",
--	"audit", "dashboard", "device", "devices", "edge", "flow", "frequency", "group",
--	"health", "iam", "menu", "metrics", "monitor", "ota", "permission", "product",
--	"protocol", "role", "rule", "simulation", "targets", "telemetry", "template",
--	"tenant", "thing-model", "topology", "user"
--] as const;
-+/** 上游十二个服务命名空间（NMS 统一网关；新增服务须显式登记） */
-+export const GATEWAY_RESOURCES = [
-+	"alarm", "asset", "audit", "dashboard", "frequency",
-+	"health", "iam", "metric", "protocol", "system",
-+	"task", "topology", "transmission"
-+] as const;
-```
-
-分页判据改为「分页信息在 `data` 内」，并补空列表归一：
+白名单分两组登记（`NMCPS-ADR-0018` D2）：新代十二命名空间 + `health` 是**目标集**，旧代资源名整组带
+`待 C4 客户端迁移后整组删除` 的注释保留 —— 客户端数据层此刻还打 `/api/account`、`/api/role`、`/api/audit`，
+先删会让全部系统页在 C3 与 C4 之间断链（`check:ui` 直接红）。
 
 ```ts
-export interface PagedData<T> {
-	list: T[]
-	page: number
-	page_size: number
-	total: number
-}
-
-export function isPagedData<T>(data: unknown): data is PagedData<T> {
-	const d = data as Partial<PagedData<T>> | null;
-	return !!d && Array.isArray(d.list)
-		&& typeof d.page === "number"
-		&& typeof d.page_size === "number"
-		&& typeof d.total === "number";
-}
-
-/** 上游空列表返回 list: null，出口统一归一为 []（D6） */
-export function normalizeList<T>(value: unknown): T[] {
-	return Array.isArray(value) ? value as T[] : [];
-}
+export const GATEWAY_RESOURCES = [
+	// ── 新代十二命名空间（NMCPS-ADR-0018 D2）+ 就绪探针 ──
+	"alarm", "asset", "audit", "dashboard", "frequency", "health",
+	"iam", "metric", "protocol", "system", "task", "topology", "transmission",
+	// ── 旧代资源名（待 C4 客户端迁移后整组删除） ──
+	"abac", "access", "account", "ai", "alerts", "association", "device", "devices",
+	"edge", "flow", "group", "menu", "metrics", "monitor", "ota", "permission",
+	"product", "role", "rule", "simulation", "targets", "telemetry", "template",
+	"tenant", "thing-model", "user"
+] as const;
 ```
+
+C4 收尾后旧代组消失，`check:bff` 需补一条「旧名 404」断言接手（见 §四）。
+
+分页/列表的**出口归一不在本文件**：`list: null → []` 由 `proxy.ts` 的 `respond()` 统一做（§3.6），
+前端只读 `Array`。`PagedData` / `isPagedData` / `normalizeList` 这类辅助留给 C4 的消费面按需引入。
 
 ### 3.2 `shared/types/auth.ts`（C2）
 
@@ -220,29 +202,41 @@ export function normalizeList<T>(value: unknown): T[] {
 | `password.post.ts` | ✅ `iam/password`（`PUT`）；字段 `old_password` / `new_password`；旧口令错 `200 + 10003` → 400 + 业务码 |
 | `mfa/*.ts` | ✅ 整目录删除（缺口 G8）；`/user/security` 的两步验证区块改为「上游无端点」提示 |
 
-### 3.6 `server/utils/bff/proxy.ts`（C3）
+### 3.6 `server/utils/bff/proxy.ts`（C3，已落码）
+
+两件事都挂在**唯一出口** `respond()` 上，而不是散到各 handler：`respond` 是 h3 序列化前的最后一站，
+上游裸 JSON 包裹、已是信封、错误信封全部经过它，漏一处就等于没做。
 
 ```ts
-/** 上游明文凭据字段：BFF 出口一律打码（NMCPS-ADR-0018 D7） */
-const SENSITIVE_KEYS = new Set(["snmp_auth_pass", "snmp_priv_pass"]);
+/** 出口掩码字段（NMCPS-ADR-0018 D7） */
+const MASKED_FIELDS = new Set(["snmp_auth_pass", "snmp_priv_pass"]);
+const MASK_VALUE = "***";
 
-function maskSensitive(value: unknown): unknown {
-	if (Array.isArray(value))
-		return value.map(maskSensitive);
-	if (value && typeof value === "object") {
-		const out: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-			out[k] = SENSITIVE_KEYS.has(k) && typeof v === "string" && v
-				? "***"
-				: maskSensitive(v);
-		}
-		return out;
-	}
-	return value;
+/** `data.list === null` → `[]`（D6） */
+function normalizeEmptyList<T>(data: T): T { … }
+
+/** 深走对象 / 数组，命中敏感键且值为非空字符串 → `***`（D7） */
+function maskSensitiveFields(value: unknown): unknown { … }
+
+function normalizeExitBody<T>(body: ApiResponse<T>): ApiResponse<T> {
+	if (body.code !== 0 || body.data === undefined)
+		return body;
+	return { ...body, data: maskSensitiveFields(normalizeEmptyList(body.data)) as T };
+}
+
+function respond<T>(event: H3Event, status: number, body: ApiResponse<T>): ApiResponse<T> {
+	// …set status / content-type / no-store
+	return normalizeExitBody(body);
 }
 ```
 
-挂载点：`proxyToUpstream` 把 JSON 包成信封之前对 `data` 调 `maskSensitive`；SSE 分支不改。
+边界与取舍：
+
+- **只归一成功信封**（`code === 0`）：失败信封没有 `data`，也不该被改写语义；
+- **SSE 分支不经过 `respond`**（`streamResponse` 直出 `Response`），事件流不可能被掩码；
+- 掩码对**空串保持原样**：没有凭据可掩，回 `***` 反而会让人以为「有值但被藏」；
+- 归一/掩码都在 BFF 出口做，前端拿到的 `list` 恒为数组、`snmp_*_pass` 恒为 `***`；
+- 深层数组同样处理（`asset/device` 的 `data.list[]` 就是数组套对象）。
 
 ### 3.7 判据层与信封推导（C1，**最关键**）
 
@@ -293,11 +287,13 @@ export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): re
 | C1 | `scripts/check-bff.mjs` ⑦ | 断言 `10201` / `20205` | 改 `40101`；**新增**「上游 200 + `code: 10003` → BFF `status=warning` 且不写 cookie」 |
 | C2 | `scripts/lib/bff-harness.mjs` | 路由按旧资源名（`auth` / `account`） | 认证段已改 `iam` 前缀 + snake_case（`account` / `audit` 段留到 C4） |
 | C2 | `scripts/check-bff.mjs` ⑦ | 「刷新即轮换」 | **改为「刷新不轮换」**：同 `refresh_token` 二次刷新仍 200、cookie 值不变；另加「坏刷新令牌 `200 + 10007` → BFF 401」「改密 `PUT` + snake_case」「登出幂等」 |
-| C3 | `scripts/check-bff.mjs` 新增 | — | `list: null` → BFF 出口 `[]`；`snmp_auth_pass` 出口为 `***` |
+| C3 | `scripts/lib/bff-harness.mjs` | 无 `asset` / 新代审计路由 | 新增 `GET /asset/device`（snake_case + 明文 `snmp_*_pass`）与 `GET /audit/operation-logs`（空结果 `list: null`），两处都容忍 `/api/v1` 前缀 |
+| C3 | `scripts/check-bff.mjs` ⑧ | — | 新增 8 条：「asset 放行并透传」「`snmp_auth_pass` → `***`」「`snmp_priv_pass` → `***`」「其余字段原样」「响应体无明文凭据」「`list: null` → `[]`」「分页字段不受影响」「`system` / `transmission` 在白名单内」 |
 
 C1 落码实测（2026-11-04）：`pnpm check:bff` 83/83、`pnpm check:ui` 105/105。
 C2 落码实测（2026-11-04，同一上游）：`pnpm check:bff` 74/74、`pnpm check:ui` 103/103
 —— 断言总数下降是因为 MFA 绑定（G8）、强制改密（G2）、刷新轮换与 whoami 相关用例随能力退场被删除。
+C3 落码实测（2026-11-04）：`pnpm check:bff` 82/82（74 + 8）、`pnpm check:ui` 103/103、`pnpm lint` / `pnpm typecheck` 无输出。
 
 断言数变化须同步更新脚本自身摘要的 `N/N` 与相关架构文档里的计数（`.clinerules`「CI self-check conventions」）。
 
@@ -322,7 +318,7 @@ curl -s http://127.0.0.1:39881/ready
 
 验收口径：
 
-1. `check:bff` 全绿。C1 已覆盖「200 + `code≠0` 不得判 success」与「40101 会话失效」；C2 已覆盖「刷新不轮换」「坏刷新令牌 `200 + 10007` → 401」「改密 `PUT` + snake_case」「登出幂等」「会话不触达上游」；C3 补「`list: null` 归一」与「敏感字段打码」。
+1. `check:bff` 全绿。C1 已覆盖「200 + `code≠0` 不得判 success」与「40101 会话失效」；C2 已覆盖「刷新不轮换」「坏刷新令牌 `200 + 10007` → 401」「改密 `PUT` + snake_case」「登出幂等」「会话不触达上游」；C3 已覆盖「`list: null` → `[]`」「`snmp_auth_pass` / `snmp_priv_pass` → `***` 且明文不出网」「十二命名空间放行」。
 2. 真实登录返回 `user.displayName = "平台管理员"`、`tenantId = null`（C2 已实测通过）。
 3. `grep -rn "192\.168\.1\.55:1" --exclude-dir=_reference .` 无命中（旧端口前缀已清零）。
 4. 四页手测：登录 → `/system/user` 列表与建号 → `/system/policy`（无试算、无 ABAC）→ `/system/log`（无导出、无校验）。
