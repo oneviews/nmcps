@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.6
+version: 0.39.7
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -196,3 +196,4 @@ tags:
 | 2026-11-04 | 0.39.4 | `NMCPS-ARCH-006` → 0.2.25（`check:i18n` 的 ⑥ / ⑧ 合为 `auditUsage()` 一份实现，前缀判定拆 `segment` / `open` 两态；断言组数仍 10，实测 333/5 与 497/9 不变）。 |
 | 2026-11-04 | 0.39.5 | **守卫增强**：`check:doc-system` 新增第 ⑦ 组「中英对齐」——(a) 比对两份 doc-map 变更记录正文里的「`docId` → x.y.z」目标版本集合，任何一侧缺版本即报错；(b) 对 `DOC_PATHS` 登记的每个 docId 断言 en 镜像存在且 `version` 与 cn 相同，`NMCPS-GOV-003` 自身例外（两套编号平行独立，由 (a) 覆盖内容集合）。断言 886 → 967（受治理文档 40 篇、39 对中英文档）。负例实测：把 en 的 0.2.22 改为 0.2.99 → 966 通过 / 1 失败并列出 `missing` / `extra`；同时章末断言组数在 `quickstart`、`doc-workflow`、`content-center-architecture` 三处中英文同步改为七组。 |
 | 2026-11-04 | 0.39.6 | **守卫自测落地**：新增 `pnpm check:doc-system:selftest`（`scripts/check-doc-system.selftest.mjs`）——把 `check-doc-system.ts`、`docIds.ts` 与全部 `.md` 拷进系统临时目录，在副本上制造漂移后跑真脚本，按「退出码 + 报文字样」判定。四个用例：① 原样副本 0 失败；② en doc-map 的 `0.2.22` 改成 `0.2.99` → 1 失败且报文带 `missing` / `extra`；③ en 的 ARCH-006 文档 `version` 改小一版 → 1 失败；④ 删掉 en 的 ARCH-006 → 1 失败。自测已接入 `check:governance` 与 CI 的 governance job，本地 `文档体系自测 4/4 通过`；工作区零改动（每个用例一份干净副本，跑完即删）。自测首轮就复现了一个真 bug：守卫末行用 `process.exit()`，967 行输出写满管道缓冲区时尾部（含 ❌ 与结果行）会被截断——已改为 `process.exitCode`，`check:i18n` / `check:rules` 同步改掉（`check:bff` 保留 `process.exit()`，因为它持有 socket 需要强制终止）。 |
+| 2026-11-04 | 0.39.7 | **CI 摘要前置结论**：`scripts/ci-summary.sh` 不再只贴日志尾部——新增「关键结论」段（抽取 `结果：N 通过 / M 失败 / K 告警`、`文档体系自测 N/M 通过`、`文案自查 N/M 通过`、`N/M 项通过`，最多 8 条）、「失败明细」段（`❌` / `error TS…` / `Error:` 最多 5 条），尾部 40 行收进 `<details>` 默认折叠；无小结行时显式提示。本地用 governance / selftest / i18n / rules 四份真日志与「失败」「无小结」两类假日志验证过（`check:governance` 摘要现为 `967 通过 / 0 失败 / 0 告警` + `4/4` + `30/30` + `34/34` 四行并列）。 |
