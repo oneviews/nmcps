@@ -1,0 +1,9 @@
+# key: governance
+# source: 本地 `pnpm check:governance` 真实输出尾部（2026-11-04 重采）
+# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+结果：967 通过 / 0 失败 / 0 告警
+文档体系自测 4/4 通过
+  ✅ 命中：--expect 找到「结果：967 通过」
+步骤摘要自测 14/14 通过
+30/30 项通过
+34/34 项通过

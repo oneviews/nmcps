@@ -1,0 +1,5 @@
+# key: typecheck
+# source: 本地 `pnpm typecheck` 真实输出尾部（2026-11-04 重采）
+# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+$ vue-tsc -b --pretty
+▎ TNB ACTIVE — `typescript` is the tsgo-backed fork

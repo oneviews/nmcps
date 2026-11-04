@@ -22,6 +22,9 @@ _reference
 
 # CI 本地产物（scripts/ci-doctor.sh 与本地复跑生成）
 ci-logs/
+# 但步骤摘要自测的真实日志样本必须入库（scripts/fixtures/ci-logs/<key>.log）
+!scripts/fixtures/ci-logs/
+!scripts/fixtures/ci-logs/*.log
 
 # Binary installers (build artifacts — served from public/downloads/ but not committed)
 *.deb

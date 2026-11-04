@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.9
+version: 0.39.10
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -199,3 +199,4 @@ tags:
 | 2026-11-04 | 0.39.7 | **CI 摘要前置结论**：`scripts/ci-summary.sh` 不再只贴日志尾部——新增「关键结论」段（抽取 `结果：N 通过 / M 失败 / K 告警`、`文档体系自测 N/M 通过`、`文案自查 N/M 通过`、`N/M 项通过`，最多 8 条）、「失败明细」段（`❌` / `error TS…` / `Error:` 最多 5 条），尾部 40 行收进 `<details>` 默认折叠；无小结行时显式提示。本地用 governance / selftest / i18n / rules 四份真日志与「失败」「无小结」两类假日志验证过（`check:governance` 摘要现为 `967 通过 / 0 失败 / 0 告警` + `4/4` + `30/30` + `34/34` 四行并列）。 |
 | 2026-11-04 | 0.39.8 | **摘要缺失即失败**：`scripts/ci-summary.sh` 增加可选 `--expect "<扩展正则>"`——调用方声明「本步骤日志里必须出现的结论行」，抽不到就 ① 打 `::error` 注解（Runner 的 Annotations 变红）② 在步骤摘要顶部写「预期结论缺失」③ 退出码 1；`ci.yml` 六处调用改成 `… --expect '<正则>' \|\| status=1`（lint `\$ eslint`、typecheck `vue-tsc`、i18n `文案自查 N/M 通过`、governance `结果：N 通过`、BFF `N/M 项通过`、page UI `N/M 项通过`），于是「校验跑通了但摘要抽不到结论」不再静默降级；page UI 的失败分支只补摘要（`\|\| true`），不覆盖真实失败码。新增 `pnpm check:ci-summary`（`scripts/check-ci-summary.mjs`，六个用例：命中 / 未命中 / 不给 `--expect` 的向后兼容 / 非 CI 环境同样生效 / 参数缺值 / 未知选项）并接入 `check:governance`，本地报 `步骤摘要自测 6/6 通过`。 |
 | 2026-11-04 | 0.39.9 | **正则收敛为单一事实源**：六条 `--expect` 正则从 `ci.yml` 内联搬到新文件 `scripts/ci-expectations.sh`（`sh scripts/ci-expectations.sh <key>` 打印正则、`--list` 列出 `key<TAB>正则`、unknown key 退出 2），`ci.yml` 七个调用点改成 `--expect "$(sh scripts/ci-expectations.sh <key>)"`。`pnpm check:ci-summary` 由 6 项扩到 11 项：新增 ⑤ 类静态接线断言——⑦ 每处调用都带该形式 ⑧ 每处以 `\|\| status=1` 收尾（仅已红分支允许 `\|\| true`，靠回溯最近的 `if [ "$status" -ne 0 ]` 判定）⑨ ci.yml 用到的 key 与 `--list` 表双向一致（无死条目、无未登记 key）⑩ 每个 key 解析出非空正则 ⑪ unknown key 报错。负例实测：删掉一行的 `--expect` → 9/11；把 page UI 成功分支的 `\|\| status=1` 改成 `\|\| true` → 10/11。 |
+| 2026-11-04 | 0.39.10 | **正则回放真实日志**：新增 `scripts/fixtures/ci-logs/<key>.log` 六份样本（各步骤真实日志尾部，头部 `# source:` 写出处与重采方式），`pnpm check:ci-summary` 由 11 项扩到 14 项：⑫ 样本与表 key 双向一致（缺样本 / 孤儿样本都红）⑬ 每条正则用 `grep -aE`（与 `ci-summary.sh` 同工具同参数）在对应样本上命中 ⑭ 每份样本都带 `# source:` 行（防编造）。补上「接线对但正则匹配不上今天措辞」的盲区。重采入口 `node scripts/check-ci-summary.mjs --write-fixtures` 重跑 lint / typecheck / i18n / governance 四步写回尾部（先跑完再统一落盘，避免中途改样本让 `check:governance` 假红）；bff / ui 需构建产物 + 真浏览器，从 `gh run view <id> --log` 手工取。负例实测：删 `ui.log` → 12/14；把 `116/116 项通过` 改成 `116/116 cases passed` → 12/14；删 `bff.log` 的 `# source:` 行 → 13/14。 |

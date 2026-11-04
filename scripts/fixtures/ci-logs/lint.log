@@ -1,0 +1,4 @@
+# key: lint
+# source: 本地 `pnpm lint` 真实输出尾部（2026-11-04 重采）
+# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+$ eslint .

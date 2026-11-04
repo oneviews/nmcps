@@ -1,0 +1,11 @@
+# key: i18n
+# source: 本地 `pnpm check:i18n` 真实输出尾部（2026-11-04 重采）
+# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+✅ cn / en 键集合一致 — 745 个键
+✅ cn.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 745 个值
+✅ en.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 745 个值
+✅ cn / en 占位符一致 — 全部一致
+✅ layers/system/app 引用的 333 个完整键 / 5 个动态前缀两份都在 — 333 / 5
+✅ app, layers 下 93 个 .vue 的 <template> 无硬编码中文 — 全部走 i18n
+✅ 11 个域的 138 个文件里 t() 字面量 497 个完整键 / 9 个动态前缀两份都在 — 497 / 9
+✅ 文案自查 10/10 通过

@@ -1,0 +1,8 @@
+# key: bff
+# source: CI run 41914867017 步骤 "Gateway contract checks"（job: BFF contract / page UI）日志尾部
+# 更新方式：gh run view <id> --log 里取该步骤尾部若干行（保留小结行），手工替换本文件
+✅ RevokeRole 撤销不存在的绑定仍 200（幂等） — 200 0
+✅ 旧代策略域资源（role / permission / abac / access）→ 404 bff_resource_not_allowed — 404/bff_resource_not_allowed
+✅ system / transmission 命名空间在白名单内（非 resource_not_allowed） — upstream_not_found / upstream_not_found
+
+106/106 项通过

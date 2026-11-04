@@ -1,0 +1,10 @@
+# key: ui
+# source: CI run 41914867017 步骤 "Build & run UI self-check"（job: BFF contract / page UI）日志尾部
+# 更新方式：gh run view <id> --log 里取该步骤尾部若干行（保留小结行），手工替换本文件
+── check:ui round 2/2
+$ node scripts/check-ui.mjs
+✅ 「平台能力」分组含 5 个探针入口 — /os /file /store /notifications /webview
+✅ 控制台错误 — 无
+✅ 控制台告警 — 无
+
+116/116 项通过

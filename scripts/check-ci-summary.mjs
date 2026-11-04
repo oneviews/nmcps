@@ -20,8 +20,17 @@
 //   ⑨ ci.yml 用到的 key 与 `--list` 表双向一致（无死条目、无未登记 key）
 //   ⑩ 表里每个 key 都能解析出非空正则
 //   ⑪ unknown key 有明确报错（退出码 2 + 可用 key 提示）
+//
+// 三个回放断言（拿真实日志尾部当样本，措辞一变就红）：
+//   ⑫ 每个 key 都有样本 `scripts/fixtures/ci-logs/<key>.log`，且样本与 key 双向一致
+//   ⑬ 每条正则在对应样本上用 `grep -aE` 命中（与 ci-summary.sh 同工具同参数）
+//   ⑭ 每份样本都带 `# source:` 出处行（防止编造样本冒充真实输出）
+//
+// 重采样：`node scripts/check-ci-summary.mjs --write-fixtures` 会重跑 lint / typecheck /
+// i18n / governance 四步并把真实输出尾部写回样本；bff / ui 需要构建产物 + 真浏览器，
+// 只能从 `gh run view <id> --log` 里取对应步骤尾部手工替换（样本头部已写明出处）。
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
@@ -31,6 +40,40 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = "scripts/ci-summary.sh";
 const OK_LOG = "结果：967 通过 / 0 失败 / 0 告警\n文档体系自测 4/4 通过\n";
 const PLAIN_LOG = "$ vue-tsc -b --pretty\n▎ TNB ACTIVE — tsconfig ok\n";
+const FIXTURE_DIR = "scripts/fixtures/ci-logs";
+
+// `--write-fixtures`：重采样本后退出，不跑断言（断言要求样本非空且最新）
+if (process.argv.includes("--write-fixtures")) {
+	const jobs = [
+		// lint / typecheck 成功时只有 pnpm 回显的 `$ eslint .` 一行，banner 必须留（正则就指着它）
+		{ key: "lint", cmd: "pnpm lint", tail: 6, keepBanner: true },
+		{ key: "typecheck", cmd: "pnpm typecheck", tail: 6, keepBanner: true },
+		{ key: "i18n", cmd: "pnpm check:i18n", tail: 8 },
+		{ key: "governance", cmd: "pnpm check:governance", tail: 12, keep: /结果：|自测|项通过/ }
+	];
+	// 先跑完、再统一落盘：check:governance 会跑本脚本读样本，跑到一半改样本会让它假红
+	const collected = [];
+	for (const { key, cmd, tail, keep, keepBanner } of jobs) {
+		const r = spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+		const body = `${r.stdout ?? ""}${r.stderr ?? ""}`
+			.split("\n")
+			.map((l) => l.replace(/\s+$/, ""))
+			.filter((l) => l.length > 0 && (keepBanner || !l.startsWith("$ ")) && (!keep || keep.test(l)))
+			.slice(-tail);
+		collected.push({ key, cmd, status: r.status, body });
+	}
+	for (const { key, cmd, status, body } of collected) {
+		const header = [
+			`# key: ${key}`,
+			`# source: 本地 \`${cmd}\` 真实输出尾部（${new Date().toISOString().slice(0, 10)} 重采）`,
+			"# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures"
+		];
+		writeFileSync(join(ROOT, FIXTURE_DIR, `${key}.log`), `${header.join("\n")}\n${body.join("\n")}\n`);
+		console.log(`✅ 已刷新 ${FIXTURE_DIR}/${key}.log（${cmd} exit ${status}，${body.length} 行）`);
+	}
+	console.log("\n⚠️  bff / ui 需构建产物 + 真浏览器，无法本地重采：从 `gh run view <id> --log` 取对应步骤尾部手工替换。");
+	process.exit(0);
+}
 
 const dir = mkdtempSync(join(tmpdir(), "ci-summary-selftest-"));
 const okLog = join(dir, "ok.log");
@@ -218,6 +261,44 @@ wiring(
 	"unknown key 有明确报错（退出码 2 + 可用 key 提示）",
 	bogus.status === 2 && /unknown key: bogus-key/.test(bogus.err) && /可用 key/.test(bogus.err),
 	`exit=${bogus.status} stderr=${JSON.stringify(bogus.err.trim())}`
+);
+
+// ── 回放断言：每条正则都要在「真实输出」样本上命中 ──
+// 为什么还不够：⑦～⑪ 只保证接线对，正则可以写对形式却匹配不上今天的措辞
+// （例如小结从「N/N 项通过」改成「N/N cases passed」）。fixtures 是各步骤真实日志尾部，
+// 用 `grep -E`（与 ci-summary.sh 用的同一工具、同一选项）回放，措辞一变这里就红。
+const fixturePath = (key) => `${FIXTURE_DIR}/${key}.log`;
+const fixtureKeys = readdirSync(join(ROOT, FIXTURE_DIR))
+	.filter((f) => f.endsWith(".log"))
+	.map((f) => f.replace(/\.log$/, ""))
+	.sort();
+const missingFixture = tableKeys.filter((k) => !fixtureKeys.includes(k));
+const orphanFixture = fixtureKeys.filter((k) => !tableKeys.includes(k));
+
+wiring(
+	`每个 key 都有真实输出样本 ${FIXTURE_DIR}/<key>.log（${fixtureKeys.length} 份）`,
+	tableKeys.length > 0 && missingFixture.length === 0 && orphanFixture.length === 0,
+	[
+		missingFixture.length ? `缺样本: ${missingFixture.join(", ")}` : "",
+		orphanFixture.length ? `无对应 key: ${orphanFixture.join(", ")}` : ""
+	]
+		.filter(Boolean)
+		.join("\n")
+);
+
+const replayMiss = tableKeys
+	.filter((k) => spawnSync("grep", ["-aE", table(k).out, join(ROOT, fixturePath(k))]).status !== 0);
+wiring(
+	"每条正则都在对应样本上命中（grep -aE，与 ci-summary.sh 同参数）",
+	tableKeys.length > 0 && replayMiss.length === 0,
+	replayMiss.map((k) => `grep -E ${JSON.stringify(table(k).out)} ${fixturePath(k)} → 未命中`).join("\n")
+);
+
+const noSource = fixtureKeys.filter((k) => !/^# source: /m.test(readFileSync(join(ROOT, fixturePath(k)), "utf8")));
+wiring(
+	"每份样本都带 `# source:` 出处（防止凭空编造的样本冒充真实输出）",
+	fixtureKeys.length > 0 && noSource.length === 0,
+	noSource.map((k) => `${fixturePath(k)} 缺 \`# source:\` 行`).join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);
