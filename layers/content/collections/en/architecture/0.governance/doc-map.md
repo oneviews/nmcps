@@ -14,7 +14,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.34.8
+version: 0.35.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -126,6 +126,7 @@ tags:
 | NMCPS-REC-002 | Upstream account defect list | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | Upstream policy defect list | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
 | NMCPS-REC-004 | Upstream audit defect list | 5 | informative | rec.defects.audit | superseded | records/defects/audit-upstream-defects.md |
+| NMCPS-REC-005 | Upstream iam role and grant defect list | 5 | informative | rec.defects.iam-policy | baseline | records/defects/iam-policy-upstream-defects.md |
 
 > Paths are relative to `layers/content/collections/cn/`; `en/` is the mirror collection with the same docId.
 
@@ -178,4 +179,4 @@ tags:
 | 2026-11-03 | 0.34.6 | `NMCPS-ARCH-006` → 0.2.16 (§3.6 switches the selected-row fill from `bg-elevated/60` to `bg-accented` with the measured reason for both themes; new §3.8 "List footer: count / page size / pagination" — height from `--app-list-footer-h`, 15 rows by default, options 15 / 30 / 50 / 100 on all four pages, the narrow-pane collapse order, and `/system/policy`'s client-side pagination slicing only the render layer; §7 row 17 drops the page size and row 18 adds three assertions, 100 → 103), `NMCPS-DESIGN-005` → 0.5.6 (§7.3 item 3 notes the client-side pagination contract, §9.2 changes the `pageSize` options to 15 / 30 / 50 / 100, §9.3 item 2 moves the page size out of the popover and item 6 adds the footer assertions). |
 | 2026-11-03 | 0.34.7 | `NMCPS-ARCH-006` → 0.2.17 (§7 gains row 19: create-level options are strictly below the session level and `≤ 3`, guarded by 2 `check:ui` cases; 103 → 105 in total), `NMCPS-DESIGN-005` → 0.5.7 (§6.1 adds the super-admin `tenantId` requirement and `GET /tenant`; §6.2 rewrites level semantics as 0 / 1 / 2–3 / 4; §6.3 rewrites the matrix from the 2026-11-03 re-probe and adds two client-narrowing items; §6.4 adds `20102` / `20103`; §6.5 marks `UP-ACC-01` closed and files `UP-ACC-07` / `UP-ACC-08`), `NMCPS-REC-002` re-probe update (`UP-ACC-01` closed, new `UP-ACC-07` mandatory `tenantId` on create and `UP-ACC-08` `L4` belonging to service accounts, 6 → 8 defects, with reproduction commands). |
 | 2026-11-04 | 0.34.8 | Registered record-layer ADR `NMCPS-ADR-0018` "backend generation switch" (the retired go-zero gateway gives way to the single upstream `http://192.168.1.55:8888/api/v1`; ten measured facts, four field-mapping tables, ten capability gaps, thirteen impacted files; partially revokes ADR-0011's refresh-rotation clause; Tier 5, informative) and marked `NMCPS-REC-001~004` as `superseded` with `supersededBy: NMCPS-ADR-0018` plus a generation note at the top of each list (their probe target is retired). New Tier 4 work order `documents/3.operations/backend-generation-migration.md` (per-file diff drafts, `check:bff` fake-upstream changes, acceptance and rollback; not a governed document). |
-
+| 2026-11-04 | 0.35.0 | Mirror of the Chinese registration: new record-layer defect list `NMCPS-REC-005` for the new-generation `iam/{roles,policies,role-policies,subject-roles}` endpoints (ten defects: no authorization check, deletable system objects, `enabled` writes ignored, raw SQL in 400s, delete failures carried by a 200, incomplete filters with an uncapped `page_size`, missing required-field validation, ignored `tenant_id` input, unchecked cross-tenant grants, orphan relation rows; Tier 5, informative, `baseline`). `NMCPS-DESIGN-005` goes to 0.8.0 (§7 / §8 rewritten against the `iam` namespace: policy CRUD, role CRUD, `role-policies` grants and `subject-roles` assignment; the ABAC segment, the dry run and the permission catalogue retire with G4 / G5 / G3; failures dispatch on the HTTP shape) and `NMCPS-ARCH-006` to 0.2.20 (§3.8 revokes the `/system/policy` client-side paging exception). |

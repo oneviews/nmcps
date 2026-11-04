@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.7.0
+version: 0.8.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -33,7 +33,7 @@ tags:
 
 > **本文职责**：`domain.system` 域的唯一权威，定义系统管理——系统日志、策略管理、用户与权限管理。身份与访问控制的架构基准见 `NMCPS-ARCH-003`。
 > **目标读者**：实施工程师 / AI 助手。
-> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关。**第六节已于 0.6.0 按新代 `iam/users` 重写，第九节已于 0.7.0 按新代 `audit/*` 三族重写**；第七 / 八节仍写的是旧代（`/api/v1/role`、`/api/v1/permission`、`/api/v1/abac/rule`、`/api/v1/access/dryrun`），须按 `iam` 命名空间重写（C4c，`NMCPS-ADR-0018`）；那两节在重写完成前以联调实测为准。
+> **代际提示（2026-11-04）**：后端已整体切换至 `http://192.168.1.55:8888/api/v1` 的 NMS 统一网关。**第六节（0.6.0，`iam/users`）、第七 / 八节（0.8.0，`iam/{policies,roles,role-policies,subject-roles}`）、第九节（0.7.0，`audit/*` 三族）均已按新代重写**；旧代结论只保留在置 `superseded` 的 `NMCPS-REC-001`～`004` 里作历史。字段映射与能力缺口见 `NMCPS-ADR-0018`。
 
 ---
 
@@ -156,131 +156,151 @@ tags:
 
 ## 七、`/system/policy` 策略管理（落码基准）
 
-> 口径来源：2026-11-01 对 `http://192.168.1.55:8888/api/v1` 的实调（超级管理员 / 租户管理员双身份穷举）+ swagger 比对。与契约不符处登记在 `NMCPS-REC-003`（`layers/content/collections/cn/records/defects/policy-upstream-defects.md`），本节只写「页面能依赖什么」。页面定位与工具栏口径见 `NMCPS-ADR-0017`。
+> 口径来源：2026-11-04 对 `http://192.168.1.55:8888/api/v1` 的实调（平台超管 / 租户管理员 / 零角色账号三种会话 + swagger 比对）。与契约不符处登记在 `NMCPS-REC-005`（`layers/content/collections/cn/records/defects/iam-policy-upstream-defects.md`），本节只写「页面能依赖什么」。页面定位与工具栏口径见 `NMCPS-ADR-0017`。
 
 ### 7.1 数据源与端点
 
 | 能力 | BFF 路径 | 上游 | 说明 |
 | :--- | :--- | :--- | :--- |
-| 规则列表 | `GET /api/abac/rule` | `GET /api/v1/abac/rule` | **只认 `page` / `pageSize`**；没有 `keyword`，也没有 `status` / `roleCode` 过滤 |
-| 授权试算 | `POST /api/access/dryrun` | `POST /api/v1/access/dryrun` | 纯计算、不落库；必填只有 `accountId` / `path` / `method` |
-| 试算账号候选 | `GET /api/account` | `GET /api/v1/account` | 复用账号列表（`pageSize` 夹到 100），取前若干条做下拉 |
+| 策略列表 | `GET /api/iam/policies` | `GET /api/v1/iam/policies` | 只认 `page` / `page_size` / `keyword`；`code` / `policy_type` / `enabled` 传了被**静默忽略**（UP-RBAC-06） |
+| 建策略 | `POST /api/iam/policies` | 同 | body `name` / `code` / `policy_type` / `document` / `description`；成功回 `200 { code: 0, message, id }`，`id` 在**顶层**且为 uuid |
+| 策略详情 | `GET /api/iam/policies/{id}` | 同 | 不存在 → **HTTP 400 + 纯文本** `记录不存在`（不是 envelope） |
+| 改策略 | `PUT /api/iam/policies/{id}` | 同 | `name` / `document` / `description` 生效；`enabled` 被忽略（UP-RBAC-03） |
+| 删策略 | `DELETE /api/iam/policies/{id}` | 同 | 成功 `200 {code:0}`；失败回 **HTTP 200 + `code: 400`**（UP-RBAC-05）；系统策略同样可删（UP-RBAC-02） |
+| 挂/摘策略 | `POST /api/iam/role-policies/{AttachPolicy,DetachPolicy}` | 同 | body `role_id` + `policy_id`；摘除幂等，重复挂载 → 400 原始 SQL 错误 |
 
-- **规则没有任何写端点可依赖**：`POST /api/abac/rule` 存在，但 `PUT` / `PATCH` / `DELETE /abac/rule/{id}` 全部 `404`（UP-POL-01）。建一条不能改也不能删的规则，比不建更糟 → 页面**不提供创建入口**。
-- `status`（启停）没有独立端点，只能由上游改库 → 页面只读展示，不做开关。
-- `path` 要带 `/api/v1` 前缀才算命中 RBAC 判定：页面在 `path` 输入框的 hint 里写死这个口径，不自动补前缀（补了会掩盖用户的真实输入）。
-- BFF 白名单需含 `abac` / `access` / `account`（`shared/types/api.ts` 的 `GATEWAY_RESOURCES`），否则一律 `404 bff_resource_not_allowed`。
+- **ABAC 规则段整体下线**：`/abac/rule` 在新代 openapi（127 条路径）中不存在，缺口 G4 由「契约未知」升级为「端点缺失」。
+- **授权试算下线**：`/access/dryrun` 同样不存在（缺口 G5）；`POST /iam/policies` 只做 CRUD，不提供「谁在某路径上能做什么」的计算端点。
+- 策略与角色的关系是**独立资源** `role-policies`，不在策略对象上回写 `role_count` 之类聚合字段。
+- BFF 白名单已含 `iam`（`shared/types/api.ts` 的 `GATEWAY_RESOURCES`），本节不新增资源名。
 
 ### 7.2 字段口径
 
-- `ruleId`：数值主键，页面用作列表 key 与 `useRecordSelection` 的记录标识；同 `priority` 时按它升序稳定排序（`byAbacPriority()`）。
-- `ruleCode`：唯一，重复创建回 `409 10302`（UP-POL-02）；页面只读展示。
-- `roleCode`：**空串表示全局规则**，不是 `null`（上游约定）。页面把空串渲染成「全局」标签，不写成「—」。
-- `conditionDsl`：govaluate 表达式，上游**不做语法校验**（写错也 `200`，UP-POL-02）→ 页面原样展示 + 提供复制，不提供编辑，也不做「格式化」或「纠错」暗示。
-- `priority`：越小越先匹配。列表按升序展示，同优先级按 `ruleId`。
-- `status`：实测只见到 `1`（生效）/ `2`（停用）两个取值（`POLICY_STATUS`）。页面只映射这两值，其余取值走 `pages.system-policy.status.unknown` 并把原值带进文案（`policyStatusKey()` + `{status}`），**不猜 `0` 的语义**。
-- `createdAt`：原样展示，不做时区换算。
+- `id`：uuid。种子数据形如 `pol_platform_full`，**不能按前缀判断来源**，页面一律当不透明字符串。
+- `code`：同一租户内唯一（约束 `uk_sys_policy_tenant_code`），跨租户可重名 —— 实测 `tenant.full_access` 在三个租户各出现一次，列表里共 10 条。
+- `policy_type`：openapi 未约束枚举，实测 10 条全为 `system`。页面原样展示；未知值直接显示原值，不映射成「其他」。
+- `document`：**JSON 字符串**（不是对象），形如 `[{"Action":["*"],"Effect":"Allow","Resource":["*"]}]`。上游按 jsonb 落库：非法 JSON → `400` + 原始 PG 错误 `22P02`（UP-RBAC-04），没有语义校验。页面只做「格式化预览 + 复制」，预览解析失败就回落原文，**不提供编辑器**（写坏即脏数据）。
+- `enabled`：列表与详情恒 `true` —— `PUT` 带 `enabled: false` 返回 200 但值不变（UP-RBAC-03）。页面只读展示，不做开关。
+- `is_system`：种子策略为 `true`。**它不是保护**：`DELETE` 对系统策略同样返回成功（UP-RBAC-02）→ 页面只当标签用，删除确认里如实提示。
+- `tenant_id`：种子策略带；新建策略落在**会话租户**（实测平台超管建的策略 `tenant_id` 也是 `tnt_default`），body 不接受该字段（UP-RBAC-08）。
+- `created_at` / `updated_at`：RFC3339 带 `+08:00` 偏移，原样展示，不做时区换算。
 
 ### 7.3 权限矩阵（实测）
 
-| 动作 | 超级管理员（`accountLevel: 0`） | 租户管理员（`accountLevel: 1`） |
-| :--- | :--- | :--- |
-| 规则列表 / 试算 | **恒 `401 10201`**：策略域对超管不开放（UP-POL-08） | 可用（本租户域） |
-| 新建 / 修改 / 删除 / 启停规则 | 端点不存在（UP-POL-01） | 同左 |
-| 关键字搜索 | 不提供 | 客户端过滤（上游无 `keyword`，UP-POL-04 邻接现象） |
+| 动作 | 平台超管（会话 `tenant_id = null`） | 租户管理员 | 零角色账号 |
+| :--- | :--- | :--- | :--- |
+| 策略列表 / 详情 | 可用，见全量 10 条 | 可用，仅本租户 3 条 | **可用**（同租户范围，UP-RBAC-01） |
+| 建 / 改 / 删策略 | 可（落 `tnt_default`） | 可（落本租户） | **可**（UP-RBAC-01） |
+| 挂 / 摘策略 | 可 | 可 | **可**（UP-RBAC-01） |
+| 启停策略 | 无有效端点 | 同左 | 同左 |
+
+新代**没有业务级鉴权**：任何已认证会话都能读写 IAM 端点，可见范围只由**会话租户**决定（UP-RBAC-01 / UP-RBAC-09）。旧代「超管恒 `401 10201`」的域拒绝（UP-POL-08）随旧代退役，不再成立。
 
 客户端收敛（**不是安全边界**，只为不引导用户踩上游缺口）：
 
-1. 超管进入该页**不发起任何请求**，只渲染身份说明 Alert（详情栏顶部，未选中时也在；否则每次进页都刷一条 `401` 噪声）。
-2. 不提供任何写入口：规则建了既不能改也不能删，且 DSL 不做语法校验——写错只能改库。
-3. 搜索在客户端做：先把规则分页拉全（上限 `MAX_RULE_PAGES` 兜底），再按 `ruleCode` / `ruleName` / `roleCode` / `conditionDsl` 过滤；过滤掉当前记录时落「不在当前结果内」空态，**不静默改搜索条件去捞**。分页同样在客户端：每页条数选择器与分页器都在列表栏尾部（默认 15，`NMCPS-ARCH-006` §3.8），切片只作用于渲染层 —— 命中判定与 `?id` 深链仍对全量已加载规则生效，翻页不会让合法深链变成「记录不存在」。
-4. 试算表单只给 `accountId` / `path` / `method`：其余四个字段上游接受但不参与判定（UP-POL-06），摆出来等于骗人。
+1. **不按身份旁路取数**：超管进页面照常请求（旧口径「超管不发起任何请求」作废），401 只剩「凭证缺失 / 令牌失效」一种含义。
+2. 不提供启停入口：`enabled` 写入被忽略，开关只会制造「点了没反应」的假象。
+3. 系统策略不禁用删除入口，但确认弹窗必须写明「上游不保护系统策略，删除后不可恢复」。
+4. 搜索走服务端 `keyword`（不再全量拉取后客户端过滤），因此**撤销** `NMCPS-ARCH-006` §3.8 里「`/system/policy` 客户端分页」的例外，改回服务端分页（`page_size` 上游无上限，页面自带 `DEFAULT_PAGE_SIZE`）。
+5. 策略文档只做展示与复制：上游无语法校验，页面不暗示「已校验通过」。
 
-### 7.4 错误码 → 页面处置
+### 7.4 失败形态 → 页面处置
 
-| 码 | 上游含义 | 页面处置 |
+新代几乎没有业务错误码，失败靠 **HTTP 状态 + 响应形态**区分，BFF 出口统一归一为 `{ code, message }`：
+
+| 上游形态 | 含义 | 页面处置 |
 | :--- | :--- | :--- |
-| `10201` | 未认证 / 域拒绝（超管必现） | 身份说明 Alert，不进「加载失败」分支 |
-| `10302` | `ruleCode` 已存在 | 列表/试算不涉及；文案提示「规则编码已存在」 |
-| `10101` | 参数不合法 | 「参数不合法」提示，保留用户输入 |
-| `10509` | 上游内部错误 | 通用失败提示 + 重试入口 |
-
-上游未配置 / 掉线 / 超时沿用 `upstreamHintKey()` 的运维指引（与登录页、`/system/user` 同一套文案）。
+| `200 {code:0,message,id}` | 建成功 | 关弹窗 + 重新取列表 + 选中新记录 |
+| `200 {code:0,message}` | 改 / 删 / 挂 / 摘成功 | 重新取列表（或就地刷新关系） |
+| `200 {code:400,message:"资源不存在或无权访问"}` | 删除失败（**transport 仍是 200**） | 按失败处理：提示 + 刷新列表（记录可能已被他人删除） |
+| `400` 纯文本 `记录不存在` | 详情 / 更新目标不存在 | 「该策略已被删除」+ 清空选择 |
+| `400` 纯文本含 `SQLSTATE 23505` | `code` 重复 | 字段内联「策略编码已存在」；**原始 SQL 文本不得透传给用户** |
+| `400` 纯文本含 `SQLSTATE 22P02` | `document` 非法 JSON | 「策略文档必须是合法 JSON」 |
+| `400` 纯文本含 `SQLSTATE 23503` | 挂载的 `role_id` / `policy_id` 不存在 | 「策略或角色已不存在，请刷新」 |
+| `401 {code:40101}` / `{code:10007}` | 缺凭证 / 令牌失效 | 走会话失效（`SESSION_INVALID_CODES` 须含 `40101` / `10007`） |
+| 无响应 / 超时 | 上游未配置 / 掉线 | 沿用 `upstreamHintKey()` 的运维指引 |
 
 ### 7.5 已知缺口
 
-`UP-POL-01` / `02` / `04` / `06` / `08` 见 `NMCPS-REC-003`：无规则生命周期端点、DSL 不校验语法、列表无 `keyword`、试算忽略上下文、超管被域拒绝。页面只依赖「列表 + 试算 + 账号候选」三个已确认可用的能力，不把上述缺口当契约。
+`UP-RBAC-01`～`UP-RBAC-10` 见 `NMCPS-REC-005`：无授权校验、系统对象可删、`enabled` 写入无效、400 回原始 SQL、删除失败用 200 承载、列表过滤残缺且分页无上限、必填校验缺失、`tenant_id` 入参被忽略、跨租户授权无拦、孤儿关系行。页面只依赖「列表 + 详情 + 建改删 + 挂摘」这组已确认可用的能力，不把上述缺口当契约。
 
 ---
 
-## 八、`/system/permission` 权限管理（落码基准）
+## 八、`/system/permission` 角色与授权（落码基准）
 
-> 口径来源同上。与契约不符处登记在 `NMCPS-REC-003`，本节只写「页面能依赖什么」。页面定位与工具栏口径见 `NMCPS-ADR-0017`。
+> 口径来源同上。与契约不符处登记在 `NMCPS-REC-005`，本节只写「页面能依赖什么」。页面定位与工具栏口径见 `NMCPS-ADR-0017`。
 
 ### 8.1 数据源与端点
 
 | 能力 | BFF 路径 | 上游 | 说明 |
 | :--- | :--- | :--- | :--- |
-| 角色列表 | `GET /api/role` | `GET /api/v1/role` | `page` / `pageSize` / `keyword`；无状态过滤 |
-| 建角色 | `POST /api/role` | 同 | `roleCode` / `roleName` / `roleLevel` 必填，`description` 可选 |
-| 删角色 | `DELETE /api/role/{roleCode}` | 同 | 路径段是 **`roleCode`**，不是 `roleId`；内置角色 `40303` |
-| 权限点目录 | `GET /api/permission` | 同 | `page` / `pageSize` / `keyword` / `resourceType`；实测仅 24 条，可全量拉取 |
-| 角色已授权 | `GET /api/role/{roleCode}/permission` | 同 | **不回 `effect`**（UP-POL-03） |
-| 授权 | `POST /api/role/{roleCode}/permission` | 同 | body `{ permCode, effect }`，页面只用 `effect=1`（allow） |
-| 撤销授权 | `DELETE /api/role/{roleCode}/permission` | 同 | body `{ permCode }`，`effect` 对删除无意义 |
+| 角色列表 | `GET /api/iam/roles` | `GET /api/v1/iam/roles` | `page` / `page_size` / `keyword` / `code`；`enabled` / `tenant_id` 被静默忽略 |
+| 建角色 | `POST /api/iam/roles` | 同 | body `name` / `code` / `description`，**三者都不是必填**（空 body 也 `200`，落一条空角色，UP-RBAC-07） |
+| 角色详情 | `GET /api/iam/roles/{id}` | 同 | 不存在 → `400` 纯文本 `记录不存在` |
+| 改角色 | `PUT /api/iam/roles/{id}` | 同 | `name` / `description` 生效；`enabled` 被忽略 |
+| 删角色 | `DELETE /api/iam/roles/{id}` | 同 | 无内置保护（系统角色同样 200，UP-RBAC-02）；失败形态同 §7.4 |
+| 策略目录 | `GET /api/iam/policies` | 同 | 矩阵数据源，口径见 §7 |
+| 角色已挂策略 | `GET /api/iam/role-policies?role_id=` | 同 | 只回关系行 `{ id, role_id, policy_id, created_at }`，**不回策略本体** → 前端按 `policy_id` 关联策略目录 |
+| 挂策略 | `POST /api/iam/role-policies/AttachPolicy` | 同 | body `role_id` + `policy_id`；重复挂载 → `400` + `SQLSTATE 23505` |
+| 摘策略 | `POST /api/iam/role-policies/DetachPolicy` | 同 | 幂等（重复摘除仍 `200`） |
+| 已分配角色 | `GET /api/iam/subject-roles?subject_id=` | 同 | 只回关系行 `{ id, subject_type, subject_id, role_id, created_at }` |
+| 分配 / 撤销角色 | `POST /api/iam/subject-roles/{AssignRole,RevokeRole}` | 同 | body `subject_type`（实测 `user`）/ `subject_id` / `role_id` |
 
-- **没有角色状态端点**（无 `PUT /api/v1/role/{code}/status`），`status` 只能改库 → 页面不提供启停（UP-POL-01）。
-- **`POST /api/permission` 有、删除没有**：页面只读权限点目录，不做权限点增删（UP-POL-01）。
-- `GET /account/role?accountId=` **不存在**（`404`）→ 不提供「账号↔角色」绑定视图（UP-POL-07）。
+- **没有权限点目录**（缺口 G3）：`/permission` 在新代 openapi 中不存在，权限点改由策略 `document` 的 `actions` 表达 → 授权矩阵从「权限点 × 角色」改为「**策略 × 角色**」，属重写而非迁移。
+- **没有角色启停端点**：`PUT /iam/roles/{id}` 带 `enabled` 无效（UP-RBAC-03）。
+- `roleLevel` / `isBuiltin` / `status` 三个字段随等级模型一并退役（缺口 G1）；`is_system` 接替「内置角色」的**语义标签**，但不构成保护。
+- 账号 ↔ 角色已读写对称（旧代 `UP-POL-07` 闭环）：读走 `subject-roles` 列表，写走 `AssignRole` / `RevokeRole`。
 
 ### 8.2 字段口径
 
-- `roleCode`：唯一；重复 `409 10302`。页面用它做 `useRecordSelection` 的 `id`，不做数值化。
-- `roleLevel`：`0` 平台超管 / `1` 租户管理员 / `2`–`4` 自定义。租户管理员可建 `2`–`4`；建同级或更高 → `20103`；`>4` → `40308`（两者文案不区分，UP-POL-05）。
-- `isBuiltin`：内置角色**只读**——授权 `40307`、撤销 `40305`、删除 `40303`（三种码同一语义，UP-POL-09）。页面禁用开关与删除入口并给出原因。
-- `status`：同上，实测只见到 `1`（生效）/ `2`（停用）（`POLICY_STATUS`），只读展示；其余取值走 `pages.system-permission.status.unknown` 并带出原值，不猜语义。
-- `createdAt`：`GET` 返回 UTC、`POST` 返回本地时（UP-POL-10）→ 原样展示，不做时区换算。
-- 权限点：`permCode`（形如 `asset:device:read`）、`permName`、`resourceType`（`0` 会被上游当「未提供」，页面不透传 `0`；`4` = 接口类，矩阵里单独占右列）、`description`。
-- 角色已授权列表**只有权限点本体**：出现在列表里即「已授权」，无法区分允许 / 拒绝（UP-POL-03）→ 页面只有 `ALLOW` 语义，不摆「拒绝」开关。
+- `id`：uuid；种子形如 `r_tenant_admin`。页面当不透明字符串，`useRecordSelection` 直接用它做标识，不做数值化。
+- `code`：同一租户内唯一（`uk_sys_role_tenant_code`），跨租户可重名 —— 实测 `tenant_admin` 在三个租户各有一条，列表共 10 条。
+- `is_system`：种子角色 `true`，新建 `false`。只用于标签与文案。
+- `enabled`：恒 `true`（写入无效），只读展示。
+- `tenant_id`：平台角色无该字段，租户角色带；平台角色不进租户管理员的列表。
+- `description`：可为空串，空时展示「—」。
+- `created_at` / `updated_at`：RFC3339 带偏移，原样展示。
+- 关系行的 `id` 是 uuid 且无语义，页面只用它做 `key`。
+- 授权**没有 effect 维度**：`role-policies` 行存在即「已挂」，不存在即「未挂」（旧代 `UP-POL-03` 的「拒绝不可见」问题随字段消失，页面不必再解释）。
 
 ### 8.3 权限矩阵（实测）
 
-| 动作 | 超级管理员（`accountLevel: 0`） | 租户管理员（`accountLevel: 1`） |
-| :--- | :--- | :--- |
-| 角色 / 权限点列表 | **恒 `401 10201`**（UP-POL-08） | 可用（本租户域） |
-| 建角色 | 同左 | 可建 `2`–`4`；`0` / `1` → `20103` |
-| 删角色 | 同左 | 仅自建角色；内置 `40303` |
-| 授权 / 撤销 | 同左 | 可；内置角色 `40307` / `40305` |
-| 角色启停 | 端点不存在（UP-POL-01） | 同左 |
+| 动作 | 平台超管 | 租户管理员 | 零角色账号 |
+| :--- | :--- | :--- | :--- |
+| 角色 / 策略列表 | 可用，见全量 10 / 10 | 可用，见本租户 3 / 3 | **可用**（本租户范围，UP-RBAC-01） |
+| 建 / 改 / 删角色 | 可（落 `tnt_default`） | 可（落本租户） | **可**（UP-RBAC-01） |
+| 挂 / 摘策略、分配 / 撤销角色 | 可 | 可 | **可** |
+| 跨租户指派角色 | — | **实测可**：把 `r_platform_admin` 指派给自己的用户回 `200`（UP-RBAC-09，可撤销） | 同左 |
+| 角色启停 | 无有效端点 | 同左 | 同左 |
 
 客户端收敛（**不是安全边界**）：
 
-1. 超管进入该页**不发起任何请求**，只渲染身份说明 Alert（详情栏顶部，未选中时也在）。
-2. 等级下拉按身份收敛：租户管理员只给 `2`–`4`（`0` / `1` 必被 `20103` 拒）。
-3. 内置角色的授权开关与删除按钮禁用（`aria-disabled` + tooltip 说明），不做「点了再报错」。
-4. 授权开关用**乐观更新**：先翻 UI，失败回滚并提示；并发请求按 `roleCode + permCode` 去重。
-5. 不提供权限点增删与角色启停：端点不存在，做了也只能报错。
-6. 详情栏 view 态**等分两列**：左「角色信息」（标题 + 字段 + 内置角色说明），右「授权矩阵」，各占 50%、铺满容器（不设 `max-w`）。矩阵内部恢复两列：左列资源类（`resourceType` ≠ `4`）、右列接口类（`4`），列序固定，每列内按 `resourceType` 分组、条目按 `permCode` 稳定排序。判据是**容器查询**（`@min-[48rem]`，不是视口断点，见 `NMCPS-ARCH-006` §3）：窄于阈值先回归单栏（字段在上、矩阵在下），此时矩阵内部也回到单列分组。接口点占目录大头（2026-11-02 实测 24 条里 15 条是 `4`），两列可避免把「单设备 / 指标 / MIB / 告警」压到列表底部。
+1. 不按身份旁路取数：新代没有域拒绝，三页请求一视同仁；可见范围由会话租户决定。
+2. 不提供角色启停：`enabled` 写入无效，只读展示。
+3. 删除系统角色 / 系统策略前弹确认，文案写明「上游不保护系统对象」。
+4. 授权改为**策略勾选**：候选 = `GET /iam/policies`（本租户 3 条），已勾状态 = `GET /iam/role-policies?role_id=` 的 `policy_id` 集合；写用 `AttachPolicy` / `DetachPolicy`，乐观更新 + 失败回滚，并发按 `role_id + policy_id` 去重。
+5. 建角色表单三字段都做前端必填：上游空 body 也返回成功，放过就是脏数据（UP-RBAC-07）。
+6. 角色 ↔ 用户分区只做「读 + 分配 + 撤销」，不在此页建号；用户候选来自 `/api/iam/users`。`subject-roles` 里指向已删用户的孤儿行按 `/iam/users` 存在性过滤掉（UP-RBAC-10），不渲染幽灵成员。
+7. 详情栏布局沿用 `NMCPS-ARCH-006` §3.2 / §3.7：view 态左「角色信息」、右「已授权策略」，判据为容器查询 `@min-[48rem]`。矩阵只有本租户 3 条策略，条目数远少于旧代的 24 条权限点，**等分是否仍合适留到落码时按实测截图复核**（超短则退回单栏），先按等分写。
 
-### 8.4 错误码 → 页面处置
+### 8.4 失败形态 → 页面处置
 
-| 码 | 上游含义 | 页面处置 |
+失败形态与 §7.4 同族，差异只在文案：
+
+| 上游形态 | 含义 | 页面处置 |
 | :--- | :--- | :--- |
-| `10201` | 未认证 / 域拒绝（超管必现） | 身份说明 Alert，不进「加载失败」分支 |
-| `10302` | `roleCode` 已存在 | `roleCode` 字段内联错误 |
-| `20103` | 建号等级不低于自身 | 表单级提示「只能创建低于自身等级的角色」 |
-| `40308` | `roleLevel` 越界 | 表单级提示「等级超出范围（2–4）」 |
-| `40303` | 内置角色不可删 | 行内提示「内置角色不可删除」 |
-| `40305` | 内置角色不可撤销授权 | 开关回滚 + 提示「内置角色不可修改授权」 |
-| `40307` | 内置角色不可授权 | 同上 |
-| `10509` | 上游内部错误（缺必填） | 通用失败提示 + 检查必填项 |
-| `10101` | 参数不合法 | 「参数不合法」提示，保留用户输入 |
-
-上游未配置 / 掉线 / 超时沿用 `upstreamHintKey()` 的运维指引。
+| `200 {code:400,message}` | 删除角色失败（transport 200） | 提示 + 刷新列表 |
+| `400` 纯文本 `记录不存在` | 详情 / 更新目标不存在 | 「该角色已被删除」+ 清空选择 |
+| `400` 纯文本含 `SQLSTATE 23505` | `code` 重复（建角色 / 重复挂载） | 建角色：字段内联「角色编码已存在」；挂载：提示后按最新关系重取 |
+| `400` 纯文本含 `SQLSTATE 23503` | 挂载目标不存在 | 「策略已不存在，请刷新」 |
+| `401 {code:40101}` / `{code:10007}` | 缺凭证 / 令牌失效 | 走会话失效 |
+| 无响应 / 超时 | 上游未配置 / 掉线 | 沿用 `upstreamHintKey()` 的运维指引 |
 
 ### 8.5 已知缺口
 
-`UP-POL-01` / `03` / `05` / `07` / `08` / `09` / `10` 见 `NMCPS-REC-003`：无角色启停与权限点删除、授权回读缺 `effect`、等级越权与越界同码、账号↔角色只写不读、超管被域拒绝、内置角色三种码、时区不一致。页面只依赖已确认可用的七个端点，不把上述缺口当契约。
+`UP-RBAC-01`～`UP-RBAC-10` 见 `NMCPS-REC-005`；缺口 G1（无等级模型）与 G3（无权限点目录）在本文档层已经确认，`/system/permission` 因此从「权限点矩阵」重写为「策略授权」。页面只依赖已确认可用的九个端点，不把上述缺口当契约。
+
+---
 
 ---
 
@@ -373,3 +393,4 @@ tags:
 | 2026-11-03 | 0.5.7 | **§6 用户管理建号口径按 2026-11-03 复测更正（修「租户管理员建号必失败」）**。现象：租户管理员在 `?id=new` 建号，表单只提供 `1`（= 自身等级），提交一律回 `20103 只能向下管控`，可见的「账号等级」下拉等于没有可选项。复测三条结论：① 等级必须**严格低于自己**（超级管理员 `1`–`3`、租户管理员 `2`–`3`），同级或更高 → `20103`；`4` → `20102`（服务账号由系统开通）；② `POST /account` 新增 `tenantId` 必填（`0` 视同缺省），超级管理员不带该字段直接 `10101`，因此页面新增「所属租户」下拉，来源 `GET /api/tenant`；③ `UP-ACC-01`（租户越级建号）由上游闭环，§6.5 与 `NMCPS-REC-002` 同步更新，新增 `UP-ACC-07`（`tenantId` 必填）/ `UP-ACC-08`（`4` 归服务账号）。§6.1 端点表加租户列表、§6.2 等级语义改写、§6.3 矩阵重写并补客户端收敛 1 / 2 两条、§6.4 错误码加 `20102` / `20103`。 |
 | 2026-11-04 | 0.6.0 | **§6 用户管理按新代 `iam/users` 重写（C4a）**：端点表换成 `GET|POST /iam/users`、`GET|PUT|DELETE /iam/users/{id}`、`GET /iam/tenants`、`GET /iam/departments`；字段口径改 snake_case（`id` / `username` / `display_name` / `status: active|disabled|locked` / `mfa_enabled` / `tenant_id` / `department_id`），`pageSize` → `page_size`，`list: null` 由 BFF 出口归一为 `[]`；**等级模型（`accountLevel`）整段退役**（缺口 G1），建号归属改由「部门」表达（`POST /iam/users` 实测没有 `tenant_id`）；新增删号（`DELETE`，软删 `deleted_at`，旧代 `UP-ACC-04` 闭环）与「列表自带租户归属」（`UP-ACC-05` 闭环）；错误码表改为实测的 `10002` / `40001` / `10003` / `10007` / `10301` 组合，口令策略按实测「6-128 字符」；`POST /access/dryrun` 入口与弹窗随缺口 G5 下线。 |
 | 2026-11-04 | 0.7.0 | **§9 审计日志按新代 `audit/*` 三族重写（C4b）**：旧代的单端点 `GET /audit?category=…` + `POST /audit/verify` + `GET|POST /audit/export` 全部退役，改为按日志族拆分的六个读路径与一个写路径 —— 操作日志 `GET /audit/operation-logs`、安全日志 `GET /audit/security-logs`、归档记录 `GET /audit/archive/records`（各带自己的详情端点）与执行归档 `POST /audit/archive/run`；主键从 `logCode` 变 `id`（UUID），分页字段从 `pageSize` 变 `page_size`，时间边界从时间串变 **epoch 毫秒整数**（`created_from` / `created_to`、`logged_from` / `logged_to`），空结果 `list: null` 由 BFF 出口归一为 `[]`。页面改成「三族一页」：日志族下拉常驻左区、浮层只放本族的 openapi 参数、归档族收起时间范围；校验与导出入口随缺口 G6 / G7 下线，归档弹窗取代导出；错误码表换成 `40401` / `10007` / `40001`（旧代 `10201` 在新代是「密码错误」，不再复用）。字段口径如实分层：归档记录已实测，操作 / 安全日志的条目字段尚无真实样本，页面只渲染已登记字段并把未登记字段原样列出。`check:ui` 的 `/system/log` 用例 8 → 11（切族换端点与时间参数、归档族无时间条件、选中行走族详情端点），总数 105 → 106；`check:bff` 的空列表归一路径改到 `operation-logs`。 |
+| 2026-11-04 | 0.8.0 | **§7 / §8 按新代 `iam` 命名空间重写（C4c）**：策略段从「`/abac/rule` 只读巡检 + `/access/dryrun` 试算」改为策略 CRUD —— 列表 / 建 / 详情 / 改 / 删落在 `GET|POST /iam/policies` 与 `GET|PUT|DELETE /iam/policies/{id}`，挂摘策略走独立的 `POST /iam/role-policies/{AttachPolicy,DetachPolicy}`；ABAC 段与试算按钮随缺口 G4 / G5 由「契约未知」升级为「端点缺失」下线。角色段从「`roleCode` 路径 + `roleLevel` + 权限点目录」改为 uuid 主键的 `GET|POST /iam/roles` + `GET|PUT|DELETE /iam/roles/{id}`，授权矩阵从「权限点 × 角色」重写为「策略 × 角色」（缺口 G3 确认：`/permission` 在新代 openapi 中不存在），账号↔角色改由 `subject-roles` 三端点读写对称（旧代 `UP-POL-07` 闭环）。三处旧口径随实测作废：① 「超管恒 `401 10201`」的域拒绝不存在了，任何已认证会话（含零角色账号）都能读写 IAM 端点，可见范围只由会话租户决定（`UP-RBAC-01` / `UP-RBAC-09`）→ 客户端不再按身份旁路取数；② `enabled` 写入被忽略（`UP-RBAC-03`）→ 不提供启停；③ 列表有 `keyword` → 撤销「客户端全量拉取 + 客户端分页」的例外，回到服务端分页。失败处理改为按 **HTTP 状态 + 响应形态**分派（`200 {code:400}`、`400` 纯文本 `记录不存在`、`400` + 原始 `SQLSTATE`），并写明原始 SQL 不得透传给用户。上游缺陷由 `NMCPS-REC-003`（旧代，已 `superseded`）换为 `NMCPS-REC-005`。 |

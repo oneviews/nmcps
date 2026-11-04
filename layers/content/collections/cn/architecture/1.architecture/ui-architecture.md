@@ -21,7 +21,7 @@ authority: normative
 scope:
   - arch.ui
 status: baseline
-version: 0.2.19
+version: 0.2.20
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -170,7 +170,7 @@ tags:
 - **默认 15 条**：`shared/constants/paging.ts` 是单一来源（`DEFAULT_PAGE_SIZE = 15`、`PAGE_SIZE_OPTIONS = 15 / 30 / 50 / 100`）；四个列表页（`/system/user`、`/system/policy`、`/system/permission`、`/system/log`）一律提供选择器。上游对 `pageSize` 无稳定上限的域（`/system/log`，UP-AUD-03）在取数层夹到 100，选项上限跟着夹。
 - **换条数即回第一页**：`page * pageSize` 的偏移必然错位，改条数后按筛选变更同一路径重置 `page`，不留在越界页。
 - **窄栏收敛**：栏宽 < 20rem 时先收起计数文字（`truncate` + 容器查询），保留条数选择器与分页；分页只留 `sibling-count=1` 的页号，禁止横向溢出（§3.3 的 320px 口径）。
-- **客户端分页的例外**：`/system/policy` 为了「搜索覆盖全部规则」先全量拉取（§7.1），分页切片只作用在渲染层；命中判定与 `?id` 深链仍对全部已加载规则生效，翻页不会让合法深链落「记录不存在」。
+- **客户端分页的例外（0.2.20 已撤销）**：旧代 `/system/policy` 没有 `keyword`，只能先全量拉取再客户端过滤，分页切片只作用在渲染层；新代 `iam/policies` 自带 `keyword` 与 `page_size`（`NMCPS-DESIGN-005` §7.1，0.8.0），全量拉取的动机随之消失 → 该例外撤销，`/system/policy` 回到服务端分页，四个列表页的分页口径重新统一。`?id` 深链的命中判定仍只对当前 `rows` 生效（§5.2）。
 
 ---
 
@@ -360,3 +360,4 @@ tags:
 | 2026-11-03 | 0.2.17 | **`/system/user` 建号的可选等级改由会话等级推导（§7 第 19 行）**：上游 2026-11-03 复测把「只能向下管控」真正落地（同级 / 更高 → `20103`），而页面候选仍写死「租户管理员只有 `1`」——租户管理员在 `?id=new` 只能提交自身等级，建号 100% 报「创建失败」。§7 新增一行「建号等级候选 = 严格低于自己且 ≤ 3，且真能建成」并落成 2 条 `check:ui` 用例（候选集合 = `L2` / `L3`、默认 `L2`；选 `L3` 建号后新行出现且被选中），假上游同步按真实规则拦同级 / 更高与 `L4`，避免自检继续绿灯。领域口径见 `NMCPS-DESIGN-005` 0.5.7，总数 103 → 105。 |
 | 2026-11-04 | 0.2.18 | **`/system/log` 按新代 `audit/*` 三族重写，§7 第 17 行的断言随之改写（8 → 11 项，总数 105 → 106）**：常驻枚举从「类别」换成「日志族」，请求参数不再是 `startTime` / `endTime` / `category`，而是各族自己的 epoch 毫秒边界（操作日志 `created_from` / `created_to`，安全日志 `logged_from` / `logged_to`），日历选日收敛到整日 `00:00:00` … `23:59:59`；新增「切族真的换端点」「归档族不设时间条件」「选中行走族详情端点」三条断言，第 18 行的 `pageSize=15` 更正为 `page_size=15`。 |
 | 2026-11-04 | 0.2.19 | **§7 第 19 行按新代 `iam/users` 改写（建号归属只剩「部门」）**：等级候选行随「等级模型整体退役」（`NMCPS-DESIGN-005` 0.6.0 缺口 G1）作废，`POST /iam/users` 实测既无 `tenant_id` 也无 `accountLevel`，表单只剩「所属部门」一个下拉；行内断言换成 `check:ui` 实测的两条（表单恰 1 个 combobox 且含「所属部门」、提交后新行 `u_uicheck-ops` 出现并选中）。顺带修正计数：`/system/user` 实为 24 项（原写 22 项，漏记 0.2.15~0.2.17 新增的建号用例），覆盖行补上第 19 行；覆盖页缺口句同步「`PUT` / `DELETE` 已存在但页面无 `edit` 表单」，删号确认弹窗落地而断言待补。 |
+| 2026-11-04 | 0.2.20 | **§3.8 撤销「`/system/policy` 客户端分页」例外**：该例外存在的唯一理由是旧代规则列表没有 `keyword`，只能先全量拉取再在客户端过滤。新代 `iam/policies` 自带 `keyword` / `page_size`（`NMCPS-DESIGN-005` §7.1，0.8.0），动机消失 → `/system/policy` 回到服务端分页，四个列表页（user / policy / permission / log）分页口径重新统一，`?id` 深链命中仍只对当前 `rows` 生效（§5.2）。本轮为文档同步，`check:ui` 用例数不变（106）。 |

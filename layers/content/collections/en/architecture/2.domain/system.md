@@ -12,7 +12,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.7.0
+version: 0.8.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -32,7 +32,7 @@ tags:
 
 > **Responsibility**: single authority for `domain.system` — system logs, policy management, user and permission management. IAM architecture: `NMCPS-ARCH-003`.
 > **Audience**: implementation engineers / AI assistants.
-> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1`. **§6 was rewritten against `iam/users` in 0.6.0 and §9 against the `audit/*` families in 0.7.0**; §7 / §8 (`/api/v1/role`, `/api/v1/permission`, `/api/v1/abac/rule`, `/api/v1/access/dryrun`) are still old generation and must be rewritten against the `iam` namespace; until then, live probing wins, and the switch record is indexed by `NMCPS-GOV-003`.
+> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1`. **§6 (0.6.0, `iam/users`), §7 / §8 (0.8.0, `iam/{policies,roles,role-policies,subject-roles}`) and §9 (0.7.0, the `audit/*` families) are all rewritten against the new generation**; old-generation conclusions survive only as history in `NMCPS-REC-001`–`004` (`status: superseded`). Field mappings and capability gaps: `NMCPS-ADR-0018`.
 
 ---
 
@@ -155,130 +155,151 @@ Upstream missing / unreachable / timeout reuse the operational guidance from `up
 
 ## 7. `/system/policy` policy management (implementation baseline)
 
-> Source: probing `http://192.168.1.55:8888/api/v1` on 2026-11-01 with both identities (super admin / tenant admin) plus a swagger diff. Contract deviations are filed as `NMCPS-REC-003` (`layers/content/collections/en/records/defects/policy-upstream-defects.md`); this section only states what the page may rely on. Page role and toolbar conventions: `NMCPS-ADR-0017`.
+> Source: probing `http://192.168.1.55:8888/api/v1` on 2026-11-04 with three sessions (platform super admin / tenant admin / role-less account) plus an openapi diff. Contract deviations are filed as `NMCPS-REC-005` (`layers/content/collections/en/records/defects/iam-policy-upstream-defects.md`); this section only states what the page may rely on. Page role and toolbar conventions: `NMCPS-ADR-0017`.
 
 ### 7.1 Data sources and endpoints
 
 | Capability | BFF path | Upstream | Notes |
 | :--- | :--- | :--- | :--- |
-| Rule list | `GET /api/abac/rule` | `GET /api/v1/abac/rule` | Only `page` / `pageSize`; there is no `keyword`, no `status` / `roleCode` filter |
-| Authorization dry run | `POST /api/access/dryrun` | `POST /api/v1/access/dryrun` | Pure computation, nothing is persisted; only `accountId` / `path` / `method` are required |
-| Dry-run account options | `GET /api/account` | `GET /api/v1/account` | Reuses the account list (`pageSize` capped at 100) and takes the first entries for the picker |
+| Policy list | `GET /api/iam/policies` | `GET /api/v1/iam/policies` | Only `page` / `page_size` / `keyword` are honoured; `code` / `policy_type` / `enabled` are **silently ignored** (UP-RBAC-06) |
+| Create policy | `POST /api/iam/policies` | Same | Body `name` / `code` / `policy_type` / `document` / `description`; success returns `200 { code: 0, message, id }` with `id` at the **top level** as a UUID |
+| Policy detail | `GET /api/iam/policies/{id}` | Same | Missing record → **HTTP 400 + plain text** `记录不存在` (not an envelope) |
+| Update policy | `PUT /api/iam/policies/{id}` | Same | `name` / `document` / `description` apply; `enabled` is ignored (UP-RBAC-03) |
+| Delete policy | `DELETE /api/iam/policies/{id}` | Same | Success `200 {code:0}`; failure returns **HTTP 200 with `code: 400`** (UP-RBAC-05); system policies are deletable too (UP-RBAC-02) |
+| Attach / detach policy | `POST /api/iam/role-policies/{AttachPolicy,DetachPolicy}` | Same | Body `role_id` + `policy_id`; detach is idempotent, a duplicate attach returns a 400 with raw SQL text |
 
-- **No rule write endpoint is usable**: `POST /api/abac/rule` exists, but `PUT` / `PATCH` / `DELETE /abac/rule/{id}` all return `404` (UP-POL-01). A rule that can never be changed or removed is worse than none, so the page **offers no create entry**.
-- Enabling / disabling a rule has no dedicated endpoint; `status` can only be changed in the upstream database, so the page renders it read-only.
-- `path` must carry the `/api/v1` prefix to hit RBAC evaluation: the page hard-codes that guidance in the `path` hint and never auto-prefixes the value (that would hide what the user actually typed).
-- The BFF allowlist must include `abac` / `access` / `account` (`GATEWAY_RESOURCES` in `shared/types/api.ts`), otherwise every call is `404 bff_resource_not_allowed`.
+- **The whole ABAC rule segment is retired**: `/abac/rule` does not exist in the new openapi (127 paths), so gap G4 is upgraded from "contract unknown" to "endpoint missing".
+- **The dry run is retired**: `/access/dryrun` is missing as well (gap G5). `POST /iam/policies` is plain CRUD and offers no "who can do what on this path" computation.
+- The policy ↔ role relation is an **independent resource** (`role-policies`); the policy object carries no aggregated `role_count`-style field.
+- The BFF allowlist already contains `iam` (`GATEWAY_RESOURCES` in `shared/types/api.ts`); this section adds no resource name.
 
 ### 7.2 Field semantics
 
-- `ruleId`: numeric primary key, used as list key and as the `useRecordSelection` record id; ties on `priority` break on it ascending (`byAbacPriority()`).
-- `ruleCode`: unique; a duplicate create returns `409 10302` (UP-POL-02). Read-only in the UI.
-- `roleCode`: **an empty string means a global rule**, not `null` (upstream convention). The page renders it as a "global" badge, never as "—".
-- `conditionDsl`: a govaluate expression that upstream **does not parse or validate** (a malformed value still returns `200`, UP-POL-02), so the page shows it verbatim with a copy action — no editing, no "format" or "fix it" affordance.
-- `priority`: lower matches first. The list sorts ascending, ties broken by `ruleId`.
-- `status`: only `1` (enabled) / `2` (disabled) were observed (`POLICY_STATUS`). Those two are mapped; any other value goes through `pages.system-policy.status.unknown` with the raw value interpolated (`policyStatusKey()` + `{status}`) — the page never guesses what `0` means.
-- `createdAt`: rendered as returned, no time-zone conversion.
+- `id`: UUID. Seed rows look like `pol_platform_full`, so **the prefix says nothing about provenance** — treat the value as opaque.
+- `code`: unique per tenant (constraint `uk_sys_policy_tenant_code`), reusable across tenants — `tenant.full_access` is measured once per tenant, 10 rows in total.
+- `policy_type`: openapi declares no enum; all 10 measured rows are `system`. The page renders the raw value; an unknown type is shown as-is rather than mapped to "other".
+- `document`: a **JSON string** (not an object), e.g. `[{"Action":["*"],"Effect":"Allow","Resource":["*"]}]`. Upstream stores it as jsonb: invalid JSON returns `400` plus a raw PG error `22P02` (UP-RBAC-04) and there is no semantic validation. The page offers a formatted preview plus copy, falls back to the raw text when parsing fails, and **never ships an editor** (a broken document is dirty data).
+- `enabled`: always `true` in list and detail — `PUT` with `enabled: false` returns 200 but the value does not change (UP-RBAC-03). Rendered read-only, no toggle.
+- `is_system`: `true` for seed policies. **It is not a protection**: `DELETE` succeeds on system policies as well (UP-RBAC-02), so the page uses the flag as a badge only and says so in the delete confirmation.
+- `tenant_id`: present on seed rows; a created policy lands in the **session tenant** (even a platform super admin gets `tnt_default`) and the body does not accept the field (UP-RBAC-08).
+- `created_at` / `updated_at`: RFC3339 with a `+08:00` offset; rendered as returned, no time-zone conversion.
 
 ### 7.3 Permission matrix (measured)
 
-| Action | Super admin (`accountLevel: 0`) | Tenant admin (`accountLevel: 1`) |
+| Action | Platform super admin (session `tenant_id = null`) | Tenant admin | Role-less account |
+| :--- | :--- | :--- | :--- |
+| Policy list / detail | Available, all 10 rows | Available, own tenant's 3 rows | **Available** (own tenant scope, UP-RBAC-01) |
+| Create / update / delete policy | Allowed (lands in `tnt_default`) | Allowed (own tenant) | **Allowed** (UP-RBAC-01) |
+| Attach / detach policy | Allowed | Allowed | **Allowed** (UP-RBAC-01) |
+| Enable / disable policy | No working endpoint | Same | Same |
+
+The new generation has **no business-level authorization**: any authenticated session can read and write IAM endpoints, and the visible range is decided by the **session tenant** alone (UP-RBAC-01 / UP-RBAC-09). The old "super admin always gets `401 10201`" domain rejection (UP-POL-08) retired with the old generation and no longer holds.
+
+Client-side convergence (**not a security boundary**, only a way to avoid steering users into upstream gaps):
+
+1. **No identity-based bypass**: a super admin issues the same requests as everyone else (the old "super admin sends no request" rule is void); `401` now only means "missing credentials / expired token".
+2. No enable / disable entry: the `enabled` write is ignored, and a toggle would only fake an effect.
+3. System policies keep their delete entry, but the confirmation must state "upstream does not protect system policies; deletion cannot be undone".
+4. Search goes to the server via `keyword` (no more fetch-all-then-filter), which **revokes** the `NMCPS-ARCH-006` §3.8 "client-side paging for `/system/policy`" exception: server paging is used again, with the page supplying `DEFAULT_PAGE_SIZE` because upstream caps nothing.
+5. The policy document is display-and-copy only: upstream validates no syntax, and the page never implies "validated".
+
+### 7.4 Failure shapes → page handling
+
+The new generation has almost no business error codes, so failures are told apart by **HTTP status + response shape**, normalised at the BFF boundary into `{ code, message }`:
+
+| Upstream shape | Meaning | Page handling |
 | :--- | :--- | :--- |
-| Rule list / dry run | **Always `401 10201`**: the policy domain is closed to super admins (UP-POL-08) | Available (own tenant domain) |
-| Create / update / delete / toggle a rule | Endpoints do not exist (UP-POL-01) | Same |
-| Keyword search | Not offered | Client-side filter (upstream has no `keyword`; adjacent to UP-POL-04) |
-
-Client narrowing (**not a security boundary**, only avoids steering users into upstream gaps):
-
-1. A super admin **issues no request at all** on this page; only the identity notice is rendered (top of the detail pane, also with nothing selected; otherwise every visit logs a `401`).
-2. No write entry exists: a rule can be neither updated nor deleted, and the DSL is not validated — a typo can only be fixed in the database.
-3. Search happens client-side: rules are paged in fully first (bounded by `MAX_RULE_PAGES`) and then filtered over `ruleCode` / `ruleName` / `roleCode` / `conditionDsl`; when filtering drops the selected record the page shows "not in current results" and **never silently rewrites the query**. Pagination is client-side too: the page-size selector and the paginator both live in the list footer (15 by default, `NMCPS-ARCH-006` §3.8) and the slice only affects rendering — hit-testing and `?id` deep links still run against every loaded rule, so paging never turns a valid deep link into "record not found".
-4. The dry-run form only exposes `accountId` / `path` / `method`: the other four fields are accepted but ignored by upstream (UP-POL-06), so showing them would be a lie.
-
-### 7.4 Error codes → page handling
-
-| Code | Upstream meaning | Page handling |
-| :--- | :--- | :--- |
-| `10201` | Unauthenticated / domain reject (always for super admins) | Identity notice, never the "load failed" branch |
-| `10302` | `ruleCode` already exists | Not reachable from list / dry run; message reads "rule code already exists" |
-| `10101` | Invalid parameters | "invalid parameters" notice, user input preserved |
-| `10509` | Upstream internal error | Generic failure notice plus retry |
-
-Upstream missing / unreachable / timeout reuse the operational guidance from `upstreamHintKey()` (same wording as the login page and `/system/user`).
+| `200 {code:0,message,id}` | Create succeeded | Close the dialog, refetch, select the new record |
+| `200 {code:0,message}` | Update / delete / attach / detach succeeded | Refetch the list (or refresh the relation in place) |
+| `200 {code:400,message:"资源不存在或无权访问"}` | Delete failed (**transport is still 200**) | Treat as failure: notify and refetch (the record may be gone) |
+| `400` plain text `记录不存在` | Detail / update target missing | "This policy has been deleted" plus clearing the selection |
+| `400` plain text containing `SQLSTATE 23505` | Duplicate `code` | Inline "policy code already exists"; the raw SQL text must **never** reach the user |
+| `400` plain text containing `SQLSTATE 22P02` | `document` is not valid JSON | "The policy document must be valid JSON" |
+| `400` plain text containing `SQLSTATE 23503` | Attached `role_id` / `policy_id` missing | "The policy or role no longer exists, please refresh" |
+| `401 {code:40101}` / `{code:10007}` | Missing credentials / expired token | Session invalid (`SESSION_INVALID_CODES` must contain `40101` / `10007`) |
+| No response / timeout | Upstream not configured or unreachable | The operational guidance from `upstreamHintKey()` |
 
 ### 7.5 Known gaps
 
-`UP-POL-01` / `02` / `04` / `06` / `08` in `NMCPS-REC-003`: no rule lifecycle endpoints, the DSL is not validated, the list has no `keyword`, the dry run ignores context, and super admins are rejected by the domain. The page relies only on the three confirmed capabilities (list, dry run, account options) and treats none of the gaps as contract.
+`UP-RBAC-01`–`UP-RBAC-10` in `NMCPS-REC-005`: no authorization check, deletable system objects, `enabled` writes ignored, raw SQL in 400s, delete failures carried by a 200, incomplete filters with an uncapped `page_size`, missing required-field validation, ignored `tenant_id` input, unchecked cross-tenant grants, and orphan relation rows. The page relies only on the confirmed "list + detail + create/update/delete + attach/detach" set and treats none of the gaps as contract.
+
 ---
 
-## 8. `/system/permission` permission management (implementation baseline)
+## 8. `/system/permission` roles and grants (implementation baseline)
 
-> Same source. Contract deviations are filed as `NMCPS-REC-003`; this section only states what the page may rely on. Page role and toolbar conventions: `NMCPS-ADR-0017`.
+> Same source. Contract deviations are filed as `NMCPS-REC-005`; this section only states what the page may rely on. Page role and toolbar conventions: `NMCPS-ADR-0017`.
 
 ### 8.1 Data sources and endpoints
 
 | Capability | BFF path | Upstream | Notes |
 | :--- | :--- | :--- | :--- |
-| Role list | `GET /api/role` | `GET /api/v1/role` | `page` / `pageSize` / `keyword`; no status filter |
-| Create role | `POST /api/role` | Same | `roleCode` / `roleName` / `roleLevel` required, `description` optional |
-| Delete role | `DELETE /api/role/{roleCode}` | Same | Path segment is **`roleCode`**, not `roleId`; built-in roles return `40303` |
-| Permission catalog | `GET /api/permission` | Same | `page` / `pageSize` / `keyword` / `resourceType`; only 24 rows measured, safe to page in fully |
-| Role grants | `GET /api/role/{roleCode}/permission` | Same | **Does not return `effect`** (UP-POL-03) |
-| Grant | `POST /api/role/{roleCode}/permission` | Same | Body `{ permCode, effect }`; the page only sends `effect=1` (allow) |
-| Revoke | `DELETE /api/role/{roleCode}/permission` | Same | Body `{ permCode }`; `effect` is meaningless for a delete |
+| Role list | `GET /api/iam/roles` | `GET /api/v1/iam/roles` | `page` / `page_size` / `keyword` / `code`; `enabled` / `tenant_id` are silently ignored |
+| Create role | `POST /api/iam/roles` | Same | Body `name` / `code` / `description`, **none of them required** (an empty body still returns `200` and stores an empty role, UP-RBAC-07) |
+| Role detail | `GET /api/iam/roles/{id}` | Same | Missing → `400` plain text `记录不存在` |
+| Update role | `PUT /api/iam/roles/{id}` | Same | `name` / `description` apply; `enabled` is ignored |
+| Delete role | `DELETE /api/iam/roles/{id}` | Same | No built-in protection (system roles return 200 as well, UP-RBAC-02); failure shapes as in §7.4 |
+| Policy catalogue | `GET /api/iam/policies` | Same | Grant-matrix data source, semantics in §7 |
+| Policies attached to a role | `GET /api/iam/role-policies?role_id=` | Same | Returns relation rows only `{ id, role_id, policy_id, created_at }`, **no policy body** → the client joins by `policy_id` |
+| Attach policy | `POST /api/iam/role-policies/AttachPolicy` | Same | Body `role_id` + `policy_id`; duplicate attach → `400` with `SQLSTATE 23505` |
+| Detach policy | `POST /api/iam/role-policies/DetachPolicy` | Same | Idempotent (a repeated detach still returns `200`) |
+| Roles assigned to a subject | `GET /api/iam/subject-roles?subject_id=` | Same | Returns relation rows only `{ id, subject_type, subject_id, role_id, created_at }` |
+| Assign / revoke role | `POST /api/iam/subject-roles/{AssignRole,RevokeRole}` | Same | Body `subject_type` (measured `user`) / `subject_id` / `role_id` |
 
-- **No role status endpoint exists** (`PUT /api/v1/role/{code}/status` is absent); `status` can only be changed in the database, so the page offers no enable / disable action (UP-POL-01).
-- **`POST /api/permission` exists but delete does not**: the page treats the permission catalog as read-only (UP-POL-01).
-- `GET /account/role?accountId=` **does not exist** (`404`), so no account↔role binding view is offered (UP-POL-07).
+- **No permission-point catalogue** (gap G3): `/permission` does not exist in the new openapi and permission points are expressed by a policy's `document.actions` → the grant matrix moves from "permission × role" to "**policy × role**", which is a rewrite rather than a migration.
+- **No role enable / disable endpoint**: `PUT /iam/roles/{id}` with `enabled` has no effect (UP-RBAC-03).
+- `roleLevel` / `isBuiltin` / `status` retire together with the level model (gap G1); `is_system` takes over the **semantic badge** of "built-in" without any protection.
+- Account ↔ role is now symmetric (old `UP-POL-07` closed): reads go through the `subject-roles` list, writes through `AssignRole` / `RevokeRole`.
 
 ### 8.2 Field semantics
 
-- `roleCode`: unique; a duplicate returns `409 10302`. Used as the `useRecordSelection` id and never numeric-coerced.
-- `roleLevel`: `0` platform super admin / `1` tenant admin / `2`–`4` custom. A tenant admin may create `2`–`4`; the same or a higher level returns `20103`, and `>4` returns `40308` (upstream does not distinguish the two, UP-POL-05).
-- `isBuiltin`: built-in roles are **read-only** — grant `40307`, revoke `40305`, delete `40303` (three codes for one meaning, UP-POL-09). The page disables the toggles and the delete entry and states the reason.
-- `status`: same as above — only `1` (enabled) / `2` (disabled) were observed (`POLICY_STATUS`), rendered read-only; any other value goes through `pages.system-permission.status.unknown` with the raw value interpolated.
-- `createdAt`: `GET` returns UTC while `POST` returns local time (UP-POL-10), so it is rendered as returned with no conversion.
-- Permissions: `permCode` (e.g. `asset:device:read`), `permName`, `resourceType` (`0` is treated by upstream as "not provided", so the page never sends `0`; `4` means API and gets its own column on the right) and `description`.
-- The grant list contains **only the permission bodies**: presence means "granted", with no way to tell allow from deny (UP-POL-03), so the page only expresses `ALLOW` and never shows a deny toggle.
+- `id`: UUID; seed rows look like `r_tenant_admin`. Treated as an opaque string and used directly as the `useRecordSelection` identifier — never numericised.
+- `code`: unique per tenant (`uk_sys_role_tenant_code`), reusable across tenants — `tenant_admin` is measured once per tenant, 10 rows in total.
+- `is_system`: `true` on seed roles, `false` on created ones. Used for badges and copy only.
+- `enabled`: always `true` (writes are ignored), rendered read-only.
+- `tenant_id`: absent on the platform role, present on tenant roles; platform roles do not appear in a tenant admin's list.
+- `description`: may be an empty string; rendered as "—" when empty.
+- `created_at` / `updated_at`: RFC3339 with an offset, rendered as returned.
+- A relation row's `id` is a UUID with no semantics; the page uses it as a `key` only.
+- Grants have **no effect dimension**: a `role-policies` row means "attached", its absence "not attached" (the old "deny is invisible" problem, `UP-POL-03`, disappeared with the field, so the page no longer explains it).
 
 ### 8.3 Permission matrix (measured)
 
-| Action | Super admin (`accountLevel: 0`) | Tenant admin (`accountLevel: 1`) |
+| Action | Platform super admin | Tenant admin | Role-less account |
+| :--- | :--- | :--- | :--- |
+| Role / policy list | Available, all 10 / 10 rows | Available, own tenant's 3 / 3 rows | **Available** (own tenant scope, UP-RBAC-01) |
+| Create / update / delete role | Allowed (lands in `tnt_default`) | Allowed (own tenant) | **Allowed** (UP-RBAC-01) |
+| Attach / detach policy, assign / revoke role | Allowed | Allowed | **Allowed** |
+| Cross-tenant role assignment | — | **Measured as allowed**: assigning `r_platform_admin` to its own user returns `200` (UP-RBAC-09, reversible) | Same |
+| Enable / disable role | No working endpoint | Same | Same |
+
+Client-side convergence (**not a security boundary**):
+
+1. No identity-based bypass: the new generation has no domain rejection, so all three pages issue the same requests and the session tenant decides the visible range.
+2. No role enable / disable: `enabled` writes have no effect, so it is read-only.
+3. Deleting a system role or policy asks for confirmation and states "upstream does not protect system objects".
+4. Grants become **policy checkboxes**: candidates come from `GET /iam/policies` (3 rows in a tenant), the checked state is the `policy_id` set from `GET /iam/role-policies?role_id=`, and writes use `AttachPolicy` / `DetachPolicy` with optimistic updates, rollback on failure and de-duplication on `role_id + policy_id`.
+5. The create-role form requires all three fields on the client: an empty body succeeds upstream, so letting it through only produces dirty data (UP-RBAC-07).
+6. The role ↔ user block is read + assign + revoke only; accounts are never created here and the user picker comes from `/api/iam/users`. Orphan `subject-roles` rows pointing at deleted users are filtered out against `/iam/users` existence (UP-RBAC-10) so no ghost member is rendered.
+7. The detail pane keeps the `NMCPS-ARCH-006` §3.2 / §3.7 layout: in `view` state, "role info" left and "attached policies" right, decided by a container query (`@min-[48rem]`). The matrix now holds 3 tenant policies instead of 24 permission points, so **whether 50/50 still fits is checked with a real screenshot during implementation** (fall back to a single column if too short); the baseline stays 50/50.
+
+### 8.4 Failure shapes → page handling
+
+Same family as §7.4, only the copy differs:
+
+| Upstream shape | Meaning | Page handling |
 | :--- | :--- | :--- |
-| Role / permission lists | **Always `401 10201`** (UP-POL-08) | Available (own tenant domain) |
-| Create role | Same | `2`–`4` allowed; `0` / `1` → `20103` |
-| Delete role | Same | Custom roles only; built-in → `40303` |
-| Grant / revoke | Same | Allowed; built-in roles → `40307` / `40305` |
-| Enable / disable role | Endpoint does not exist (UP-POL-01) | Same |
-
-Client narrowing (**not a security boundary**):
-
-1. A super admin **issues no request at all** on this page; only the identity notice is rendered (top of the detail pane, also with nothing selected).
-2. The level picker narrows by identity: a tenant admin only gets `2`–`4` (`0` / `1` would always be rejected with `20103`).
-3. Grant toggles and delete buttons on built-in roles are disabled (`aria-disabled` plus a tooltip), not "click first, error later".
-4. Grant toggles update **optimistically**: the UI flips first and rolls back with a notice on failure; in-flight requests are deduplicated per `roleCode + permCode`.
-5. No permission create / delete and no role enable / disable: the endpoints do not exist, so the entry would only ever fail.
-6. The detail pane's view state splits into **two equal columns**: role facts on the left (title, fields, built-in notice) and the grant matrix on the right, 50% each and filling the container (no `max-w`). The matrix itself is back to two columns: resource permissions (`resourceType` ≠ `4`) left, API permissions (`4`) right, order fixed, grouped by `resourceType` within each column and sorted stably by `permCode`. The decision is a **container query** (`@min-[48rem]`, never a viewport breakpoint — see `NMCPS-ARCH-006` §3): below the threshold both sides stack (fields first, matrix after) and the matrix collapses to single-column groups. API entries dominate the catalog (15 of 24 measured on 2026-11-02), and the two columns keep "device / metric / MIB / alert" off the bottom of the list.
-
-### 8.4 Error codes → page handling
-
-| Code | Upstream meaning | Page handling |
-| :--- | :--- | :--- |
-| `10201` | Unauthenticated / domain reject (always for super admins) | Identity notice, never the "load failed" branch |
-| `10302` | `roleCode` already exists | Inline error on `roleCode` |
-| `20103` | Level not lower than the caller's | Form-level "you can only create roles below your own level" |
-| `40308` | `roleLevel` out of range | Form-level "level out of range (2–4)" |
-| `40303` | Built-in role cannot be deleted | Row notice "built-in roles cannot be deleted" |
-| `40305` | Built-in role grants cannot be revoked | Toggle rolls back with "built-in role grants are fixed" |
-| `40307` | Built-in role cannot be granted | Same as above |
-| `10509` | Upstream internal error (missing field) | Generic failure notice plus required-field check |
-| `10101` | Invalid parameters | "invalid parameters" notice, user input preserved |
-
-Upstream missing / unreachable / timeout reuse the operational guidance from `upstreamHintKey()`.
+| `200 {code:400,message}` | Role delete failed (transport 200) | Notify and refetch the list |
+| `400` plain text `记录不存在` | Detail / update target missing | "This role has been deleted" plus clearing the selection |
+| `400` plain text containing `SQLSTATE 23505` | Duplicate `code` (create role / duplicate attach) | Create: inline "role code already exists"; attach: notify and refetch the relation |
+| `400` plain text containing `SQLSTATE 23503` | Attach target missing | "The policy no longer exists, please refresh" |
+| `401 {code:40101}` / `{code:10007}` | Missing credentials / expired token | Session invalid |
+| No response / timeout | Upstream not configured or unreachable | The operational guidance from `upstreamHintKey()` |
 
 ### 8.5 Known gaps
 
-`UP-POL-01` / `03` / `05` / `07` / `08` / `09` / `10` in `NMCPS-REC-003`: no role enable / disable or permission delete, grants cannot be read back with `effect`, privilege escalation and out-of-range levels share wording, account↔role is write-only, super admins are rejected by the domain, built-in roles return three different codes, and time zones are inconsistent. The page relies only on the seven confirmed endpoints and treats none of the gaps as contract.
+`UP-RBAC-01`–`UP-RBAC-10` in `NMCPS-REC-005`; gaps G1 (no level model) and G3 (no permission catalogue) are confirmed at this document level, which is why `/system/permission` is rewritten from a "permission-point matrix" into "policy grants". The page relies only on the nine confirmed endpoints and treats none of the gaps as contract.
+
+---
 
 ---
 
@@ -371,4 +392,4 @@ The new generation returns business errors as **HTTP 200 + `code≠0`**; the BFF
 | 2026-11-03 | 0.5.7 | **§6 account-creation rules corrected from the 2026-11-03 re-probe (fixes "tenant admin can never create an account")**. Symptom: a tenant admin on `?id=new` saw only level `1` (its own) in the picker, and every submit returned `20103 can only manage downwards` — the level select had no viable option. Three measured facts: (1) the target level must be **strictly lower than the caller's own** (super admin `1`–`3`, tenant admin `2`–`3`); same or higher → `20103`, and `4` → `20102` (service accounts are provisioned by the system); (2) `POST /account` now requires `tenantId` (`0` counts as missing), so a super admin omitting it fails with `10101` — the form therefore gains a tenant picker fed by `GET /api/tenant`; (3) `UP-ACC-01` (tenant escalation) is closed upstream, so §6.5 and `NMCPS-REC-002` are updated and `UP-ACC-07` (mandatory `tenantId`) / `UP-ACC-08` (`4` belongs to service accounts) are filed. §6.1 adds the tenant endpoint, §6.2 rewrites level semantics, §6.3 rewrites the matrix and adds client narrowing items 1–2, §6.4 adds `20102` / `20103`. |
 | 2026-11-04 | 0.6.0 | **§6 user management rewritten against the new `iam/users` (C4a)**: the endpoint table becomes `GET|POST /iam/users`, `GET|PUT|DELETE /iam/users/{id}`, `GET /iam/tenants` and `GET /iam/departments`; field semantics switch to snake_case (`id` / `username` / `display_name` / `status: active|disabled|locked` / `mfa_enabled` / `tenant_id` / `department_id`), `pageSize` → `page_size`, and the empty `list: null` is normalised to `[]` at the BFF exit; **the level model (`accountLevel`) retires wholesale** (gap G1) and ownership at creation is expressed through a department (`POST /iam/users` has no `tenant_id`, as measured); deletion is new (`DELETE`, soft delete via `deleted_at`, closing `UP-ACC-04`) and the list now carries tenant attribution (`UP-ACC-05` closed); the error-code table becomes the measured `10002` / `40001` / `10003` / `10007` / `10301` set and the password policy the measured \"6-128 characters\"; the `POST /access/dryrun` entry and its dialog retire with gap G5. |
 | 2026-11-04 | 0.7.0 | **§9 rewritten against the new `audit/*` families (C4b)**: the old single endpoint `GET /audit?category=…` plus `POST /audit/verify` and `GET|POST /audit/export` is retired wholesale in favour of six read paths split by log family plus one write path — operation logs `GET /audit/operation-logs`, security logs `GET /audit/security-logs`, archive records `GET /audit/archive/records` (each with its own detail endpoint) and `POST /audit/archive/run`. The primary key moves from `logCode` to `id` (UUID), paging from `pageSize` to `page_size`, time bounds from strings to **epoch-millisecond integers** (`created_from` / `created_to`, `logged_from` / `logged_to`), and the empty `list: null` is normalised to `[]` at the BFF exit. The page becomes "three families, one page": a log-family `USelect` stands in the left area, the popover only holds that family's openapi parameters, and the archive family folds the range control away. Verification and export entries retire with gaps G6 / G7 and the archive dialog replaces export; the error-code table becomes `40401` / `10007` / `40001` (the old `10201` now means "wrong password"). Field semantics are layered honestly: archive-record fields are measured, operation / security entry fields have no real samples yet, so the page renders registered fields only and lists unregistered ones raw. The `/system/log` cases in `check:ui` go 8 → 11 (family switch swaps endpoint and time parameters, the archive family sends no time condition, selecting a row hits the family detail endpoint) and the total goes 105 → 106; the empty-list normalisation path in `check:bff` moves to `operation-logs`. |
-
+| 2026-11-04 | 0.8.0 | **§7 / §8 rewritten against the new `iam` namespace (C4c)**: the policy section moves from "read-only `/abac/rule` inspection plus `/access/dryrun`" to policy CRUD — list / create / detail / update / delete on `GET|POST /iam/policies` and `GET|PUT|DELETE /iam/policies/{id}`, with attach / detach on the independent `POST /iam/role-policies/{AttachPolicy,DetachPolicy}` — and the ABAC segment plus the dry-run button retire as gaps G4 / G5 are upgraded from "contract unknown" to "endpoint missing". The role section moves from "`roleCode` path + `roleLevel` + permission catalogue" to UUID-keyed `GET|POST /iam/roles` and `GET|PUT|DELETE /iam/roles/{id}`, the grant matrix is rewritten from "permission × role" to "policy × role" (gap G3 confirmed: `/permission` is absent from the new openapi), and account ↔ role becomes symmetric through the three `subject-roles` endpoints (old `UP-POL-07` closed). Three old rules are voided by measurement: ① the "super admin always gets `401 10201`" domain rejection no longer exists — any authenticated session, including a role-less account, can read and write IAM endpoints and only the session tenant limits the visible range (`UP-RBAC-01` / `UP-RBAC-09`), so the client no longer bypasses requests by identity; ② `enabled` writes are ignored (`UP-RBAC-03`), so there is no enable / disable affordance; ③ the list honours `keyword`, which revokes the "fetch-all plus client-side paging" exception and restores server paging. Failure handling now dispatches on **HTTP status + response shape** (`200 {code:400}`, plain-text `400 记录不存在`, `400` with a raw `SQLSTATE`) and states that raw SQL must never reach the user. Upstream defects move from `NMCPS-REC-003` (old generation, `superseded`) to `NMCPS-REC-005`. |

@@ -51,7 +51,8 @@ export const DOC_PATHS = {
 	"NMCPS-REC-001": "layers/content/collections/cn/records/defects/auth-upstream-defects.md",
 	"NMCPS-REC-002": "layers/content/collections/cn/records/defects/account-upstream-defects.md",
 	"NMCPS-REC-003": "layers/content/collections/cn/records/defects/policy-upstream-defects.md",
-	"NMCPS-REC-004": "layers/content/collections/cn/records/defects/audit-upstream-defects.md"
+	"NMCPS-REC-004": "layers/content/collections/cn/records/defects/audit-upstream-defects.md",
+	"NMCPS-REC-005": "layers/content/collections/cn/records/defects/iam-policy-upstream-defects.md"
 } as const;
 
 export type DocId = keyof typeof DOC_PATHS;
