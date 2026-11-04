@@ -37,7 +37,7 @@ pnpm typecheck        # type check
 pnpm lint             # ESLint (including i18n key order)
 pnpm check:doc-system # doc-system guard (seven assertions: uniqueness / completeness / closure / acyclicity / tier validity / staleness / CN-EN parity)
 pnpm check:doc-system:selftest # guard self-test: plant four kinds of drift on a temp copy and assert the guard goes red (so an assertion cannot be silently neutered)
-pnpm check:ci-summary # step-summary self-test: pins ci-summary.sh's `--expect "<regex>"` contract (a missing conclusion is an ::error and reddens the step)
+pnpm check:ci-summary # step-summary self-test: eleven assertions pinning ci-summary.sh's `--expect` contract plus the wiring of all seven call sites in ci.yml (the single source of the regexes is scripts/ci-expectations.sh)
 pnpm check:i18n       # copy self-check (ten assertion groups: key sets / no CJK in en values / value shape / placeholders / system-page references / site-wide t() references / no CJK in templates)
 pnpm build:server     # build the BFF artifact first; check:bff consumes .output/server
 pnpm check:bff        # BFF gateway contract (allowlists / verbs / traversal / CORS / envelope / readiness probe / SSE, per NMCPS-ADR-0007 and NMCPS-ADR-0010)
@@ -48,6 +48,6 @@ pnpm check:ui         # page checks (Playwright; needs a running server, default
 
 > `check:ui` takes `CHECK_UI_BASE_URL` to override the target (CI points it at the local build, `http://127.0.0.1:3000`) and `CHECK_UI_SCREENSHOT` to override the screenshot path. CI lives in `.github/workflows/ci.yml` and runs the same three groups.
 
-> Triage CI with `sh scripts/ci-doctor.sh`: with no arguments it summarizes the latest run and job conclusions, `logs [run-id]` fetches the full log with ✅/❌ counts, and `artifacts [run-id]` downloads artifacts into `ci-logs/downloads/`. It requires `gh auth login` on the machine. The step summary is written by `scripts/ci-summary.sh`, which first declares the conclusion line a step must contain via `--expect "<regex>"`; when it cannot find that line it emits `::error` and exits 1 (wired as `|| status=1` in `ci.yml`), so "the check ran but the summary has no verdict" reddens the step instead of degrading silently.
+> Triage CI with `sh scripts/ci-doctor.sh`: with no arguments it summarizes the latest run and job conclusions, `logs [run-id]` fetches the full log with ✅/❌ counts, and `artifacts [run-id]` downloads artifacts into `ci-logs/downloads/`. It requires `gh auth login` on the machine. The step summary is written by `scripts/ci-summary.sh`, which first declares the conclusion line a step must contain via `--expect`; when it cannot find that line it emits `::error` and exits 1 (wired as `|| status=1` in `ci.yml`), so "the check ran but the summary has no verdict" reddens the step instead of degrading silently. The six regexes are defined once in `scripts/ci-expectations.sh` and `ci.yml` only names a key (`--expect "$(sh scripts/ci-expectations.sh <key>)"`); `pnpm check:ci-summary` asserts in reverse that all seven call sites carry `--expect` and end with `|| status=1`.
 
 > Restart the dev server after adding a new collection directory so the `@nuxt/content` watcher picks it up.

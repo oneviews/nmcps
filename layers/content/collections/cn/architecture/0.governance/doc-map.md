@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.8
+version: 0.39.9
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -198,3 +198,4 @@ tags:
 | 2026-11-04 | 0.39.6 | **守卫自测落地**：新增 `pnpm check:doc-system:selftest`（`scripts/check-doc-system.selftest.mjs`）——把 `check-doc-system.ts`、`docIds.ts` 与全部 `.md` 拷进系统临时目录，在副本上制造漂移后跑真脚本，按「退出码 + 报文字样」判定。四个用例：① 原样副本 0 失败；② en doc-map 的 `0.2.22` 改成 `0.2.99` → 1 失败且报文带 `missing` / `extra`；③ en 的 ARCH-006 文档 `version` 改小一版 → 1 失败；④ 删掉 en 的 ARCH-006 → 1 失败。自测已接入 `check:governance` 与 CI 的 governance job，本地 `文档体系自测 4/4 通过`；工作区零改动（每个用例一份干净副本，跑完即删）。自测首轮就复现了一个真 bug：守卫末行用 `process.exit()`，967 行输出写满管道缓冲区时尾部（含 ❌ 与结果行）会被截断——已改为 `process.exitCode`，`check:i18n` / `check:rules` 同步改掉（`check:bff` 保留 `process.exit()`，因为它持有 socket 需要强制终止）。 |
 | 2026-11-04 | 0.39.7 | **CI 摘要前置结论**：`scripts/ci-summary.sh` 不再只贴日志尾部——新增「关键结论」段（抽取 `结果：N 通过 / M 失败 / K 告警`、`文档体系自测 N/M 通过`、`文案自查 N/M 通过`、`N/M 项通过`，最多 8 条）、「失败明细」段（`❌` / `error TS…` / `Error:` 最多 5 条），尾部 40 行收进 `<details>` 默认折叠；无小结行时显式提示。本地用 governance / selftest / i18n / rules 四份真日志与「失败」「无小结」两类假日志验证过（`check:governance` 摘要现为 `967 通过 / 0 失败 / 0 告警` + `4/4` + `30/30` + `34/34` 四行并列）。 |
 | 2026-11-04 | 0.39.8 | **摘要缺失即失败**：`scripts/ci-summary.sh` 增加可选 `--expect "<扩展正则>"`——调用方声明「本步骤日志里必须出现的结论行」，抽不到就 ① 打 `::error` 注解（Runner 的 Annotations 变红）② 在步骤摘要顶部写「预期结论缺失」③ 退出码 1；`ci.yml` 六处调用改成 `… --expect '<正则>' \|\| status=1`（lint `\$ eslint`、typecheck `vue-tsc`、i18n `文案自查 N/M 通过`、governance `结果：N 通过`、BFF `N/M 项通过`、page UI `N/M 项通过`），于是「校验跑通了但摘要抽不到结论」不再静默降级；page UI 的失败分支只补摘要（`\|\| true`），不覆盖真实失败码。新增 `pnpm check:ci-summary`（`scripts/check-ci-summary.mjs`，六个用例：命中 / 未命中 / 不给 `--expect` 的向后兼容 / 非 CI 环境同样生效 / 参数缺值 / 未知选项）并接入 `check:governance`，本地报 `步骤摘要自测 6/6 通过`。 |
+| 2026-11-04 | 0.39.9 | **正则收敛为单一事实源**：六条 `--expect` 正则从 `ci.yml` 内联搬到新文件 `scripts/ci-expectations.sh`（`sh scripts/ci-expectations.sh <key>` 打印正则、`--list` 列出 `key<TAB>正则`、unknown key 退出 2），`ci.yml` 七个调用点改成 `--expect "$(sh scripts/ci-expectations.sh <key>)"`。`pnpm check:ci-summary` 由 6 项扩到 11 项：新增 ⑤ 类静态接线断言——⑦ 每处调用都带该形式 ⑧ 每处以 `\|\| status=1` 收尾（仅已红分支允许 `\|\| true`，靠回溯最近的 `if [ "$status" -ne 0 ]` 判定）⑨ ci.yml 用到的 key 与 `--list` 表双向一致（无死条目、无未登记 key）⑩ 每个 key 解析出非空正则 ⑪ unknown key 报错。负例实测：删掉一行的 `--expect` → 9/11；把 page UI 成功分支的 `\|\| status=1` 改成 `\|\| true` → 10/11。 |
