@@ -12,31 +12,25 @@ import { respondAuth } from "./auth";
  * 缺字段一律 400 `bff_invalid_body`。
  */
 
-export const authLoginSchema = z.object({
-	accountName: z.string().trim().min(1).max(64),
-	password: z.string().min(1).max(128),
-	tenantCode: z.string().trim().min(1).max(64).optional(),
-	mfaCode: z.string().trim().min(4).max(16).optional()
+/**
+ * 新代 iam 登录只接受 `{ username, password }`（NMCPS-ADR-0018 §4.1）：
+ * `accountName` / `tenantCode` / `mfaCode` 一并退场，旧字段名会被上游判非法请求，
+ * 这里用 `strict()` 直接 400，别把旧代报文送出去。
+ */
+export const authLoginSchema = z.strictObject({
+	username: z.string().trim().min(1).max(64),
+	password: z.string().min(1).max(128)
 });
 
 export const authRefreshSchema = z.object({
-	/** Web 端由 BFF 从 cookie 取；桌面端显式提交 */
-	refreshToken: z.string().trim().min(1).optional()
+	/** Web 端由 BFF 从 cookie 取；桌面端显式提交（snake_case，与上游同名） */
+	refresh_token: z.string().trim().min(1).optional()
 });
 
-export const authPasswordSchema = z.object({
-	newPassword: z.string().min(8).max(128),
-	oldPassword: z.string().min(1).max(128).optional(),
-	firstReset: z.boolean().optional()
-});
-
-export const authMfaBindSchema = z.object({
-	/** 1 = TOTP（默认），2 = 生物识别（预留） */
-	mfaType: z.number().int().min(1).max(9).optional()
-});
-
-export const authMfaConfirmSchema = z.object({
-	mfaCode: z.string().trim().min(1).max(16)
+/** `PUT /iam/password` 只认 snake_case（实测 camelCase → 400 `field "old_password" is not set`） */
+export const authPasswordSchema = z.strictObject({
+	new_password: z.string().min(8).max(128),
+	old_password: z.string().min(1).max(128).optional()
 });
 
 function toValidationErrors(error: z.ZodError): ValidationError[] {

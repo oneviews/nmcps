@@ -124,18 +124,17 @@ log("登录页含账号 + 密码输入与提交按钮", loginPage.inputs.include
 // 3.1 演示种子账号默认预填（NMCPS-ARCH-003 §7.7）：演示包开箱即可登录
 const readCredentials = () => page.evaluate(() => ({
 	account: document.querySelector("input[autocomplete='username']")?.value ?? "",
-	password: document.querySelector("input[type='password']")?.value ?? "",
-	tenantCode: document.querySelector("input[autocomplete='off']")?.value ?? ""
+	password: document.querySelector("input[type='password']")?.value ?? ""
 }));
 
 const prefill = await readCredentials();
-log("登录页默认预填超级管理员种子账号", prefill.account === "admin" && prefill.password === "Admin@123456" && prefill.tenantCode === "", `${prefill.account} / ${prefill.password ? "****" : "空"} / tenant=${prefill.tenantCode || "空"}`);
+log("登录页默认预填超级管理员种子账号", prefill.account === "admin" && prefill.password === "Admin@123456", `${prefill.account} / ${prefill.password ? "****" : "空"}`);
 
-// 3.2 一键切换演示身份：账号 / 口令 / 租户编码整体回填
+// 3.2 一键切换演示身份：账号 / 口令整体回填（新代无租户编码，NMCPS-ADR-0018 §4.1）
 await page.getByRole("button", { name: "租户管理员" }).click();
 await page.waitForTimeout(200);
 const tenantPrefill = await readCredentials();
-log("切换演示身份回填租户管理员种子账号", tenantPrefill.account === "tenantadmin" && tenantPrefill.password === "Tenant@123456" && tenantPrefill.tenantCode === "", `${tenantPrefill.account} / ${tenantPrefill.password ? "****" : "空"} / tenant=${tenantPrefill.tenantCode || "空"}`);
+log("切换演示身份回填租户管理员种子账号", tenantPrefill.account === "tenantadmin" && tenantPrefill.password === "Tenant@123456", `${tenantPrefill.account} / ${tenantPrefill.password ? "****" : "空"}`);
 
 await page.getByRole("button", { name: "超级管理员" }).click();
 await page.waitForTimeout(200);
@@ -195,14 +194,14 @@ log("上游就绪时登录页不显示上游缺失提示", !upstreamAlertOnReady
 	}
 }
 
-// 3.3 空表单校验：预填后表单不再为空，须先清空三个字段再提交
-for (const selector of ["input[autocomplete='username']", "input[type='password']", "input[autocomplete='off']"])
+// 3.3 空表单校验：预填后表单不再为空，须先清空两个字段再提交
+for (const selector of ["input[autocomplete='username']", "input[type='password']"])
 	await page.locator(selector).fill("");
 
 await page.locator("button[type='submit']").first().click();
 await page.waitForTimeout(400);
 const validationText = await page.evaluate(() => document.body.textContent ?? "");
-log("空提交显示内联校验提示", validationText.includes("请输入账号") && validationText.includes("请输入密码"), validationText.includes("请输入账号") ? "已提示" : "无提示");
+log("空提交显示内联校验提示", validationText.includes("请输入用户名") && validationText.includes("请输入密码"), validationText.includes("请输入用户名") ? "已提示" : "无提示");
 
 // 4. 登录（假上游签发 token → BFF 落 cookie）；登录页的 `redirect` 应被兑现
 await page.goto(`${BASE_URL}/auth/login?redirect=/dashboard/overview`, { waitUntil: "networkidle" });
@@ -213,34 +212,8 @@ await page.waitForURL((url) => url.pathname === "/dashboard/overview", { timeout
 const afterLogin = new URL(page.url());
 log("登录成功后按 redirect 回到目标页", afterLogin.pathname === "/dashboard/overview", `${afterLogin.pathname}${afterLogin.search}`);
 
-// 4.2 MFA 账号：上游以 `401 20203` 拒绝本次登录 → 登录页必须展开动态口令输入框，补码后成功。
-//     回归守卫：登录页曾只认 `20205`，MFA 已启用的账号因此永远看不到输入框（NMCPS-REC-001 REPO-02）。
-//     仅在自建假上游模式跑：外部实例没有 `mfa-user` 这个探测账号。
-if (upstreamPort) {
-	const mfaContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-	const mfaPage = await mfaContext.newPage();
-	await mfaPage.goto(`${BASE_URL}/auth/login`, { waitUntil: "networkidle" });
-	await mfaPage.locator("input[autocomplete='username']").fill("mfa-user");
-	await mfaPage.locator("input[type='password']").fill(PASSWORD);
-	await mfaPage.locator("button[type='submit']").first().click();
-
-	const otp = mfaPage.locator("input[autocomplete='one-time-code']");
-	await otp.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {});
-	const otpVisible = await otp.isVisible().catch(() => false);
-	const mfaText = await mfaPage.evaluate(() => document.body.textContent ?? "");
-	log("上游 20203 时展开动态口令输入框并给出提示", otpVisible && mfaText.includes("需要动态口令"), `otp=${otpVisible}`);
-
-	await otp.fill("123456");
-	await mfaPage.locator("button[type='submit']").first().click();
-	await mfaPage.waitForURL((url) => url.pathname === "/dashboard/overview", { timeout: 20_000 }).catch(() => {});
-	const mfaLanding = new URL(mfaPage.url()).pathname;
-	log("补齐动态口令后登录成功", mfaLanding === "/dashboard/overview", mfaLanding);
-	await mfaContext.close();
-}
-
-// 4.3 强制改密：上游 `mustResetPassword: true` 不拦接口（纯前端约定），客户端必须把人送去
-//     专用改密页 `/auth/change-password`，改完强制重登 —— 否则初始口令能一直用下去。
-//     回归守卫：登录页此前只把标志塞进 ref 后立刻跳看板，警告永远不显示。
+// 4.2 自助改密：新代登录不再带 `mustResetPassword`（NMCPS-ADR-0018 缺口 G2），登录后直接进看板；
+//     改密走 `/auth/change-password`，改完强制重登。MFA 绑定流程随上游缺口 G8 一并下线，不再覆盖。
 if (upstreamPort) {
 	const changeContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 	const changePage = await changeContext.newPage();
@@ -248,9 +221,11 @@ if (upstreamPort) {
 	await changePage.locator("input[autocomplete='username']").fill("reset-user");
 	await changePage.locator("input[type='password']").fill(PASSWORD);
 	await changePage.locator("button[type='submit']").first().click();
-	await changePage.waitForURL((url) => url.pathname === "/auth/change-password", { timeout: 20_000 }).catch(() => {});
+	await changePage.waitForURL((url) => url.pathname === "/dashboard/overview", { timeout: 20_000 }).catch(() => {});
 	const changeLanding = new URL(changePage.url()).pathname;
-	log("mustResetPassword 登录后落到专用改密页", changeLanding === "/auth/change-password", changeLanding);
+	log("登录不再被强制改密拦截（新代无 mustResetPassword）", changeLanding === "/dashboard/overview", changeLanding);
+
+	await changePage.goto(`${BASE_URL}/auth/change-password`, { waitUntil: "networkidle" });
 
 	const changeText = await changePage.evaluate(() => document.body.textContent ?? "");
 	const hasFields = await changePage.locator("input[autocomplete='current-password']").count() === 1
@@ -303,7 +278,7 @@ if (upstreamPort) {
 	const shortText = await submitChange(PASSWORD, "Short7!", "Short7!");
 	log("新密码不足 8 位时内联拦下", shortText.includes("新密码至少 8 位"));
 
-	// 旧口令错是真的打到上游（`400 20201`）：必须点名「当前密码不正确」，不能回落通用失败
+	// 旧口令错是真的打到上游（实测 `200 + 10003`，BFF 还原为 400）：必须点名「当前密码不正确」，不能回落通用失败
 	const wrongOldText = await submitChange("Wrong@12345", "NewP@ssw0rd!", "NewP@ssw0rd!");
 	const stillOnChange = new URL(changePage.url()).pathname === "/auth/change-password";
 	log("旧口令错误时点名「当前密码不正确」且停在改密页", wrongOldText.includes("当前密码不正确") && stillOnChange, `stay=${stillOnChange}`);
@@ -316,8 +291,8 @@ if (upstreamPort) {
 
 	const lastBody = passwordBodies.at(-1);
 	log(
-		"改密请求带旧口令且全程不带 firstReset",
-		lastBody?.oldPassword === PASSWORD && passwordBodies.every((body) => body && body.firstReset === undefined),
+		"改密请求带 snake_case 旧口令且全程不带 firstReset",
+		lastBody?.old_password === PASSWORD && passwordBodies.every((body) => body && body.firstReset === undefined),
 		passwordBodies.length ? `${passwordBodies.length} 次提交 / keys=${Object.keys(lastBody ?? {}).join(",")}` : "未捕获请求"
 	);
 	// 交叉验证：三个校验态若没真拦住，报文数会变成 5 —— 这条把「内联提示」与「不发请求」绑一起
@@ -336,7 +311,7 @@ if (upstreamPort) {
 	log("改密后用新口令重登不再被弹回改密页", reLoginLanding === "/dashboard/overview", reLoginLanding);
 	await changeContext.close();
 
-	// 旧口令必须在上游就失效（`401 20201`）→ 登录页点名「账号或密码错误」且停在登录页，
+	// 旧口令必须在上游就失效（`200 + 10003` → BFF 401）→ 登录页点名「账号或密码错误」且停在登录页，
 	// 不能出现「改完密码旧口令还能用」这种最坏结果。
 	const staleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 	const stalePage = await staleContext.newPage();
@@ -348,7 +323,7 @@ if (upstreamPort) {
 	const staleLanding = new URL(stalePage.url()).pathname;
 	const staleText = await stalePage.evaluate(() => document.body.textContent ?? "");
 	log(
-		"改密后旧口令登录被拒（401 20201）",
+		"改密后旧口令登录被拒（10003）",
 		staleLanding === "/auth/login" && staleText.includes("账号或密码错误"),
 		`${staleLanding} / ${staleText.includes("账号或密码错误") ? "已提示" : "未提示"}`
 	);
@@ -655,6 +630,46 @@ if (upstreamPort) {
 		&& creating.text.includes("账号名")
 		&& createDialogs === 0,
 		`弹窗=${createDialogs} 表单=${creating.text.includes("账号名")}`
+	);
+
+	// 3.4.1 建号等级候选 = **严格低于自己且 ≤ 3**（NMCPS-DESIGN-005 §6.3）。
+	// 上游按「只能向下管控」判定（同级 / 更高回 20103），候选里一旦还留着自身等级，
+	// 租户管理员每次建号都必然失败 —— 这条用例钉住候选集合本身，而不是某次提交的结果。
+	const levelSelect = page.locator("[data-split='user'] form [role='combobox']").first();
+	const levelDefault = (await levelSelect.textContent() ?? "").trim();
+	await levelSelect.click();
+	await page.waitForTimeout(300);
+	// 只取等级项：本页列表行同样是 `[role='option']`，混进来会把候选集合量错
+	const levelChoices = await page.evaluate(() =>
+		Array.from(document.querySelectorAll("[role='listbox'] [role='option']"))
+			.map((el) => (el.textContent ?? "").trim())
+			.filter((text) => /^L\d+$/.test(text)));
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(200);
+	log(
+		"建号等级候选严格低于当前身份（租户管理员 L2 / L3，不含 L1 与 L4）",
+		levelDefault === "L2" && levelChoices.join(",") === "L2,L3",
+		`默认=${levelDefault} 候选=[${levelChoices.join(" / ")}]`
+	);
+
+	// 3.4.2 真建一次号：假上游已按真实规则拦同级 / 更高与 L4，能建成说明「只能向下管控」
+	// 与页面候选集合是一致的（此前候选只有 L1，提交必回 20103：「创建失败」）。
+	const createInputs = page.locator("[data-split='user'] form input");
+	await createInputs.nth(0).fill("uicheck-ops");
+	await createInputs.nth(1).fill("联调建号");
+	await createInputs.nth(2).fill("Check@123456");
+	await levelSelect.click();
+	await page.waitForTimeout(300);
+	await page.locator("[role='listbox'] [role='option']").filter({ hasText: /^L3$/ }).click();
+	await page.waitForTimeout(200);
+	await page.getByRole("button", { name: "创建", exact: true }).click();
+	await page.waitForTimeout(1500);
+	const afterCreate = await readUserPage();
+	const createdRow = afterCreate.rows.find((row) => row.code === "ACC-1004");
+	log(
+		"租户管理员用 L3 建号成功并选中新账号",
+		createdRow?.selected === true && afterCreate.text.includes("ACC-1004"),
+		`url="${afterCreate.search}" 新行=${createdRow ? "已出现" : "未见"}`
 	);
 
 	// 3.5 形态切换：容器窄了落覆盖式，点选 `push` 一条历史，浏览器返回回列表
@@ -1020,6 +1035,227 @@ if (upstreamPort) {
 	await page.setViewportSize({ width: 1440, height: 900 });
 }
 
+// 7.4 审计日志工具栏（NMCPS-DESIGN-005 §9.3 第 2 条 / NMCPS-ARCH-006 §4.1）：
+// 时间范围与类别常驻左区、其余标识类筛选留浮层，且两个常驻控件必须真的改写请求参数 ——
+// 只断言「控件在那儿」会把「摆了个假的」也算通过。依赖假上游的审计域假数据（AUD-0001…）。
+if (upstreamPort) {
+	const auditRequests = [];
+	const recordAuditRequest = (request) => {
+		const url = new URL(request.url());
+		if (url.pathname === "/api/audit")
+			auditRequests.push(url.searchParams);
+	};
+	page.on("request", recordAuditRequest);
+
+	await page.goto(`${BASE_URL}/system/log`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(400);
+
+	const auditToolbar = await page.evaluate(() => {
+		const left = document.querySelector("#app-toolbar-left");
+		return {
+			text: (left?.textContent ?? "").replace(/\s+/g, " ").trim(),
+			ariaLabels: Array.from(left?.querySelectorAll("button") ?? []).map((el) => el.getAttribute("aria-label") ?? ""),
+			comboboxes: left?.querySelectorAll("[role='combobox']").length ?? 0,
+			datetimeInputs: left?.querySelectorAll("input[type='datetime-local']").length ?? 0,
+			width: left ? Math.round(left.getBoundingClientRect().width) : 0
+		};
+	});
+	log(
+		"审计日志工具栏左区常驻时间范围按钮与类别下拉",
+		auditToolbar.text.includes("全部时间")
+		&& auditToolbar.ariaLabels.includes("时间范围")
+		&& auditToolbar.comboboxes === 1
+		&& auditToolbar.datetimeInputs === 0,
+		`文案="${auditToolbar.text}" 按钮=${auditToolbar.ariaLabels.join("/")} combobox=${auditToolbar.comboboxes} datetime=${auditToolbar.datetimeInputs}`
+	);
+
+	// 两个常驻控件进左区后不能把左区撑爆（§4.1 的 45% 预算）：1440 视口下内容盒 ≈1166px
+	const leftRatio = await page.evaluate(() => {
+		const left = document.querySelector("#app-toolbar-left");
+		const row = document.querySelector("[data-toolbar='page']");
+		if (!left || !row)
+			return null;
+		return Math.round((left.getBoundingClientRect().width / row.getBoundingClientRect().width) * 100);
+	});
+	log("常驻筛选控件不超左区宽度预算（≤45% 内容盒）", leftRatio !== null && leftRatio <= 45, `${leftRatio}%`);
+
+	// 浮层里不再重复时间 / 类别控件（搬走就要搬干净，否则出现两份同义控件）
+	await page.locator("#app-toolbar-left button[aria-label='筛选条件']").click();
+	await page.waitForTimeout(300);
+	const filterPopover = await page.evaluate(() => {
+		// 页面上可能同时挂着多个 `[data-slot='content']`（侧栏、命令面板等），
+		// 取「可见且含输入框」的那个才是刚打开的筛选浮层
+		const panels = Array.from(document.querySelectorAll("[data-slot='content']"))
+			.filter((el) => el.checkVisibility?.() ?? false);
+		const content = panels.find((el) => el.querySelector("input")) ?? panels.at(-1);
+		return {
+			placeholders: Array.from(content?.querySelectorAll("input") ?? []).map((el) => el.getAttribute("placeholder") ?? ""),
+			datetimeInputs: content?.querySelectorAll("input[type='datetime-local']").length ?? 0,
+			// 每页条数的 `USelect` 本来就在浮层里，所以这里按 aria-label 找「类别」，而不是数 combobox
+			categoryCombobox: !!content?.querySelector("[aria-label='类别']"),
+			// 每页条数已按 §3.8 移到列表栏尾部：浮层里不该再有任何下拉
+			comboboxes: content?.querySelectorAll("[role='combobox']").length ?? 0
+		};
+	});
+	log(
+		"筛选浮层只留标识类筛选（不再重复时间 / 类别）",
+		filterPopover.datetimeInputs === 0
+		&& !filterPopover.categoryCombobox
+		&& filterPopover.comboboxes === 0
+		&& filterPopover.placeholders.includes("追踪 ID")
+		&& filterPopover.placeholders.length === 4,
+		`datetime=${filterPopover.datetimeInputs} 类别下拉=${filterPopover.categoryCombobox} 下拉数=${filterPopover.comboboxes} 输入框=${filterPopover.placeholders.join("/")}`
+	);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(200);
+
+	// 时间快捷项：选「近 24 小时」后请求必须带上 startTime / endTime（页面算的是本地时字面值）
+	auditRequests.length = 0;
+	await page.locator("#app-toolbar-left button[aria-label='时间范围']").click();
+	await page.waitForTimeout(300);
+	await page.getByRole("button", { name: "近 24 小时" }).first().click();
+	await page.waitForTimeout(800);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(200);
+	const ranged = auditRequests.at(-1);
+	log(
+		"时间范围快捷项改写 startTime / endTime",
+		!!ranged?.get("startTime") && !!ranged?.get("endTime"),
+		ranged ? `startTime=${ranged.get("startTime")} endTime=${ranged.get("endTime")}` : "没有列表请求"
+	);
+
+	const rangeLabelText = await page.evaluate(() => (document.querySelector("#app-toolbar-left")?.textContent ?? "").replace(/\s+/g, " ").trim());
+	log("时间范围按钮文案回显当前窗口", rangeLabelText.includes("近 24 小时"), rangeLabelText);
+
+	// 日历选日：点第一天 → 起点当天 00:00:00（终点先空，reka 才能继续收尾），
+	// 再点第二天 → 终点当天 23:59:59。整天窗口含首尾两端，少这 59 秒就漏掉当天最后半分钟。
+	// 取当月 1 号 / 2 号：双月视图的首屏一定是当月，不会落到未渲染的邻月日期上。
+	const now = new Date();
+	const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+	const [firstDay, secondDay] = [`${monthPrefix}-01`, `${monthPrefix}-02`];
+	auditRequests.length = 0;
+	await page.locator("#app-toolbar-left button[aria-label='时间范围']").click();
+	await page.waitForTimeout(300);
+	await page.locator(`[data-slot='cellTrigger'][data-value='${firstDay}']`).first().click();
+	await page.waitForTimeout(700);
+	const dayOnly = auditRequests.at(-1);
+	await page.locator(`[data-slot='cellTrigger'][data-value='${secondDay}']`).first().click();
+	await page.waitForTimeout(700);
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(200);
+	const dayRange = auditRequests.at(-1);
+	log(
+		"日历选整天改写 startTime / endTime",
+		dayOnly?.get("startTime") === `${firstDay} 00:00:00`
+		&& !dayOnly.get("endTime")
+		&& dayRange?.get("startTime") === `${firstDay} 00:00:00`
+		&& dayRange?.get("endTime") === `${secondDay} 23:59:59`,
+		`首点=${dayOnly?.get("startTime") ?? "无"}→${dayOnly?.get("endTime") ?? "空"} 收尾=${dayRange?.get("startTime") ?? "无"}→${dayRange?.get("endTime") ?? "空"}`
+	);
+
+	// 类别：切到「接口调用」→ 请求带 category=api（把过滤后的 total 误当全量的根源就在这一步）
+	auditRequests.length = 0;
+	await page.locator("#app-toolbar-left [role='combobox']").first().click();
+	await page.waitForTimeout(300);
+	await page.getByRole("option", { name: "接口调用" }).first().click();
+	await page.waitForTimeout(800);
+	const categorised = auditRequests.at(-1);
+	log(
+		"类别下拉改写 category 参数",
+		categorised?.get("category") === "api",
+		categorised ? `category=${categorised.get("category")}` : "没有列表请求"
+	);
+
+	// 窄视口：时间范围退成图标（文案进 `aria-label`），左区仍放得下（§4.4 不换行、§3.3 无横向滚动）
+	await page.setViewportSize({ width: 320, height: 900 });
+	await page.goto(`${BASE_URL}/system/log`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(600);
+	const narrowAudit = await page.evaluate(() => ({
+		overflow: document.documentElement.scrollWidth > window.innerWidth,
+		leftText: (document.querySelector("#app-toolbar-left")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+		comboboxes: document.querySelector("#app-toolbar-left")?.querySelectorAll("[role='combobox']").length ?? 0
+	}));
+	log(
+		"320px 下审计日志左区收成图标且无横向溢出",
+		!narrowAudit.overflow && !narrowAudit.leftText.includes("全部时间") && narrowAudit.comboboxes === 1,
+		`overflow=${narrowAudit.overflow} 左区="${narrowAudit.leftText}" combobox=${narrowAudit.comboboxes}`
+	);
+	await page.setViewportSize({ width: 1440, height: 900 });
+
+	page.off("request", recordAuditRequest);
+}
+
+// 7.5 列表栏尾部（NMCPS-ARCH-006 §3.8）：三条实测问题的回归守卫 ——
+// ① 尾高固定 49px（`--app-list-footer-h`）且在滚动区之外；
+// ② 每页默认 15 条，四个列表页都在尾部提供选择器（此前只有 /system/log 有一个，还藏在筛选浮层里）；
+// ③ 选中行底色与未选中行在浅 / 深两模式都能分辨（此前 `bg-elevated/60` 叠在白面板上几乎同色）。
+if (upstreamPort) {
+	const LIST_PAGES = ["/system/user", "/system/policy", "/system/permission", "/system/log"];
+	const footers = [];
+	const auditPageSizes = [];
+	const recordPageSize = (request) => {
+		const url = new URL(request.url());
+		if (url.pathname === "/api/audit")
+			auditPageSizes.push(url.searchParams.get("pageSize"));
+	};
+	page.on("request", recordPageSize);
+
+	for (const path of LIST_PAGES) {
+		await page.goto(`${BASE_URL}${path}`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(400);
+		const measured = await page.evaluate(() => {
+			const footer = document.querySelector("[data-list-footer]");
+			const rect = footer?.getBoundingClientRect();
+			return {
+				height: rect ? Math.round(rect.height) : 0,
+				// 尾部的每页条数选择器（`USelect` 渲染成 `[role='combobox']`）：必须正好一个
+				selectors: footer?.querySelectorAll(":scope > div [role='combobox']").length ?? 0
+			};
+		});
+		footers.push([path, measured]);
+	}
+
+	log(
+		"列表栏尾部高 49px、四个列表页各有一处每页条数选择器",
+		footers.every(([, f]) => f.height === 49) && footers.every(([, f]) => f.selectors === 1),
+		`${footers.map(([path, f]) => `${path}=${f.height}px/${f.selectors}个`).join(" ")}`
+	);
+
+	// 默认 15 条：`/system/log` 首次列表请求必须带 pageSize=15（默认值漂回 20 就红）
+	log(
+		"列表默认每页 15 条（请求带 pageSize=15）",
+		auditPageSizes.length > 0 && auditPageSizes[0] === "15",
+		`首个 pageSize=${auditPageSizes[0] ?? "无请求"}`
+	);
+
+	// 选中行底色：读计算样式，浅色与深色各测一次（`dark` 类切换会立即换掉 --ui-bg-* 变量）
+	const readRowFill = () => page.evaluate(() => {
+		const rowsEls = Array.from(document.querySelectorAll("[role='option']"));
+		const selected = rowsEls.find((el) => el.getAttribute("aria-selected") === "true");
+		const other = rowsEls.find((el) => el.getAttribute("aria-selected") !== "true");
+		const fill = (el) => (el ? getComputedStyle(el).backgroundColor : "");
+		return { rows: rowsEls.length, selected: fill(selected), other: fill(other) };
+	});
+	const isOpaque = (color) => !!color && color !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(color);
+
+	const lightFill = await readRowFill();
+	await page.evaluate(() => document.documentElement.classList.add("dark"));
+	await page.waitForTimeout(300);
+	const darkFill = await readRowFill();
+	await page.evaluate(() => document.documentElement.classList.remove("dark"));
+	await page.waitForTimeout(200);
+
+	log(
+		"选中行底色在浅 / 深两模式都可辨（≠ 未选中行）",
+		lightFill.rows > 1
+		&& isOpaque(lightFill.selected) && lightFill.selected !== lightFill.other
+		&& isOpaque(darkFill.selected) && darkFill.selected !== darkFill.other,
+		`浅=${lightFill.selected}/${lightFill.other} 深=${darkFill.selected}/${darkFill.other}`
+	);
+
+	page.off("request", recordPageSize);
+}
+
 // 8. 自助安全设置（NMCPS-ARCH-003 §7.5）：已登录后两个表单可操作
 await page.goto(`${BASE_URL}/user/security`, { waitUntil: "networkidle" });
 const securityPage = await page.evaluate(() => {
@@ -1030,19 +1266,18 @@ const securityPage = await page.evaluate(() => {
 		text,
 		hasMfaCard: text.includes("两步验证（TOTP）"),
 		hasPasswordCard: text.includes("修改登录口令"),
-		mfaEnabledBadge: text.includes("已启用"),
+		mfaOffline: !!document.querySelector("[data-testid='mfa-unavailable']") && text.includes("暂无多因子端点"),
 		guideVisible: text.includes("请先登录"),
-		mfaBindDisabled: document.querySelector("[data-testid='mfa-bind']")?.hasAttribute("disabled") ?? false,
 		passwordInputs: inputs.filter((el) => el.getAttribute("type") === "password"),
 		passwordInputsDisabled: inputs
 			.filter((el) => el.getAttribute("type") === "password")
 			.some((el) => el.hasAttribute("disabled"))
 	};
 });
-log("安全设置页含两步验证与改密两个区块", securityPage.hasMfaCard && securityPage.hasPasswordCard, `mfa=${securityPage.hasMfaCard} password=${securityPage.hasPasswordCard}`);
+log("安全设置页含两步验证（已下线）与改密两个区块", securityPage.hasMfaCard && securityPage.hasPasswordCard, `mfa=${securityPage.hasMfaCard} password=${securityPage.hasPasswordCard}`);
 log("已登录后不再展示登录引导", !securityPage.guideVisible, securityPage.guideVisible ? "仍显示引导" : "未显示");
-log("MFA 状态取自 whoami（已启用）", securityPage.mfaEnabledBadge, securityPage.mfaEnabledBadge ? "已启用" : "未显示");
-log("已登录时 MFA 绑定与口令表单可操作", !securityPage.mfaBindDisabled && securityPage.passwordInputs.length === 3 && !securityPage.passwordInputsDisabled, `bind=${securityPage.mfaBindDisabled} inputs=${securityPage.passwordInputs.length}`);
+log("两步验证区块标明上游无端点（G8）", securityPage.mfaOffline, securityPage.mfaOffline ? "已标注" : "未标注");
+log("已登录时改密表单可操作", securityPage.passwordInputs.length === 3 && !securityPage.passwordInputsDisabled, `inputs=${securityPage.passwordInputs.length}`);
 
 // 9. 控制台错误/告警
 log("控制台错误", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | ") || "无");

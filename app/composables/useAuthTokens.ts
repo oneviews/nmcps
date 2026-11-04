@@ -1,4 +1,4 @@
-import type { AuthTokens } from "~~/shared/types/auth";
+import type { AuthUser, IamTokens } from "~~/shared/types/auth";
 import { isTauri } from "@tauri-apps/api/core";
 
 /**
@@ -12,6 +12,8 @@ import { isTauri } from "@tauri-apps/api/core";
 
 const STORE_FILE = "auth.bin";
 const TOKENS_KEY = "tokens";
+/** 桌面端身份缓存：新代没有 `whoami`，会话只能来自登录时写下的 `user_info`（NMCPS-ADR-0018 D3） */
+const USER_KEY = "user";
 
 interface AuthStore {
 	get: <T>(key: string) => Promise<T | undefined>
@@ -21,8 +23,10 @@ interface AuthStore {
 }
 
 /** 进程内缓存：令牌是高频读取的，避免每次请求都落盘读 */
-let cached: AuthTokens | null = null;
+let cached: IamTokens | null = null;
+let cachedUser: AuthUser | null = null;
 let loaded = false;
+let loadedUser = false;
 let storePromise: Promise<AuthStore | null> | null = null;
 
 async function getStore(): Promise<AuthStore | null> {
@@ -40,7 +44,7 @@ async function getStore(): Promise<AuthStore | null> {
 export function useAuthTokens() {
 	const isDesktop = isTauri();
 
-	async function read(): Promise<AuthTokens | null> {
+	async function read(): Promise<IamTokens | null> {
 		if (!isDesktop)
 			return null;
 
@@ -48,13 +52,13 @@ export function useAuthTokens() {
 			return cached;
 
 		const store = await getStore();
-		cached = (await store?.get<AuthTokens>(TOKENS_KEY)) ?? null;
+		cached = (await store?.get<IamTokens>(TOKENS_KEY)) ?? null;
 		loaded = true;
 
 		return cached;
 	}
 
-	async function write(tokens: AuthTokens): Promise<void> {
+	async function write(tokens: IamTokens): Promise<void> {
 		cached = tokens;
 		loaded = true;
 
@@ -66,21 +70,51 @@ export function useAuthTokens() {
 		await store?.save();
 	}
 
+	/** 桌面端身份缓存（Web 端恒为 `null`：身份在 `nmcps_ui` cookie 里） */
+	async function readUser(): Promise<AuthUser | null> {
+		if (!isDesktop)
+			return null;
+
+		if (loadedUser)
+			return cachedUser;
+
+		const store = await getStore();
+		cachedUser = (await store?.get<AuthUser>(USER_KEY)) ?? null;
+		loadedUser = true;
+
+		return cachedUser;
+	}
+
+	async function writeUser(user: AuthUser): Promise<void> {
+		cachedUser = user;
+		loadedUser = true;
+
+		if (!isDesktop)
+			return;
+
+		const store = await getStore();
+		await store?.set(USER_KEY, user);
+		await store?.save();
+	}
+
 	async function clear(): Promise<void> {
 		cached = null;
+		cachedUser = null;
 		loaded = true;
+		loadedUser = true;
 
 		if (!isDesktop)
 			return;
 
 		const store = await getStore();
 		await store?.delete(TOKENS_KEY);
+		await store?.delete(USER_KEY);
 		await store?.save();
 	}
 
 	/** 当前访问令牌（桌面端；web 恒为 `null`，凭据走 cookie） */
 	async function accessToken(): Promise<string | null> {
-		return (await read())?.accessToken ?? null;
+		return (await read())?.access_token ?? null;
 	}
 
 	return {
@@ -88,6 +122,8 @@ export function useAuthTokens() {
 		accessToken,
 		read,
 		write,
+		readUser,
+		writeUser,
 		clear
 	};
 }

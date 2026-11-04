@@ -13,8 +13,9 @@
 //      token cookie → Bearer、显式 Authorization 优先、非白名单请求头不转发
 //   ⑤ 就绪探针：/ready 成功态 + 缺失 / 不可达 / 超时 / 非 2xx 四种 not_ready，且不回显上游地址
 //   ⑥ SSE 流式透传：content-type 保留、增量到达（非整体缓冲）、事件完整、不套信封、禁止缓存
-//   ⑦ 认证会话（NMCPS-ADR-0011）：web HttpOnly 双 cookie / desktop body 令牌、会话单一事实源、
-//      刷新即轮换、CSRF 403、登出恒 ok、上游业务码（10201 / 20205）保真、非 JSON 报文挡在上游之外
+//   ⑦ 认证会话（NMCPS-ADR-0011 的 cookie / 单飞 / CSRF 条款 + NMCPS-ADR-0018 的新代接口事实）：
+//      web HttpOnly 三 cookie（at / rt / ui）/ desktop body 令牌、会话由 user_info 派生（无 whoami）、
+//      刷新**不轮换**、业务错误 `200 + code≠0` 还原为 4xx、CSRF 403、登出幂等恒 ok
 import { existsSync } from "node:fs";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
@@ -167,7 +168,7 @@ try {
 	const loginNoUpstream = await request(guardPort, "/api/auth/login", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ accountName: "admin", password: "irrelevant" })
+		body: JSON.stringify({ username: "admin", password: "irrelevant" })
 	});
 	log("未配置上游 → POST /api/auth/login 403 之前先回 503 bff_upstream_missing", loginNoUpstream.status === 503 && loginNoUpstream.json?.message === "bff_upstream_missing", `${loginNoUpstream.status} ${describe(loginNoUpstream.json?.message)}`);
 	log("5xx 信封语义为 error", noUpstream.json?.status === "error", describe(noUpstream.json?.status));
@@ -269,231 +270,220 @@ try {
 		log("SSE 禁止缓存并关闭代理缓冲", stream.headers.get("cache-control") === "no-store" && stream.headers.get("x-accel-buffering") === "no", `${describe(stream.headers.get("cache-control"))} / ${describe(stream.headers.get("x-accel-buffering"))}`);
 	});
 
-	// ── ⑦ 认证会话：cookie / desktop 双通道、刷新轮换、CSRF、业务码保真 ──
-	// 依据 NMCPS-ADR-0011（layers/content/collections/cn/records/adr/adr-0011.md）
+	// ── ⑦ 认证会话：cookie / desktop 双通道、刷新不轮换、CSRF、业务码还原 ──
+	// 依据 NMCPS-ADR-0011（…/adr-0011.md，轮换条款已被 ADR-0018 D4 取代）与
+	// NMCPS-ADR-0018（…/adr-0018.md）：路径 `iam/*`、字段 snake_case、身份取 `user_info`、
+	// 上游业务错误走 `HTTP 200 + code≠0` 而 BFF 必须还原 4xx 语义。
 	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase }, async (authPort) => {
-		const sameOrigin = `http://${HOST}:${authPort}`;
 		const jsonHeaders = { "content-type": "application/json" };
-		const loginBody = (extra = {}) => JSON.stringify({ accountName: "alice", password: "p@ssw0rd", tenantCode: "t1", ...extra });
+		const loginBody = (extra = {}) => JSON.stringify({ username: "alice", password: "p@ssw0rd", ...extra });
 
 		// 1) 空 body：BFF 先用 zod 挡住，绝不把空报文送上游（上游会 500 / 10509）
 		const emptyLogin = await request(authPort, "/api/auth/login", { method: "POST" });
 		log("空 body 登录 → 400 bff_invalid_body，且未触达上游", emptyLogin.status === 400 && emptyLogin.json?.message === "bff_invalid_body" && upstream.authLog.login === 0, `${emptyLogin.status} ${describe(emptyLogin.json?.message)} upstreamHits=${upstream.authLog.login}`);
-		log("校验失败回带字段级 error_detail", Array.isArray(emptyLogin.json?.error_detail) && emptyLogin.json.error_detail.some((item) => (item.loc ?? []).includes("accountName")), describe(emptyLogin.json?.error_detail?.[0]));
+		log("校验失败回带字段级 error_detail（username）", Array.isArray(emptyLogin.json?.error_detail) && emptyLogin.json.error_detail.some((item) => (item.loc ?? []).includes("username")), describe(emptyLogin.json?.error_detail?.[0]));
 
 		// 1b) 非 JSON 报文：上游不校验 Content-Type（form-urlencoded 会 500 / 10509），BFF 必须同样挡在门外
 		const formLogin = await request(authPort, "/api/auth/login", {
 			method: "POST",
 			headers: { "content-type": "application/x-www-form-urlencoded" },
-			body: "accountName=alice&password=p%40ssw0rd"
+			body: "username=alice&password=p%40ssw0rd"
 		});
 		log("form-urlencoded 登录 → 400 bff_invalid_body，且未触达上游", formLogin.status === 400 && formLogin.json?.message === "bff_invalid_body" && upstream.authLog.login === 0, `${formLogin.status} ${describe(formLogin.json?.message)} upstreamHits=${upstream.authLog.login}`);
 
-		// 2) Web 登录：令牌只进 HttpOnly cookie，响应体不含令牌
+		// 1c) 旧代字段名退场：`accountName` / `tenantCode` 不再被接受（NMCPS-ADR-0018 §4.1）
+		const legacyLogin = await request(authPort, "/api/auth/login", {
+			method: "POST",
+			headers: jsonHeaders,
+			body: JSON.stringify({ accountName: "alice", password: "p@ssw0rd", tenantCode: "t1" })
+		});
+		log("旧代 accountName / tenantCode 登录 → 400 bff_invalid_body（字段名不复古）", legacyLogin.status === 400 && legacyLogin.json?.message === "bff_invalid_body" && upstream.authLog.login === 0, `${legacyLogin.status} upstreamHits=${upstream.authLog.login}`);
+
+		// 2) 新代业务错误形态：上游 HTTP 200 + `code: 10003`（口令错）—— BFF 必须
+		//    还原为 401 + 业务码，绝不能因为「HTTP 200」就当成登录成功（NMCPS-ADR-0018 D5）
+		const bizError = await request(authPort, "/api/auth/login", {
+			method: "POST",
+			headers: jsonHeaders,
+			body: loginBody({ username: "biz-error-user" })
+		});
+		log("上游 200 + code 10003 → BFF 401 且业务码保真（不判成功）", bizError.status === 401 && bizError.json?.code === 10003 && bizError.json?.status === "warning", `${bizError.status} ${describe(bizError.json?.status)} ${describe(bizError.json?.code)}`);
+		log("200 + 10003 不写会话 cookie，msg 归一为 message", !setCookies(bizError).some((raw) => raw.startsWith("nmcps_at=")) && bizError.json?.message === "账号或密码错误", describe(bizError.json?.message));
+
+		// 2b) Web 登录：令牌只进 HttpOnly cookie，身份落 nmcps_ui，响应体不含令牌
 		const webLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody() });
 		const webCookies = setCookies(webLogin);
 		const accessCookie = webCookies.find((raw) => raw.startsWith("nmcps_at=")) ?? "";
 		const refreshCookie = webCookies.find((raw) => raw.startsWith("nmcps_rt=")) ?? "";
-		log("Web 登录 200 且响应体不含令牌", webLogin.status === 200 && webLogin.json?.data?.tokens === undefined && webLogin.json?.data?.expiresIn === 1800, `${webLogin.status} ${describe(webLogin.json?.data && Object.keys(webLogin.json.data))}`);
+		const userCookie = webCookies.find((raw) => raw.startsWith("nmcps_ui=")) ?? "";
+		log("Web 登录 200 且响应体不含令牌（expiresIn 取上游 86400）", webLogin.status === 200 && webLogin.json?.data?.tokens === undefined && webLogin.json?.data?.expiresIn === 86400, `${webLogin.status} ${describe(webLogin.json?.data && Object.keys(webLogin.json.data))}`);
 		log("访问令牌 cookie 为 HttpOnly + Path=/", /HttpOnly/i.test(accessCookie) && /Path=\//i.test(accessCookie), accessCookie);
 		log("刷新令牌 cookie 为 HttpOnly + Path=/api/auth", /HttpOnly/i.test(refreshCookie) && /Path=\/api\/auth/i.test(refreshCookie), refreshCookie);
-		log("登录展示名缺失即 null（不用 accountCode 冒充）", webLogin.json?.data?.user?.displayName === null && webLogin.json?.data?.user?.accountName === "alice", describe(webLogin.json?.data?.user));
+		log("身份 cookie 为 HttpOnly + Path=/api/auth", /HttpOnly/i.test(userCookie) && /Path=\/api\/auth/i.test(userCookie), userCookie.split(";")[0]);
+		log("user_info 归一为 AuthUser（display_name → displayName，空 phone → null）", webLogin.json?.data?.user?.username === "alice" && webLogin.json?.data?.user?.displayName === "Alice" && webLogin.json?.data?.user?.phone === null && webLogin.json?.data?.user?.tenantId === "t_default", describe(webLogin.json?.data?.user));
 		log("认证响应禁止缓存", webLogin.headers.get("cache-control") === "no-store", describe(webLogin.headers.get("cache-control")));
 
-		// 3) 桌面登录：响应体回传 tokens，且不写 cookie
+		// 3) 桌面登录：响应体回传 snake_case tokens，且不写 cookie
 		const desktopLogin = await request(authPort, "/api/auth/login", {
 			method: "POST",
 			headers: { ...jsonHeaders, "x-nmcps-client": "desktop" },
 			body: loginBody()
 		});
 		const desktopTokens = desktopLogin.json?.data?.tokens;
-		log("桌面登录 200 且响应体带 tokens", desktopLogin.status === 200 && desktopTokens?.accessToken === "at-2" && desktopTokens?.refreshToken === "rt-2", describe(desktopTokens));
+		log("桌面登录 200 且响应体带 snake_case tokens", desktopLogin.status === 200 && desktopTokens?.access_token === "at-2" && desktopTokens?.refresh_token === "rt-2", describe(desktopTokens));
 		log("桌面登录不写会话 cookie", !setCookies(desktopLogin).some((raw) => raw.startsWith("nmcps_at=")), `${setCookies(desktopLogin).length} 个 Set-Cookie`);
+	});
+	// ── ⑦-2 会话 / 刷新 / 改密 / 登出：不轮换、不触达上游、业务码还原 ──
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase }, async (authPort) => {
+		const sameOrigin = `http://${HOST}:${authPort}`;
+		const jsonHeaders = { "content-type": "application/json" };
+		const login = await request(authPort, "/api/auth/login", {
+			method: "POST",
+			headers: jsonHeaders,
+			body: JSON.stringify({ username: "alice", password: "p@ssw0rd" })
+		});
+		const cookies = setCookies(login);
+		const atPair = cookieHeader(cookies, "nmcps_at");
+		const rtPair = cookieHeader(cookies, "nmcps_rt");
+		const uiPair = cookieHeader(cookies, "nmcps_ui");
 
-		// 4) 会话：cookie 命中上游 bearer 后返回用户；无令牌/失效令牌一律 200 + authenticated:false
-		const sessionAuthed = await request(authPort, "/api/auth/session", { cookie: cookieHeader(webCookies, "nmcps_at") });
-		log("会话 cookie → 200 authenticated:true 且回传用户", sessionAuthed.status === 200 && sessionAuthed.json?.data?.authenticated === true && sessionAuthed.json?.data?.user?.displayName === "Alice" && sessionAuthed.json?.data?.user?.tenantId === 7, `${sessionAuthed.status} ${describe(sessionAuthed.json?.data?.user)}`);
+		// 4) 会话由身份 cookie 派生，且**不触达上游**（新代无 whoami，NMCPS-ADR-0018 D3）
+		const sessionHit = await request(authPort, "/api/auth/session", { cookie: `${atPair}; ${uiPair}` });
+		log("会话由身份 cookie 派生 → 200 authenticated:true 且带 user", sessionHit.status === 200 && sessionHit.json?.data?.authenticated === true && sessionHit.json?.data?.user?.username === "alice", `${sessionHit.status} ${describe(sessionHit.json?.data?.user)}`);
+
+		const blind = await request(authPort, "/api/auth/session", { cookie: `nmcps_at=bogus-token; ${uiPair}` });
+		log("会话不依赖上游（坏访问令牌 + 合法身份仍为已登录）", blind.status === 200 && blind.json?.data?.authenticated === true, `${blind.status} ${describe(blind.json?.data?.authenticated)}`);
 
 		const sessionAnon = await request(authPort, "/api/auth/session");
 		log("无令牌会话 → 200 authenticated:false（不返回 401）", sessionAnon.status === 200 && sessionAnon.json?.data?.authenticated === false && sessionAnon.json?.data?.user === null, `${sessionAnon.status} ${describe(sessionAnon.json?.data)}`);
 
-		const sessionExpired = await request(authPort, "/api/auth/session", { cookie: "nmcps_at=revoked" });
-		log("上游 10201 → 200 未登录并清除 cookie", sessionExpired.status === 200 && sessionExpired.json?.data?.authenticated === false && setCookies(sessionExpired).some((raw) => raw.startsWith("nmcps_at=;")), `${sessionExpired.status} ${describe(setCookies(sessionExpired))}`);
+		const half = await request(authPort, "/api/auth/session", { cookie: atPair });
+		log("半截会话（有令牌无身份）→ 200 未登录并清 cookie", half.status === 200 && half.json?.data?.authenticated === false && setCookies(half).some((raw) => raw.startsWith("nmcps_at=;")), `${half.status} ${describe(setCookies(half).length)}`);
 
-		// 5) 刷新即轮换：旧 refresh 串行复用失败（真实上游回 20205），且 web 不回传令牌
-		const refreshed = await request(authPort, "/api/auth/refresh", {
+		// 5) 刷新**不轮换**（NMCPS-ADR-0018 D4）：同一刷新令牌连用两次都成功，cookie 值不变
+		const firstRefresh = await request(authPort, "/api/auth/refresh", {
 			method: "POST",
 			headers: { origin: sameOrigin },
-			cookie: cookieHeader(webCookies, "nmcps_rt")
+			cookie: rtPair
 		});
-		const rotatedCookies = setCookies(refreshed);
-		const rotatedAccess = rotatedCookies.find((raw) => raw.startsWith("nmcps_at=")) ?? "";
-		log("Web 刷新 200 并轮换双 cookie（响应体不含令牌）", refreshed.status === 200 && refreshed.json?.data?.tokens === undefined && rotatedAccess.length > 0 && rotatedAccess !== accessCookie, `${refreshed.status} ${rotatedAccess}`);
-		log("刷新后访问令牌被替换（非 at-1）", !rotatedAccess.startsWith("nmcps_at=at-1;"), rotatedAccess);
+		const refreshed = setCookies(firstRefresh);
+		const newAccess = refreshed.find((raw) => raw.startsWith("nmcps_at=")) ?? "";
+		const rtAfter = (refreshed.find((raw) => raw.startsWith("nmcps_rt=")) ?? rtPair).split(";")[0];
+		log("Web 刷新 200 且换发访问令牌（响应体不含令牌）", firstRefresh.status === 200 && firstRefresh.json?.data?.tokens === undefined && newAccess.startsWith("nmcps_at=at-") && newAccess !== atPair, `${firstRefresh.status} ${newAccess}`);
+		log("刷新后刷新令牌原值保留（不轮换）", rtAfter === rtPair, `${rtPair} → ${rtAfter}`);
 
-		const reused = await request(authPort, "/api/auth/refresh", {
+		const secondRefresh = await request(authPort, "/api/auth/refresh", {
 			method: "POST",
 			headers: { origin: sameOrigin },
-			cookie: cookieHeader(webCookies, "nmcps_rt")
+			cookie: rtPair
 		});
-		log("重复使用旧 refresh → 401 20205（真实上游串行复用语义）", reused.status === 401 && reused.json?.code === 20205, `${reused.status} ${describe(reused.json?.code)}`);
-		log("刷新失败清除会话 cookie", setCookies(reused).some((raw) => raw.startsWith("nmcps_at=;")), describe(setCookies(reused)));
+		log("同一 refresh 连续复用仍 200（新代不轮换）", secondRefresh.status === 200 && secondRefresh.json?.code === 0, `${secondRefresh.status} ${describe(secondRefresh.json?.code)}`);
 
-		// 5.5) 并发窗口：真实上游的轮换非原子，同一 refresh 并发可全部成功（NMCPS-REC-001 UP-AUTH-01）。
-		//      假上游默认单次消费，这里显式打开开关复现真实语义 —— 前端仍须单飞刷新，
-		//      上游修成原子消费后本用例会变红，提示同步文档与开关。
-		await fetch(`${upstreamBase}/__control/auth-concurrency?allow=1`, { method: "POST" });
-		const concurrentRt = cookieHeader(rotatedCookies, "nmcps_rt");
-		const concurrent = await Promise.all([0, 1].map(() => request(authPort, "/api/auth/refresh", {
+		// 5b) 坏刷新令牌：上游 **HTTP 200 + code 10007**（实测）→ BFF 必须还原为 401 并清 cookie
+		const badRefresh = await request(authPort, "/api/auth/refresh", {
 			method: "POST",
 			headers: { origin: sameOrigin },
-			cookie: concurrentRt
-		})));
-		log("上游并发窗口内同一 refresh 两路均 200（锁定真实语义）", concurrent.every((res) => res.status === 200), concurrent.map((res) => `${res.status} ${describe(res.json?.code)}`).join(" | "));
-		await fetch(`${upstreamBase}/__control/auth-concurrency?allow=0`, { method: "POST" });
+			cookie: "nmcps_rt=bogus-rt"
+		});
+		log("坏刷新令牌 → BFF 401 且业务码 10007（上游 200+10007 被还原）", badRefresh.status === 401 && badRefresh.json?.code === 10007, `${badRefresh.status} ${describe(badRefresh.json?.code)}`);
+		log("刷新失败清除会话 cookie", ["nmcps_at", "nmcps_rt", "nmcps_ui"].every((name) => setCookies(badRefresh).some((raw) => raw.startsWith(`${name}=;`))), describe(setCookies(badRefresh).length));
 
-		// 6) 桌面刷新：refreshToken 走 body，新 tokens 回传；Origin 为 tauri 白名单
+		// 6) 桌面刷新：`refresh_token` 走 body，回传新访问令牌并沿用原刷新令牌
 		const desktopRefresh = await request(authPort, "/api/auth/refresh", {
 			method: "POST",
 			headers: { ...jsonHeaders, origin: "tauri://localhost", "x-nmcps-client": "desktop" },
-			body: JSON.stringify({ refreshToken: desktopTokens?.refreshToken })
+			body: JSON.stringify({ refresh_token: rtPair.split("=")[1] })
 		});
-		log("桌面刷新 200 并回传新 tokens", desktopRefresh.status === 200 && typeof desktopRefresh.json?.data?.tokens?.accessToken === "string" && desktopRefresh.json.data.tokens.accessToken !== desktopTokens?.accessToken, `${desktopRefresh.status} ${describe(desktopRefresh.json?.data?.tokens)}`);
-
-		const revokedRefresh = await request(authPort, "/api/auth/refresh", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: "tauri://localhost", "x-nmcps-client": "desktop" },
-			body: JSON.stringify({ refreshToken: desktopTokens?.refreshToken })
-		});
-		log("桌面重复刷新 → 401 且业务码 20205", revokedRefresh.status === 401 && revokedRefresh.json?.code === 20205, `${revokedRefresh.status} ${describe(revokedRefresh.json?.code)}`);
-
-		// 6.5) 自助安全设置：MFA 绑定 / 确认（cookie 模式，Origin 同源）
-		const rotatedAt = cookieHeader(rotatedCookies, "nmcps_at");
-		const bind = await request(authPort, "/api/auth/mfa/bind", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt
-		});
-		log("MFA 绑定 200 且 otpauthUrl 原样透传", bind.status === 200 && (bind.json?.data?.otpauthUrl ?? "").startsWith("otpauth://totp/"), `${bind.status} ${describe(bind.json?.data)}`);
-		log("MFA 绑定上游携带 Bearer", (upstream.authLog.mfaBind.at(-1)?.authorization ?? "").startsWith("Bearer at-"), describe(upstream.authLog.mfaBind.at(-1)?.authorization));
-		log("mfaType 缺省时上游收到空对象（不伪造 mfaType）", upstream.authLog.mfaBind.at(-1)?.mfaType === null, describe(upstream.authLog.mfaBind.at(-1)?.mfaType));
-
-		const bindBroken = await request(authPort, "/api/auth/mfa/bind", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt,
-			body: JSON.stringify({ mfaType: 2 })
-		});
-		log("上游缺 otpauthUrl → 502 bff_upstream_contract_violation", bindBroken.status === 502 && bindBroken.json?.message === "bff_upstream_contract_violation", `${bindBroken.status} ${describe(bindBroken.json?.message)}`);
-
-		const confirmBad = await request(authPort, "/api/auth/mfa/confirm", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt,
-			body: JSON.stringify({ mfaCode: "000000" })
-		});
-		log("MFA 确认 20204 业务码原样透传", confirmBad.status === 400 && confirmBad.json?.code === 20204, `${confirmBad.status} ${describe(confirmBad.json?.code)}`);
-
-		const confirmOk = await request(authPort, "/api/auth/mfa/confirm", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt,
-			body: JSON.stringify({ mfaCode: "123456" })
-		});
-		log("MFA 确认 200 { ok:true }", confirmOk.status === 200 && confirmOk.json?.data?.ok === true, `${confirmOk.status} ${describe(confirmOk.json?.data)}`);
-
-		// 6.6) 改密：空 body 先被 zod 挡住；桌面 Bearer 通道无 cookie 也能改
-		const passwordEmpty = await request(authPort, "/api/auth/password", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt
-		});
-		log("空 body 改密 → 400 bff_invalid_body 且未触达上游", passwordEmpty.status === 400 && passwordEmpty.json?.message === "bff_invalid_body" && upstream.authLog.password.length === 0, `${passwordEmpty.status} ${describe(passwordEmpty.json?.message)} upstreamHits=${upstream.authLog.password.length}`);
-
-		const passwordBad = await request(authPort, "/api/auth/password", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt,
-			body: JSON.stringify({ oldPassword: "wrong", newPassword: "newp@ss123" })
-		});
-		log("旧口令错误 20201 原样透传", passwordBad.status === 400 && passwordBad.json?.code === 20201, `${passwordBad.status} ${describe(passwordBad.json?.code)}`);
-
-		const passwordOk = await request(authPort, "/api/auth/password", {
-			method: "POST",
-			headers: { ...jsonHeaders, origin: sameOrigin },
-			cookie: rotatedAt,
-			body: JSON.stringify({ oldPassword: "p@ssw0rd", newPassword: "newp@ss123" })
-		});
-		log("改密 200 { ok:true } 且上游收到新口令", passwordOk.status === 200 && passwordOk.json?.data?.ok === true && upstream.authLog.password.at(-1)?.newPassword === "newp@ss123", `${passwordOk.status} ${describe(upstream.authLog.password.at(-1))}`);
-
-		const passwordCsrf = await request(authPort, "/api/auth/password", {
+		const desktopTokens = desktopRefresh.json?.data?.tokens;
+		log("桌面刷新 200 且回传新访问令牌 + 原刷新令牌", desktopRefresh.status === 200 && typeof desktopTokens?.access_token === "string" && desktopTokens.access_token !== atPair.split("=")[1] && desktopTokens.refresh_token === rtPair.split("=")[1], describe(desktopTokens));
+	});
+	// ── ⑦-3 改密与登出：路径 / 方法 / 字段换代、CSRF、幂等 ──
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: upstreamBase }, async (authPort) => {
+		const sameOrigin = `http://${HOST}:${authPort}`;
+		const jsonHeaders = { "content-type": "application/json" };
+		const login = await request(authPort, "/api/auth/login", {
 			method: "POST",
 			headers: jsonHeaders,
-			cookie: rotatedAt,
-			body: JSON.stringify({ oldPassword: "p@ssw0rd", newPassword: "newp@ss123" })
+			body: JSON.stringify({ username: "alice", password: "p@ssw0rd" })
 		});
-		log("无 Origin 的 cookie 改密 → 403 bff_csrf_rejected", passwordCsrf.status === 403 && passwordCsrf.json?.message === "bff_csrf_rejected", `${passwordCsrf.status} ${describe(passwordCsrf.json?.message)}`);
+		const cookies = setCookies(login);
+		const atPair = cookieHeader(cookies, "nmcps_at");
+		const uiPair = cookieHeader(cookies, "nmcps_ui");
+		const hitsBefore = upstream.authLog.password.length;
+
+		// 7) 改密：空 body 挡在门外；camelCase 不再被接受；旧口令错（上游 200+10003）→ 400 + 业务码
+		const emptyPassword = await request(authPort, "/api/auth/password", {
+			method: "POST",
+			headers: { ...jsonHeaders, origin: sameOrigin },
+			cookie: atPair,
+			body: "{}"
+		});
+		log("空 body 改密 → 400 bff_invalid_body 且未触达上游", emptyPassword.status === 400 && emptyPassword.json?.message === "bff_invalid_body" && upstream.authLog.password.length === hitsBefore, `${emptyPassword.status} upstreamHits=${upstream.authLog.password.length - hitsBefore}`);
+
+		const camelPassword = await request(authPort, "/api/auth/password", {
+			method: "POST",
+			headers: { ...jsonHeaders, origin: sameOrigin },
+			cookie: atPair,
+			body: JSON.stringify({ newPassword: "newp@ss123", oldPassword: "p@ssw0rd" })
+		});
+		log("camelCase 改密字段 → 400 bff_invalid_body（上游只认 snake_case）", camelPassword.status === 400 && camelPassword.json?.message === "bff_invalid_body", `${camelPassword.status} ${describe(camelPassword.json?.message)}`);
+
+		const wrongOld = await request(authPort, "/api/auth/password", {
+			method: "POST",
+			headers: { ...jsonHeaders, origin: sameOrigin },
+			cookie: atPair,
+			body: JSON.stringify({ old_password: "wrong", new_password: "newp@ss123" })
+		});
+		log("旧口令错误（上游 200 + 10003）→ BFF 400 且业务码保真", wrongOld.status === 400 && wrongOld.json?.code === 10003, `${wrongOld.status} ${describe(wrongOld.json?.code)}`);
+
+		// 8) CSRF：无 Origin 的 cookie 改密 → 403；桌面 Bearer（无 cookie）放行且仍走业务码
+		const noOrigin = await request(authPort, "/api/auth/password", {
+			method: "POST",
+			headers: jsonHeaders,
+			cookie: atPair,
+			body: JSON.stringify({ old_password: "wrong", new_password: "newp@ss123" })
+		});
+		log("无 Origin 的 cookie 改密 → 403 bff_csrf_rejected", noOrigin.status === 403 && noOrigin.json?.message === "bff_csrf_rejected", `${noOrigin.status} ${describe(noOrigin.json?.message)}`);
 
 		const desktopPassword = await request(authPort, "/api/auth/password", {
 			method: "POST",
-			headers: {
-				...jsonHeaders,
-				origin: "tauri://localhost",
-				"x-nmcps-client": "desktop",
-				authorization: `Bearer ${desktopRefresh.json?.data?.tokens?.accessToken}`
-			},
-			// 假上游的改密已经落库（`accountOf`）：上一条把 alice 的口令换成了 newp@ss123，
-			// 这里必须用新口令当旧口令，才和真实上游一致
-			body: JSON.stringify({ oldPassword: "newp@ss123", newPassword: "newp@ss456" })
+			headers: { ...jsonHeaders, origin: "tauri://localhost", authorization: `Bearer ${atPair.split("=")[1]}` },
+			body: JSON.stringify({ old_password: "wrong", new_password: "newp@ss123" })
 		});
-		log("桌面令牌（无 cookie）改密 200", desktopPassword.status === 200 && desktopPassword.json?.data?.ok === true, `${desktopPassword.status} ${describe(desktopPassword.json?.data)}`);
+		log("桌面 Bearer 改密绕过 CSRF，业务码照旧保真", desktopPassword.status === 400 && desktopPassword.json?.code === 10003, `${desktopPassword.status} ${describe(desktopPassword.json?.code)}`);
 
-		// 7) CSRF：cookie 模式非安全动词必须带合法的 Origin
-		const noOrigin = await request(authPort, "/api/auth/logout", {
+		// 8b) 真正改密成功：上游收到 PUT + snake_case，BFF 回 { ok:true }
+		const changeOk = await request(authPort, "/api/auth/password", {
 			method: "POST",
-			cookie: cookieHeader(rotatedCookies, "nmcps_at")
+			headers: { ...jsonHeaders, origin: sameOrigin },
+			cookie: atPair,
+			body: JSON.stringify({ old_password: "p@ssw0rd", new_password: "newp@ss123" })
 		});
-		log("无 Origin 的 cookie 登出 → 403 bff_csrf_rejected", noOrigin.status === 403 && noOrigin.json?.message === "bff_csrf_rejected", `${noOrigin.status} ${describe(noOrigin.json?.message)}`);
+		const upstreamPw = upstream.authLog.password.at(-1);
+		log("改密 200 { ok:true } 且上游收到 snake_case 字段", changeOk.status === 200 && changeOk.json?.data?.ok === true && upstreamPw?.new_password === "newp@ss123" && upstreamPw?.old_password === "p@ssw0rd", `${changeOk.status} ${describe(upstreamPw)}`);
+		log("改密转发方法为 PUT（旧代是 POST）", upstream.authLog.passwordMethod === "PUT", describe(upstream.authLog.passwordMethod));
 
-		const evilOrigin = await request(authPort, "/api/auth/logout", {
+		// 9) 登出：无 Origin → 403；登出 200 且清三种 cookie；上游收到 Bearer + user_id；重复登出仍 200（幂等）
+		const logoutNoOrigin = await request(authPort, "/api/auth/logout", {
 			method: "POST",
-			headers: { origin: "https://evil.example" },
-			cookie: cookieHeader(rotatedCookies, "nmcps_at")
+			cookie: `${atPair}; ${uiPair}`
 		});
-		log("非白名单 Origin 的登出 → 403 bff_csrf_rejected", evilOrigin.status === 403, `${evilOrigin.status} ${describe(evilOrigin.json?.message)}`);
+		log("无 Origin 的 cookie 登出 → 403 bff_csrf_rejected", logoutNoOrigin.status === 403 && logoutNoOrigin.json?.message === "bff_csrf_rejected", `${logoutNoOrigin.status} ${describe(logoutNoOrigin.json?.message)}`);
 
-		// 8) 登出：空 body + x-www-form-urlencoded 转发，且吞掉上游失败（不幂等）
 		const logout = await request(authPort, "/api/auth/logout", {
 			method: "POST",
 			headers: { origin: sameOrigin },
-			cookie: cookieHeader(rotatedCookies, "nmcps_at")
+			cookie: `${atPair}; ${uiPair}`
 		});
 		const upstreamLogout = upstream.authLog.logout.at(-1);
-		log("登出 200 { ok:true } 并清 cookie", logout.status === 200 && logout.json?.data?.ok === true && setCookies(logout).some((raw) => raw.startsWith("nmcps_at=;")), `${logout.status} ${describe(logout.json?.data)}`);
-		log("登出向上游发空 body + x-www-form-urlencoded", upstreamLogout?.contentType === "application/x-www-form-urlencoded" && upstreamLogout?.bodyLength === 0, describe(upstreamLogout));
-		log("登出携带上游 Bearer", (upstreamLogout?.authorization ?? "").startsWith("Bearer at-"), describe(upstreamLogout?.authorization));
+		log("登出 200 { ok:true } 并清三种 cookie", logout.status === 200 && logout.json?.data?.ok === true && ["nmcps_at", "nmcps_rt", "nmcps_ui"].every((name) => setCookies(logout).some((raw) => raw.startsWith(`${name}=;`))), `${logout.status} ${describe(setCookies(logout).length)}`);
+		log("登出携带 Bearer + { user_id }（取自会话身份）", (upstreamLogout?.authorization ?? "").startsWith("Bearer at-") && upstreamLogout?.body?.user_id === "u_alice", describe(upstreamLogout));
 
 		const logoutAgain = await request(authPort, "/api/auth/logout", {
 			method: "POST",
 			headers: { origin: sameOrigin },
-			cookie: cookieHeader(rotatedCookies, "nmcps_at")
+			cookie: `${atPair}; ${uiPair}`
 		});
-		log("上游已 401（不幂等）仍返回 200 { ok:true }", logoutAgain.status === 200 && logoutAgain.json?.data?.ok === true, `${logoutAgain.status} ${describe(logoutAgain.json?.data)}`);
-
-		// 9) 业务码保真：上游 20203（需要动态口令）+ `msg` → BFF `code` 原样、`message` 补齐
-		const mfaLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "mfa-user" }) });
-		log("上游 20203 需要动态口令 → 401 且业务码原样透传（不被压成 400）", mfaLogin.status === 401 && mfaLogin.json?.code === 20203, `${mfaLogin.status} ${describe(mfaLogin.json?.code)}`);
-		log("上游 msg 归一为 message 且不写 cookie", mfaLogin.json?.message === "需要多因子验证码" && !setCookies(mfaLogin).some((raw) => raw.startsWith("nmcps_at=")), describe(mfaLogin.json?.message));
-
-		// 9.1) 动态口令错误：上游 `401 20204` → BFF 原样透传业务码（与 `20203` 成对，别压成 400）
-		const mfaWrong = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "mfa-user", mfaCode: "000000" }) });
-		log("上游 20204 动态口令错误 → 401 且业务码原样透传", mfaWrong.status === 401 && mfaWrong.json?.code === 20204, `${mfaWrong.status} ${describe(mfaWrong.json?.code)}`);
-		log("20204 的 msg 归一为 message 且不写 cookie", mfaWrong.json?.message === "动态验证码错误" && !setCookies(mfaWrong).some((raw) => raw.startsWith("nmcps_at=")), describe(mfaWrong.json?.message));
-
-		// 9.2) 强制改密标志：上游 200 带 `mustResetPassword: true` → BFF 必须原样交给前端
-		//      （上游不拦接口，客户端得自己把人送去「安全设置」，故该标志不能丢）
-		const resetLogin = await request(authPort, "/api/auth/login", { method: "POST", headers: jsonHeaders, body: loginBody({ accountName: "reset-user" }) });
-		log("上游 mustResetPassword 标志透传给前端", resetLogin.status === 200 && resetLogin.json?.data?.mustResetPassword === true && resetLogin.json?.data?.mfaRequired === false, `${resetLogin.status} ${describe(resetLogin.json?.data)}`);
+		log("重复登出仍 200 { ok:true }（上游幂等，BFF 兜底）", logoutAgain.status === 200 && logoutAgain.json?.data?.ok === true, `${logoutAgain.status} ${describe(logoutAgain.json?.data)}`);
 	});
 } finally {
 	await closeUpstream(upstream);

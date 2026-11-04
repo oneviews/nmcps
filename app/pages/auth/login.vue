@@ -39,13 +39,13 @@
 			</div>
 
 			<UForm :state="state" :schema="schema" class="flex flex-col gap-y-4" @submit="submit">
-				<UFormField :label="$t('auth.accountName')" name="accountName">
+				<UFormField :label="$t('auth.username')" name="username">
 					<UInput
-						v-model="state.accountName"
+						v-model="state.username"
 						variant="subtle"
 						size="lg"
 						autocomplete="username"
-						:placeholder="$t('auth.accountNamePlaceholder')"
+						:placeholder="$t('auth.usernamePlaceholder')"
 						class="w-full"
 					/>
 				</UFormField>
@@ -61,37 +61,6 @@
 						class="w-full"
 					/>
 				</UFormField>
-
-				<UFormField :label="$t('auth.tenantCode')" name="tenantCode">
-					<UInput
-						v-model="state.tenantCode"
-						variant="subtle"
-						size="lg"
-						autocomplete="off"
-						:placeholder="$t('auth.tenantCodePlaceholder')"
-						class="w-full"
-					/>
-				</UFormField>
-
-				<UFormField v-if="mfaRequired" :label="$t('auth.mfaCode')" name="mfaCode">
-					<UInput
-						v-model="state.mfaCode"
-						variant="subtle"
-						size="lg"
-						autocomplete="one-time-code"
-						inputmode="numeric"
-						:placeholder="$t('auth.mfaCodePlaceholder')"
-						class="w-full"
-					/>
-				</UFormField>
-
-				<UAlert
-					v-if="mfaRequired"
-					color="info"
-					variant="subtle"
-					icon="carbon:security"
-					:description="$t('auth.mfaHint')"
-				/>
 
 				<UAlert
 					v-if="upstreamMissing"
@@ -145,20 +114,16 @@
 	const { isConfigured } = useApi();
 
 	const schema = z.object({
-		accountName: z.string().min(1, t("auth.accountNameRequired")),
-		password: z.string().min(1, t("auth.passwordRequired")),
-		tenantCode: z.string().optional(),
-		mfaCode: z.string().optional()
+		username: z.string().min(1, t("auth.usernameRequired")),
+		password: z.string().min(1, t("auth.passwordRequired"))
 	});
 
 	type Schema = zInfer<typeof schema>;
 
-	/** 演示程序：默认预填种子账号（超级管理员），身份可一键切换，字段仍可手改 */
+	/** 演示程序：默认预填种子账号（平台管理员），身份可一键切换，字段仍可手改 */
 	const state = reactive<Schema>({
-		accountName: DEFAULT_DEMO_ACCOUNT.accountName,
-		password: DEFAULT_DEMO_ACCOUNT.password,
-		tenantCode: DEFAULT_DEMO_ACCOUNT.tenantCode,
-		mfaCode: ""
+		username: DEFAULT_DEMO_ACCOUNT.username,
+		password: DEFAULT_DEMO_ACCOUNT.password
 	});
 
 	/** 当前选中的演示身份 —— 只驱动按钮高亮，手动改字段不改变「预填来源」 */
@@ -166,7 +131,6 @@
 
 	const submitting = ref(false);
 	const errorMessage = ref<string>();
-	const mfaRequired = ref(false);
 	/**
 	 * 上游未配置 ⇒ 所有 `/api/auth/*` 都会 503（NMCPS-ARCH-003 §7.7）：进页面先探一次，
 	 * 别等到提交才报错；探针逻辑（缓存 / 重探 / 桌面端跳过）见 `useBffUpstream()`。
@@ -180,11 +144,10 @@
 
 	onMounted(probeUpstream);
 
-	/** 切换演示身份：账号 / 口令 / 租户编码整体回填，动态口令不动（MFA 属于当次登录） */
+	/** 切换演示身份：账号 / 口令整体回填（新代无租户编码、无动态口令） */
 	function applyDemoAccount(account: DemoAccount): void {
-		state.accountName = account.accountName;
+		state.username = account.username;
 		state.password = account.password;
-		state.tenantCode = account.tenantCode;
 		activeDemoId.value = account.id;
 		errorMessage.value = undefined;
 	}
@@ -192,10 +155,9 @@
 	/** 上游业务码 → 本地化文案（未知码回落 BFF/上游原始 message，不吞信息） */
 	function describeError(error: unknown): string {
 		if (error instanceof ApiError) {
-			if (error.code === 401 || error.code === 20201 || error.code === 20202)
+			// 新代口令错/账号不存在统一 10003（NMCPS-ADR-0018 §4.1），401 是 BFF 还原后的状态码
+			if (error.code === 401 || error.code === 10003)
 				return t("auth.invalidCredentials");
-			if (error.code === 20203)
-				return t("auth.mfaRequired");
 			if (error.code === 403)
 				return t("auth.forbidden");
 			// 上游未配置 / 掉线 / 超时是运维问题，不是凭据问题：给出可执行的修复指引
@@ -217,14 +179,10 @@
 		errorMessage.value = undefined;
 
 		try {
-			const result = await login({
-				accountName: state.accountName.trim(),
-				password: state.password,
-				tenantCode: state.tenantCode?.trim() || undefined,
-				mfaCode: state.mfaCode?.trim() || undefined
+			await login({
+				username: state.username.trim(),
+				password: state.password
 			});
-
-			mfaRequired.value = result.mfaRequired;
 
 			await fetchSession(true);
 
@@ -234,20 +192,10 @@
 				? target
 				: undefined;
 
-			// 强制改密是纯前端约定：上游不拦接口（NMCPS-ARCH-003 §7.2 第 14 条），
-			// 客户端必须把人送去专用改密页（`/auth/change-password`），否则初始口令能一直用下去。
-			if (result.mustResetPassword) {
-				await navigateTo({ path: "/auth/change-password", query: redirect ? { redirect } : undefined });
-				return;
-			}
-
+			// 新代没有 `mustResetPassword`（NMCPS-ADR-0018 缺口 G2）：强制改密入口不再由登录判定，
+			// `/auth/change-password` 保留给自助改密与后续 BFF 侧策略命中。
 			await navigateTo(redirect ?? "/dashboard/overview");
 		} catch (error) {
-			// 需要动态口令时上游以 `401 20203` 拒绝本次登录（实测，见 NMCPS-REC-001）：
-			// 保留账号口令，展开动态口令输入框让用户补码后重试
-			if (error instanceof ApiError && error.code === 20203)
-				mfaRequired.value = true;
-
 			errorMessage.value = describeError(error);
 		} finally {
 			submitting.value = false;

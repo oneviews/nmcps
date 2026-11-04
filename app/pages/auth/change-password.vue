@@ -34,10 +34,10 @@
 					纯粹是给浏览器的表单语义（`NMCPS-ARCH-003` §7.4）。
 				-->
 				<input
-					v-if="accountName"
+					v-if="username"
 					type="text"
 					autocomplete="username"
-					:value="accountName"
+					:value="username"
 					readonly
 					tabindex="-1"
 					aria-hidden="true"
@@ -142,8 +142,8 @@
 
 	const submitting = ref(false);
 	const errorMessage = ref<string>();
-	/** 当前账号名：只喂给隐藏的 `autocomplete="username"`，不在界面上出现 */
-	const accountName = ref<string>();
+	/** 当前登录名：只喂给隐藏的 `autocomplete="username"`，不在界面上出现 */
+	const username = ref<string>();
 
 	/**
 	 * 未登录直接进来（手动敲地址 / 改密途中会话过期）：送回登录页并带回跳，
@@ -151,7 +151,7 @@
 	 */
 	onMounted(async () => {
 		const session = await fetchSession(true);
-		accountName.value = session.user?.accountName;
+		username.value = session.user?.username;
 		if (!session.authenticated) {
 			await navigateTo({ path: "/auth/login", query: { redirect: "/auth/change-password" } });
 		}
@@ -163,7 +163,7 @@
 			const hint = upstreamHintKey(error);
 			if (hint)
 				return t(hint);
-			if (error.code === 20201 || error.code === 401)
+			if (error.code === 10003 || error.code === 401)
 				return t("auth.changePasswordCurrentInvalid");
 			// 口令策略在上游：复杂度不足 400 20101，与近期历史重复 400 20302
 			if (error.code === 20101)
