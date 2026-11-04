@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.8.0
+version: 0.8.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -250,6 +250,7 @@ tags:
 - **没有角色启停端点**：`PUT /iam/roles/{id}` 带 `enabled` 无效（UP-RBAC-03）。
 - `roleLevel` / `isBuiltin` / `status` 三个字段随等级模型一并退役（缺口 G1）；`is_system` 接替「内置角色」的**语义标签**，但不构成保护。
 - 账号 ↔ 角色已读写对称（旧代 `UP-POL-07` 闭环）：读走 `subject-roles` 列表，写走 `AssignRole` / `RevokeRole`。
+- `GET /iam/subject-roles` **只认 `subject_id`**（按角色反查不在契约里）：页面一次拉全量关系行（`page_size=100`）再按 `role_id` 过滤，「某角色分配给了谁」是前端视图而不是上游查询；用户展示名与「用户是否还在」取自 `/api/iam/users`。
 
 ### 8.2 字段口径
 
@@ -394,3 +395,4 @@ tags:
 | 2026-11-04 | 0.6.0 | **§6 用户管理按新代 `iam/users` 重写（C4a）**：端点表换成 `GET|POST /iam/users`、`GET|PUT|DELETE /iam/users/{id}`、`GET /iam/tenants`、`GET /iam/departments`；字段口径改 snake_case（`id` / `username` / `display_name` / `status: active|disabled|locked` / `mfa_enabled` / `tenant_id` / `department_id`），`pageSize` → `page_size`，`list: null` 由 BFF 出口归一为 `[]`；**等级模型（`accountLevel`）整段退役**（缺口 G1），建号归属改由「部门」表达（`POST /iam/users` 实测没有 `tenant_id`）；新增删号（`DELETE`，软删 `deleted_at`，旧代 `UP-ACC-04` 闭环）与「列表自带租户归属」（`UP-ACC-05` 闭环）；错误码表改为实测的 `10002` / `40001` / `10003` / `10007` / `10301` 组合，口令策略按实测「6-128 字符」；`POST /access/dryrun` 入口与弹窗随缺口 G5 下线。 |
 | 2026-11-04 | 0.7.0 | **§9 审计日志按新代 `audit/*` 三族重写（C4b）**：旧代的单端点 `GET /audit?category=…` + `POST /audit/verify` + `GET|POST /audit/export` 全部退役，改为按日志族拆分的六个读路径与一个写路径 —— 操作日志 `GET /audit/operation-logs`、安全日志 `GET /audit/security-logs`、归档记录 `GET /audit/archive/records`（各带自己的详情端点）与执行归档 `POST /audit/archive/run`；主键从 `logCode` 变 `id`（UUID），分页字段从 `pageSize` 变 `page_size`，时间边界从时间串变 **epoch 毫秒整数**（`created_from` / `created_to`、`logged_from` / `logged_to`），空结果 `list: null` 由 BFF 出口归一为 `[]`。页面改成「三族一页」：日志族下拉常驻左区、浮层只放本族的 openapi 参数、归档族收起时间范围；校验与导出入口随缺口 G6 / G7 下线，归档弹窗取代导出；错误码表换成 `40401` / `10007` / `40001`（旧代 `10201` 在新代是「密码错误」，不再复用）。字段口径如实分层：归档记录已实测，操作 / 安全日志的条目字段尚无真实样本，页面只渲染已登记字段并把未登记字段原样列出。`check:ui` 的 `/system/log` 用例 8 → 11（切族换端点与时间参数、归档族无时间条件、选中行走族详情端点），总数 105 → 106；`check:bff` 的空列表归一路径改到 `operation-logs`。 |
 | 2026-11-04 | 0.8.0 | **§7 / §8 按新代 `iam` 命名空间重写（C4c）**：策略段从「`/abac/rule` 只读巡检 + `/access/dryrun` 试算」改为策略 CRUD —— 列表 / 建 / 详情 / 改 / 删落在 `GET|POST /iam/policies` 与 `GET|PUT|DELETE /iam/policies/{id}`，挂摘策略走独立的 `POST /iam/role-policies/{AttachPolicy,DetachPolicy}`；ABAC 段与试算按钮随缺口 G4 / G5 由「契约未知」升级为「端点缺失」下线。角色段从「`roleCode` 路径 + `roleLevel` + 权限点目录」改为 uuid 主键的 `GET|POST /iam/roles` + `GET|PUT|DELETE /iam/roles/{id}`，授权矩阵从「权限点 × 角色」重写为「策略 × 角色」（缺口 G3 确认：`/permission` 在新代 openapi 中不存在），账号↔角色改由 `subject-roles` 三端点读写对称（旧代 `UP-POL-07` 闭环）。三处旧口径随实测作废：① 「超管恒 `401 10201`」的域拒绝不存在了，任何已认证会话（含零角色账号）都能读写 IAM 端点，可见范围只由会话租户决定（`UP-RBAC-01` / `UP-RBAC-09`）→ 客户端不再按身份旁路取数；② `enabled` 写入被忽略（`UP-RBAC-03`）→ 不提供启停；③ 列表有 `keyword` → 撤销「客户端全量拉取 + 客户端分页」的例外，回到服务端分页。失败处理改为按 **HTTP 状态 + 响应形态**分派（`200 {code:400}`、`400` 纯文本 `记录不存在`、`400` + 原始 `SQLSTATE`），并写明原始 SQL 不得透传给用户。上游缺陷由 `NMCPS-REC-003`（旧代，已 `superseded`）换为 `NMCPS-REC-005`。 |
+| 2026-11-04 | 0.8.1 | **§8.1 补一条实测约束（C4c-2 落码回填）**：`GET /iam/subject-roles` 只认 `subject_id`，按角色反查不在契约里 —— 页面因此一次拉全量关系行再按 `role_id` 过滤，「某角色分配给了谁」是前端视图而非上游查询，用户展示名与存在性取自 `/api/iam/users`（孤儿绑定据此过滤，`UP-RBAC-10`）。同轮把 C4c-1 / C4c-2 的验收写进迁移清单：`check:bff` 106/106、`check:ui` 116/116。 |

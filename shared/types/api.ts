@@ -61,8 +61,9 @@ export const GATEWAY_RESOURCES = [
 	"topology",
 	"transmission",
 	// ── 旧代资源名（待 C4 客户端迁移后整组删除） ──
-	"abac",
-	"access",
+	// 策略域已整体退役：`abac`（`/abac/rule`）、`access`（`/access/dryrun`）、`permission`、
+	// `role` 四组端点在 8888 openapi 中 0 命中（缺口 G3 / G4 / G5，NMCPS-ADR-0018 §4.3），
+	// `/system/policy`（C4c-1）与 `/system/permission`（C4c-2）改走 `iam/*`，故不再放行。
 	"account",
 	"ai",
 	"alerts",
@@ -76,9 +77,7 @@ export const GATEWAY_RESOURCES = [
 	"metrics",
 	"monitor",
 	"ota",
-	"permission",
 	"product",
-	"role",
 	"rule",
 	"simulation",
 	"targets",

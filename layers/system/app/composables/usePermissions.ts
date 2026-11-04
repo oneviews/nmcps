@@ -1,135 +1,172 @@
 // layers/system/app/composables/usePermissions.ts
-// 权限管理数据面（`/system/permission`）：只封装 2026-11-01 实测存在的权限域端点。
+// 授权数据面（`/system/permission`）：新代 `iam/{roles,role-policies,subject-roles}`。
 //
-// 设计基准：NMCPS-DESIGN-005 §八（layers/content/collections/cn/architecture/2.domain/system.md）
-// 上游缺陷：NMCPS-REC-003（layers/content/collections/cn/records/defects/policy-upstream-defects.md）
-//   - 内置角色（`isBuiltin`）的授权与删除被上游拒绝（`40305` / `40303`，UP-POL-09），页面只读；
-//   - `GET /role/{code}/permission` **不返回 `effect`**：拒绝（`effect=2`）写入后不可回读（UP-POL-03）；
-//   - `POST /permission` 存在但**没有删除端点**：本页只读权限点目录（UP-POL-01）；
-//   - `GET /account/role?accountId=` 不存在（`404`）：账号↔角色只能写不能读（UP-POL-07）。
+// 设计基准：NMCPS-DESIGN-005 §八（layers/content/collections/cn/architecture/2.domain/system.md）、
+// NMCPS-ADR-0018 §4.3（旧代 `/role` + `/role/{code}/permission` → 新代 `iam/roles` + `role-policies`）。
+// 上游缺陷：NMCPS-REC-005（layers/content/collections/cn/records/defects/iam-policy-upstream-defects.md）
+//   - 列表只认 `keyword` / `code`，`enabled` / `tenant_id` 被静默忽略（UP-RBAC-06）；
+//   - 建角色把新主键放在**信封顶层**（`{ code, message, id }`，没有 `data`），因此建完要按 `code` 回读；
+//   - `PUT` 的 `enabled` 被忽略（UP-RBAC-03）→ 这里只写 `name` / `description`；
+//   - 关系行不随主体 / 对象软删清理（UP-RBAC-10）→ 孤儿绑定由页面按存在性过滤，不在这里猜。
 //
-// 鉴权口径：BFF 只做白名单透传，越权判定全在上游；超级管理员调本域任一端点回 `401 10201`（UP-POL-08），
-// 页面据此展示「当前身份无策略域」提示，而不是把它当普通加载失败。
+// 鉴权口径：新代没有业务级鉴权（UP-RBAC-01），BFF 只做白名单透传；
+// 可见范围由**会话租户**决定，因此这里不做任何「客户端先拦一道」的假设。
 import type {
-	PermissionListQuery,
-	PermissionListResult,
-	PermissionSummary,
-	PolicyOkResult,
-	RoleCreatePayload,
-	RoleListQuery,
-	RoleListResult,
-	RolePermissionListResult,
-	RoleSummary
+	IamRole,
+	IamRoleCreatePayload,
+	IamRoleListQuery,
+	IamRoleListResult,
+	IamRolePolicyListQuery,
+	IamRolePolicyListResult,
+	IamRoleUpdatePayload,
+	IamSubjectRoleListQuery,
+	IamSubjectRoleListResult
 } from "~~/shared/types/policy";
-import { POLICY_EFFECT } from "~~/shared/types/policy";
 
-/** 上游 `pageSize` 有上限，超出会被静默截断，客户端先夹一次再说 */
+/** 上游 `page_size` 无显式上限（UP-RBAC-06），客户端仍夹一次，避免一次拉回整库 */
 const MAX_PAGE_SIZE = 100;
-/** 权限点目录很小（实测 24 条），全量拉取的页数上限用于兜底死循环 */
-const MAX_CATALOG_PAGES = 10;
+/** 实测只有 `user` 一种主体类型：角色分配不开放其它主体 */
+const SUBJECT_TYPE_USER = "user";
 
 export function usePermissions() {
 	const api = useApi();
 
-	/** 权限点列表：空串 / `undefined` 参数一律不发 */
-	function listPermissions(query: PermissionListQuery): Promise<PermissionListResult> {
+	/** 角色列表：空串 / `undefined` 参数一律不发（上游对空串不过滤） */
+	function listRoles(query: IamRoleListQuery): Promise<IamRoleListResult> {
 		const page = Math.max(1, Math.trunc(query.page) || 1);
-		const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.pageSize) || 20));
+		const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.page_size) || 15));
 		const keyword = query.keyword?.trim();
 
-		return api.get<PermissionListResult>("/api/permission", {
+		return api.get<IamRoleListResult>("/api/iam/roles", {
 			query: {
 				page,
-				pageSize,
-				keyword: keyword || undefined,
-				// `0` 是「不限」哨兵：透传会被上游当「未提供」，但没必要多发一个参数
-				resourceType: query.resourceType || undefined
+				page_size: pageSize,
+				keyword: keyword || undefined
 			}
 		});
 	}
 
-	/**
-	 * 权限点全量目录：授权矩阵要按 `permCode` 判断「已授权 / 未授权」，
-	 * 逐页累加到不足一页为止（上限 `MAX_CATALOG_PAGES` 页，防上游 `total` 异常时死循环）。
-	 */
-	async function listAllPermissions(): Promise<PermissionSummary[]> {
-		const collected: PermissionSummary[] = [];
-
-		for (let page = 1; page <= MAX_CATALOG_PAGES; page++) {
-			const result = await listPermissions({ page, pageSize: MAX_PAGE_SIZE });
-			const chunk = result.list ?? [];
-			collected.push(...chunk);
-
-			if (chunk.length < MAX_PAGE_SIZE || collected.length >= (result.total ?? 0))
-				break;
-		}
-
-		return collected;
-	}
-
-	/** 角色列表（`keyword` 之外没有过滤项） */
-	function listRoles(query: RoleListQuery): Promise<RoleListResult> {
-		const page = Math.max(1, Math.trunc(query.page) || 1);
-		const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.pageSize) || 20));
-		const keyword = query.keyword?.trim();
-
-		return api.get<RoleListResult>("/api/role", {
-			query: { page, pageSize, keyword: keyword || undefined }
-		});
-	}
-
-	/** 角色详情：路径段是 `roleCode`（不是 `roleId`） */
-	function getRole(roleCode: string): Promise<RoleSummary> {
-		return api.get<RoleSummary>(`/api/role/${encodeURIComponent(roleCode)}`);
-	}
-
-	/** 自建角色：`roleLevel` 只能低于自身（租户管理员可建 `2`–`4`，`0`/`1` 回 `20103`） */
-	function createRole(payload: RoleCreatePayload): Promise<RoleSummary> {
-		return api.post<RoleSummary>("/api/role", payload);
-	}
-
-	/** 删除自建角色：内置角色回 `40303` */
-	function deleteRole(roleCode: string): Promise<PolicyOkResult> {
-		return api.del<PolicyOkResult>(`/api/role/${encodeURIComponent(roleCode)}`);
+	/** 角色详情：不存在时上游回 `400` + 纯文本 `记录不存在`（不是 envelope） */
+	function getRole(id: string): Promise<IamRole> {
+		return api.get<IamRole>(`/api/iam/roles/${encodeURIComponent(id)}`);
 	}
 
 	/**
-	 * 角色已授权的权限点。
+	 * 建角色：上游把新主键放在信封顶层（`{ code, message, id }`），`useApi` 解包后拿不到 id，
+	 * 因此用 `keyword` 精确回读刚建好的那一行（`code` 同租户唯一，命中即是它）。
 	 *
-	 * 上游只回权限点本体、**不回 `effect`**（UP-POL-03）：页面只能把「出现在这里」理解成
-	 * 「有这条授权」，不能区分允许 / 拒绝，因此也不向用户展示「拒绝」开关。
+	 * 回读不到（列表尚未反映）时返回 `undefined`，由页面回落到整表刷新。
 	 */
-	function listRolePermissions(roleCode: string, pageSize = MAX_PAGE_SIZE): Promise<RolePermissionListResult> {
-		return api.get<RolePermissionListResult>(`/api/role/${encodeURIComponent(roleCode)}/permission`, {
-			query: { page: 1, pageSize }
+	async function createRole(payload: IamRoleCreatePayload): Promise<IamRole | undefined> {
+		const code = payload.code.trim();
+
+		await api.post<unknown>("/api/iam/roles", {
+			name: payload.name.trim(),
+			code,
+			description: payload.description?.trim() || undefined
+		});
+
+		const result = await listRoles({ page: 1, page_size: 5, keyword: code });
+		return result.list.find((item) => item.code === code);
+	}
+
+	/** 改角色：只发实测生效的 `name` / `description`（`enabled` 被忽略，UP-RBAC-03） */
+	function updateRole(payload: IamRoleUpdatePayload): Promise<void> {
+		const { id, ...rest } = payload;
+
+		return api.put<void>(`/api/iam/roles/${encodeURIComponent(id)}`, {
+			id,
+			name: rest.name?.trim(),
+			description: rest.description?.trim()
 		});
 	}
 
-	/** 授权：只用 `ALLOW`（`effect=2` 不可回读，见 UP-POL-03） */
-	function grantPermission(roleCode: string, permCode: string): Promise<PolicyOkResult> {
-		return api.post<PolicyOkResult>(`/api/role/${encodeURIComponent(roleCode)}/permission`, {
-			permCode,
-			effect: POLICY_EFFECT.ALLOW
+	/** 删角色：系统角色同样可删（UP-RBAC-02），因此这里不做任何客户端的「保护」拦阻 */
+	function deleteRole(id: string): Promise<void> {
+		return api.del<void>(`/api/iam/roles/${encodeURIComponent(id)}`);
+	}
+
+	/**
+	 * 角色已挂策略：只回关系行 `{ id, role_id, policy_id, created_at }`，不回策略本体，
+	 * 页面按 `policy_id` 关联策略目录（`usePolicies().list()`）。
+	 */
+	function listRolePolicies(query: IamRolePolicyListQuery): Promise<IamRolePolicyListResult> {
+		const page = Math.max(1, Math.trunc(query.page) || 1);
+		const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.page_size) || MAX_PAGE_SIZE));
+
+		return api.get<IamRolePolicyListResult>("/api/iam/role-policies", {
+			query: {
+				page,
+				page_size: pageSize,
+				role_id: query.role_id || undefined
+			}
 		});
 	}
 
-	/** 撤销授权：body 只带 `permCode`（`effect` 对删除无意义） */
-	function revokePermission(roleCode: string, permCode: string): Promise<PolicyOkResult> {
-		return api.request<PolicyOkResult>(`/api/role/${encodeURIComponent(roleCode)}/permission`, {
-			method: "DELETE",
-			body: { permCode }
+	/** 挂策略：重复挂载回 `400` + `SQLSTATE 23505`（与建对象同族失败通道，UP-RBAC-04） */
+	function attachPolicy(roleId: string, policyId: string): Promise<void> {
+		return api.post<void>("/api/iam/role-policies/AttachPolicy", {
+			role_id: roleId,
+			policy_id: policyId
+		});
+	}
+
+	/** 摘策略：幂等（重复摘除仍 `200`） */
+	function detachPolicy(roleId: string, policyId: string): Promise<void> {
+		return api.post<void>("/api/iam/role-policies/DetachPolicy", {
+			role_id: roleId,
+			policy_id: policyId
+		});
+	}
+
+	/**
+	 * 主体已分配的角色。
+	 *
+	 * 上游只认 `subject_id`（按角色反查不在契约里），因此「某角色分配给了谁」由调用方
+	 * 一次拉全量再按 `role_id` 过滤 —— 关系表总量很小（实测 24 条），不值得为它分页。
+	 */
+	function listSubjectRoles(query: IamSubjectRoleListQuery): Promise<IamSubjectRoleListResult> {
+		const page = Math.max(1, Math.trunc(query.page) || 1);
+		const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.page_size) || MAX_PAGE_SIZE));
+
+		return api.get<IamSubjectRoleListResult>("/api/iam/subject-roles", {
+			query: {
+				page,
+				page_size: pageSize,
+				subject_id: query.subject_id || undefined
+			}
+		});
+	}
+
+	/** 分配角色：body 只有 `subject_type` / `subject_id` / `role_id` 三个字段 */
+	function assignRole(subjectId: string, roleId: string): Promise<void> {
+		return api.post<void>("/api/iam/subject-roles/AssignRole", {
+			subject_type: SUBJECT_TYPE_USER,
+			subject_id: subjectId,
+			role_id: roleId
+		});
+	}
+
+	/** 撤销角色：与分配同形（重复撤销幂等） */
+	function revokeRole(subjectId: string, roleId: string): Promise<void> {
+		return api.post<void>("/api/iam/subject-roles/RevokeRole", {
+			subject_type: SUBJECT_TYPE_USER,
+			subject_id: subjectId,
+			role_id: roleId
 		});
 	}
 
 	return {
-		listPermissions,
-		listAllPermissions,
 		listRoles,
 		getRole,
 		createRole,
+		updateRole,
 		deleteRole,
-		listRolePermissions,
-		grantPermission,
-		revokePermission
+		listRolePolicies,
+		attachPolicy,
+		detachPolicy,
+		listSubjectRoles,
+		assignRole,
+		revokeRole
 	};
 }

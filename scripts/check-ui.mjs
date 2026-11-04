@@ -1134,6 +1134,98 @@ if (upstreamPort) {
 	page.off("request", recordPolicyRequest);
 }
 
+// 7.3c 权限管理两栏（NMCPS-DESIGN-005 §8 / NMCPS-ADR-0018 §4.3）：新代 `iam/roles` +
+// `role-policies` + `subject-roles`。断言只盯「页面依赖的契约」：
+// 旧代是「权限点 × 角色」（`/role/{code}/permission`），矩阵来源、写通道、成员来源全部换了，
+// 任何一条回退都会在这里变红。依赖假上游的三条角色 / 三条关系（见 `scripts/lib/bff-harness.mjs`，
+// 其中 `r_tenant_viewer_isp_a` 的删除固定回 `200 {code:400}`，验 UP-RBAC-05；
+// `rp-orphan` / `sr-orphan` 验 UP-RBAC-10 的孤儿过滤）。
+if (upstreamPort) {
+	const readPermissionPage = () => page.evaluate(() => {
+		const root = document.querySelector("[data-split='permission']");
+		return {
+			shape: root?.getAttribute("data-split-shape") ?? null,
+			search: location.search,
+			rows: Array.from(root?.querySelectorAll("[role='option']") ?? []).map((el) => ({
+				code: (el.getAttribute("title") ?? "").split("·").pop()?.trim() ?? "",
+				selected: el.getAttribute("aria-selected") === "true"
+			})),
+			policies: Array.from(root?.querySelectorAll("[data-policy-code]") ?? []).map((el) => ({
+				code: el.getAttribute("data-policy-code") ?? "",
+				granted: el.querySelector("[role='switch']")?.getAttribute("aria-checked") === "true"
+			})),
+			text: root?.textContent ?? ""
+		};
+	});
+
+	const permissionRequests = [];
+	const recordPermissionRequest = (request) => {
+		const url = new URL(request.url());
+		if (url.pathname.startsWith("/api/iam/role") || url.pathname.startsWith("/api/iam/subject-roles"))
+			permissionRequests.push({ path: url.pathname, method: request.method(), params: url.searchParams, body: request.postData() });
+	};
+	page.on("request", recordPermissionRequest);
+
+	await page.goto(`${BASE_URL}/system/permission`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(700);
+	const firstPermission = await readPermissionPage();
+	const firstRoleQuery = permissionRequests.find((item) => item.path === "/api/iam/roles" && item.params.has("page"));
+
+	log(
+		"权限页默认选中首行，角色列表走服务端分页（page_size=15，且不请求被忽略的 enabled / tenant_id）",
+		firstPermission.shape === "two"
+		&& firstPermission.search.includes("id=r_platform_admin")
+		&& firstRoleQuery?.params.get("page_size") === "15"
+		&& !firstRoleQuery?.params.has("enabled")
+		&& !firstRoleQuery?.params.has("tenant_id"),
+		`url="${firstPermission.search}" 参数=${firstRoleQuery ? Array.from(firstRoleQuery.params.keys()).join("/") : "无请求"}`
+	);
+
+	// 授权矩阵 = 策略目录（`iam/policies`）× 关系行（`role-policies`），不是权限点开关。
+	// 目录里此时有 3 条种子 + 本节前面新建的 1 条策略（同一个假上游跑完整个自查），因此只断言下界。
+	const grantedCodes = firstPermission.policies.filter((item) => item.granted).map((item) => item.code);
+	log(
+		"授权矩阵按策略目录渲染，已挂载状态来自 role-policies（平台角色只挂 1 条）",
+		firstPermission.policies.length >= 3
+		&& grantedCodes.length === 1
+		&& grantedCodes[0] === "platform.full_access"
+		&& permissionRequests.some((item) => item.path === "/api/iam/role-policies" && item.params.get("role_id") === "r_platform_admin"),
+		`策略=${firstPermission.policies.length} 已挂=${grantedCodes.join("/") || "无"}`
+	);
+
+	// 孤儿关系行（UP-RBAC-10）与成员区都挂在 `r_tenant_admin` 上：换角色重读一次。
+	// `rp-orphan` 指向已删策略、`sr-orphan` 指向已删用户，两者都只报数量、不渲染幽灵条目。
+	permissionRequests.length = 0;
+	await page.goto(`${BASE_URL}/system/permission?id=r_tenant_admin`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(700);
+	const tenantPermission = await readPermissionPage();
+	const tenantGranted = tenantPermission.policies.filter((item) => item.granted).map((item) => item.code);
+
+	log(
+		"换角色后矩阵按 role_id 重取（租户管理员角色挂的是 tenant.readonly）",
+		tenantGranted.length === 1 && tenantGranted[0] === "tenant.readonly",
+		`已挂=${tenantGranted.join("/") || "无"}`
+	);
+
+	log(
+		"指向已删策略的孤儿关系行只报数量、不渲染幽灵条目",
+		tenantPermission.policies.every((item) => item.code !== "pol_deleted_elsewhere")
+		&& tenantPermission.text.includes("已不存在的策略"),
+		`含孤儿提示=${tenantPermission.text.includes("已不存在的策略")}`
+	);
+
+	log(
+		"已分配用户按 role_id 过滤并屏蔽已删用户（u_ghost 不出现）",
+		tenantPermission.text.includes("u_alice")
+		&& tenantPermission.text.includes("u_bob")
+		&& !tenantPermission.text.includes("u_ghost")
+		&& tenantPermission.text.includes("已删除的用户"),
+		`含 alice=${tenantPermission.text.includes("u_alice")} 含 ghost=${tenantPermission.text.includes("u_ghost")}`
+	);
+
+	page.off("request", recordPermissionRequest);
+}
+
 // 7.4 审计日志工具栏（NMCPS-DESIGN-005 §9.3 第 2 条 / NMCPS-ARCH-006 §4.1）：
 // 时间范围与日志族常驻左区、其余标识类筛选留浮层，且两个常驻控件必须真的改写请求参数 ——
 // 只断言「控件在那儿」会把「摆了个假的」也算通过。依赖假上游的三族假数据

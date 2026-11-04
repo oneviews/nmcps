@@ -1,26 +1,39 @@
 <template>
 	<!--
-		破坏性确认（NMCPS-ARCH-006 §3.7 / NMCPS-ADR-0017 D7）：
-		动作入口在右栏工具栏的记录域，弹窗只确认这一次写操作。
+		删除确认（NMCPS-ARCH-006 §3.7「Modal = 破坏性确认」/ NMCPS-ADR-0017 D7）。
+		动作入口在**右栏工具栏**（记录域动作不下行到行内，D5），本弹窗只确认这一次写操作。
+
+		两条文案不是客套话，都是实测事实（NMCPS-REC-005）：
+		- `is_system: true` **不是保护**：`DELETE` 对种子角色同样返回成功（UP-RBAC-02）；
+		- 角色与策略 / 用户的关系在独立资源上（`role-policies` / `subject-roles`），
+			删角色会留下孤儿关系行（UP-RBAC-10），上游没有恢复端点。
 	-->
 	<UModal
 		v-model:open="open"
 		:title="t('pages.system-permission.deleteModal.title')"
-		:description="role ? t('pages.system-permission.deleteModal.description', { name: role.roleName }) : undefined"
+		:description="role ? t('pages.system-permission.deleteModal.description', { name: role.name }) : undefined"
 		:dismissible="!submitting"
 		:ui="{ footer: 'justify-end' }"
 	>
 		<template #body>
 			<div v-if="role" class="space-y-4">
 				<div class="flex items-center justify-between gap-3 rounded-md border border-(--ui-border) px-3 py-2">
-					<span class="font-mono text-xs">{{ role.roleCode }}</span>
-					<UBadge :color="role.isBuiltin ? 'neutral' : 'primary'" variant="subtle">
-						{{ role.isBuiltin ? t("pages.system-permission.isBuiltin") : t("pages.system-permission.isCustom") }}
+					<span class="font-mono text-xs">{{ role.code }}</span>
+					<UBadge :color="role.is_system ? 'neutral' : 'primary'" variant="subtle">
+						{{ role.is_system ? t("pages.system-permission.systemBadge") : t("pages.system-permission.customBadge") }}
 					</UBadge>
 				</div>
 
-				<!-- 删除角色会连带解除该角色的全部授权，且没有「恢复」端点 -->
 				<UAlert
+					v-if="role.is_system"
+					color="error"
+					variant="subtle"
+					icon="carbon:warning-alt"
+					:title="t('pages.system-permission.deleteModal.systemTitle')"
+					:description="t('pages.system-permission.deleteModal.systemHint')"
+				/>
+				<UAlert
+					v-else
 					color="warning"
 					variant="subtle"
 					icon="carbon:information"
@@ -58,16 +71,18 @@
 </template>
 
 <script setup lang="ts">
-	import type { RoleSummary } from "~~/shared/types/policy";
+	import type { IamRole } from "~~/shared/types/policy";
 
 	/**
-	 * 删除自建角色（`DELETE /api/role/{roleCode}`）。
-	 *
-	 * 设计基准：NMCPS-DESIGN-005 §8.1（layers/content/collections/cn/architecture/2.domain/system.md）
-	 * - 内置角色（`isBuiltin: true`）被上游拒绝（`40303`），因此调用方只在自建角色上提供入口；
-	 * - 角色编码即路径段；删除后 `GET /role/{code}` 回 `10301`（实测），列表需重拉。
-	 */
-	const props = defineProps<{ role: RoleSummary | null }>();
+		* 删除角色确认（`DELETE /api/iam/roles/{id}`）。
+		*
+		* 设计基准：NMCPS-DESIGN-005 §8.3 第 3 条（删除系统角色前弹确认，文案写明「上游不保护系统对象」）、
+		* §8.4（删除失败可能是 `200 {code:400}`）。
+		*
+		* 系统角色不禁用删除入口：上游对 `is_system` 没有保护（UP-RBAC-02），
+		* 假装拦一道只会让用户以为「界面坏了」。
+		*/
+	const props = defineProps<{ role: IamRole | null }>();
 
 	const emit = defineEmits<{ deleted: [] }>();
 
@@ -103,7 +118,7 @@
 		submitError.value = undefined;
 
 		try {
-			await deleteRole(props.role.roleCode);
+			await deleteRole(props.role.id);
 			toast.add({ title: t("pages.system-permission.deleteModal.success"), color: "success" });
 			open.value = false;
 			emit("deleted");

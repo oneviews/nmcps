@@ -224,23 +224,34 @@ export async function startUpstream(port) {
 	const matchesText = (value, expected) => expected === "" || String(value ?? "") === expected;
 
 	/**
-	 * 策略域假数据（`GET /role`、`GET /role/{roleCode}/permission`、`GET /permission`、
-	 * `GET /abac/rule`）：给 `/system/permission`、`/system/policy` 的列表栏自查
-	 * （`NMCPS-ARCH-006` §3.8 列表尾部落到四个列表页）用。
-	 *
-	 * 只提供「列表 + 授权矩阵」这一条读路径：页面能进列表态并渲染出尾部，
-	 * 就不会因为资源未实现而 404 —— 否则「控制台零错误」断言会把假上游的缺口
-	 * 误报成前端缺陷。
+	 * 新代角色假数据（`GET /iam/roles`，2026-11-04 实测字段）：给 `/system/permission` 两栏自查用。
+	 * 三条硬要求，否则用例测不出真伪：
+	 *   - `keyword` 真的命中 name / code（`enabled` / `tenant_id` 传了被静默忽略，UP-RBAC-06）；
+	 *   - 分页字段是 `page_size`，`total` 要能分页；
+	 *   - 留一条「删除回 `200 {code:400}`」的样本（`r_tenant_viewer_isp_a`），把 UP-RBAC-05 的
+	 *     失败通道固定进假上游，否则「删除失败」分支永远测不到。
 	 */
-	const policyRoles = [
-		{ roleId: 1, tenantId: 1, roleCode: "ROLE-ADMIN", roleName: "租户管理员", roleLevel: 1, isBuiltin: true, status: 1, description: "内置角色", createdAt: "2026-10-01 09:00:00" },
-		{ roleId: 2, tenantId: 1, roleCode: "ROLE-OPS", roleName: "运维", roleLevel: 2, isBuiltin: false, status: 1, description: "自建角色", createdAt: "2026-10-02 10:00:00" }
+	const iamRoles = [
+		{ id: "r_platform_admin", tenant_id: null, name: "平台管理员", code: "platform.admin", description: "平台内置角色", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
+		{ id: "r_tenant_admin", tenant_id: "tnt_default", name: "租户管理员", code: "tenant.admin", description: "租户内置角色", enabled: true, is_system: true, created_at: "2026-11-03T19:00:00+08:00", updated_at: "2026-11-03T19:00:00+08:00", deleted_at: null },
+		{ id: "r_tenant_viewer_isp_a", tenant_id: "t_isp_a", name: "ISP-A 只读", code: "tenant.viewer", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:20:00+08:00", updated_at: "2026-11-04T09:20:00+08:00", deleted_at: null }
 	];
 
-	const policyPermissions = [
-		{ permissionId: 1, permCode: "asset:device:read", permName: "设备只读", resourceType: 1, resourcePath: "/api/v1/device/*", action: "read", fieldScope: "", status: 1 },
-		{ permissionId: 2, permCode: "asset:device:write", permName: "设备写入", resourceType: 1, resourcePath: "/api/v1/device/*", action: "write", fieldScope: "", status: 1 },
-		{ permissionId: 3, permCode: "system:account:read", permName: "账号只读", resourceType: 2, resourcePath: "/api/v1/account/*", action: "read", fieldScope: "", status: 1 }
+	/**
+	 * 关系假数据（`GET /iam/role-policies`、`GET /iam/subject-roles`）：
+	 *   - `rp-orphan` 指向不存在的策略、`sr-orphan` 指向已删用户 —— 两页都要按存在性过滤（UP-RBAC-10）；
+	 *   - 重复挂载回 `SQLSTATE 23505`、摘除幂等，与实测一致。
+	 */
+	const iamRolePolicies = [
+		{ id: "rp-platform", role_id: "r_platform_admin", policy_id: "pol_platform_full", created_at: "2026-11-03T18:59:06+08:00" },
+		{ id: "rp-tenant-reader", role_id: "r_tenant_admin", policy_id: "pol_tenant_reader", created_at: "2026-11-04T09:00:00+08:00" },
+		{ id: "rp-orphan", role_id: "r_tenant_admin", policy_id: "pol_deleted_elsewhere", created_at: "2026-11-04T09:05:00+08:00" }
+	];
+
+	const iamSubjectRoles = [
+		{ id: "sr-alice", subject_type: "user", subject_id: "u_alice", role_id: "r_tenant_admin", created_at: "2026-11-04T09:00:00+08:00" },
+		{ id: "sr-bob", subject_type: "user", subject_id: "u_bob", role_id: "r_tenant_admin", created_at: "2026-11-04T09:01:00+08:00" },
+		{ id: "sr-orphan", subject_type: "user", subject_id: "u_ghost", role_id: "r_tenant_admin", created_at: "2026-11-04T09:02:00+08:00" }
 	];
 
 	/**
@@ -678,6 +689,136 @@ export async function startUpstream(port) {
 				return send(404, { code: 10404, message: "iam_path_not_found" });
 			}
 
+			// ── `iam/roles`（NMCPS-DESIGN-005 §8）：/system/permission 的角色数据源 ──
+			// `GET /iam/roles`：`keyword` 命中 name / code；`enabled` / `tenant_id` 传了被静默忽略（UP-RBAC-06）
+			if (url.pathname === "/iam/roles" && req.method === "GET") {
+				const keyword = (url.searchParams.get("keyword") ?? "").trim().toLowerCase();
+				const filtered = iamRoles.filter((item) => !keyword
+					|| item.name.toLowerCase().includes(keyword)
+					|| item.code.toLowerCase().includes(keyword));
+
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			// `POST /iam/roles`：成功把新主键放在**信封顶层**（`{ code, message, id }`，没有 data）；
+			// 重复 `code` 回 `400` + 原始 SQL 文本（UP-RBAC-04），页面必须换成文案
+			if (url.pathname === "/iam/roles" && req.method === "POST") {
+				if (!body?.code || !body?.name)
+					return sendText(400, "ERROR: null value in column \"code\" violates not-null constraint (SQLSTATE 23502)");
+				if (iamRoles.some((item) => item.code === body.code))
+					return sendText(400, "ERROR: duplicate key value violates unique constraint \"uk_sys_role_tenant_code\" (SQLSTATE 23505)");
+
+				const created = {
+					id: `r_${body.code}`,
+					tenant_id: "tnt_default",
+					name: body.name,
+					code: body.code,
+					description: body.description ?? "",
+					enabled: true,
+					is_system: false,
+					created_at: "2026-11-04T10:00:00+08:00",
+					updated_at: "2026-11-04T10:00:00+08:00",
+					deleted_at: null
+				};
+				iamRoles.push(created);
+				return send(200, { code: 0, message: "success", id: created.id });
+			}
+
+			const iamRolePath = url.pathname.match(/^\/iam\/roles\/([^/]+)$/);
+			if (iamRolePath) {
+				const id = decodeURIComponent(iamRolePath[1]);
+				const record = iamRoles.find((item) => item.id === id);
+
+				// 实测：目标不存在回 **HTTP 400 + 纯文本「记录不存在」**（非信封）
+				if (!record)
+					return sendText(400, "记录不存在");
+
+				if (req.method === "GET")
+					return send(200, { code: 0, message: "success", data: record });
+
+				if (req.method === "PUT") {
+					// `enabled` 写入被忽略（UP-RBAC-03）：只有 name / description 生效
+					for (const key of ["name", "description"]) {
+						if (body?.[key] !== undefined)
+							record[key] = body[key];
+					}
+					record.updated_at = "2026-11-04T10:30:00+08:00";
+					return send(200, { code: 0, message: "success" });
+				}
+
+				if (req.method === "DELETE") {
+					// `r_tenant_viewer_isp_a` 固定走 UP-RBAC-05 的失败通道：transport 仍是 200，业务码 400
+					if (record.id === "r_tenant_viewer_isp_a")
+						return send(200, { code: 400, message: "资源不存在或无权访问" });
+
+					iamRoles.splice(iamRoles.indexOf(record), 1);
+					return send(200, { code: 0, message: "success" });
+				}
+
+				return send(404, { code: 10404, message: "iam_path_not_found" });
+			}
+
+			// ── `iam/role-policies`（策略 × 角色）：只回关系行，不回策略本体 ──
+			if (url.pathname === "/iam/role-policies" && req.method === "GET") {
+				const roleId = (url.searchParams.get("role_id") ?? "").trim();
+				const filtered = iamRolePolicies.filter((item) => !roleId || item.role_id === roleId);
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			if (url.pathname === "/iam/role-policies/AttachPolicy" && req.method === "POST") {
+				if (!body?.role_id || !body?.policy_id)
+					return sendText(400, "ERROR: null value in column \"role_id\" violates not-null constraint (SQLSTATE 23502)");
+				if (iamRolePolicies.some((item) => item.role_id === body.role_id && item.policy_id === body.policy_id))
+					return sendText(400, "ERROR: duplicate key value violates unique constraint \"uk_sys_role_policy\" (SQLSTATE 23505)");
+
+				iamRolePolicies.push({
+					id: `rp-${iamRolePolicies.length + 1}`,
+					role_id: body.role_id,
+					policy_id: body.policy_id,
+					created_at: "2026-11-04T10:40:00+08:00"
+				});
+				return send(200, { code: 0, message: "success" });
+			}
+
+			// 摘除幂等：没有命中的关系行也回 200（实测）
+			if (url.pathname === "/iam/role-policies/DetachPolicy" && req.method === "POST") {
+				const index = iamRolePolicies.findIndex((item) => item.role_id === body?.role_id && item.policy_id === body?.policy_id);
+				if (index >= 0)
+					iamRolePolicies.splice(index, 1);
+				return send(200, { code: 0, message: "success" });
+			}
+
+			// ── `iam/subject-roles`（主体 × 角色）：只认 `subject_id`，按角色反查由前端做 ──
+			if (url.pathname === "/iam/subject-roles" && req.method === "GET") {
+				const subjectId = (url.searchParams.get("subject_id") ?? "").trim();
+				const filtered = iamSubjectRoles.filter((item) => !subjectId || item.subject_id === subjectId);
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			if (url.pathname === "/iam/subject-roles/AssignRole" && req.method === "POST") {
+				if (!body?.subject_id || !body?.role_id)
+					return sendText(400, "ERROR: null value in column \"subject_id\" violates not-null constraint (SQLSTATE 23502)");
+				if (iamSubjectRoles.some((item) => item.subject_id === body.subject_id && item.role_id === body.role_id))
+					return sendText(400, "ERROR: duplicate key value violates unique constraint \"uk_sys_subject_role\" (SQLSTATE 23505)");
+
+				iamSubjectRoles.push({
+					id: `sr-${iamSubjectRoles.length + 1}`,
+					subject_type: body.subject_type ?? "user",
+					subject_id: body.subject_id,
+					role_id: body.role_id,
+					created_at: "2026-11-04T10:50:00+08:00"
+				});
+				return send(200, { code: 0, message: "success" });
+			}
+
+			// 撤销幂等：没有命中的关系行也回 200（实测）
+			if (url.pathname === "/iam/subject-roles/RevokeRole" && req.method === "POST") {
+				const index = iamSubjectRoles.findIndex((item) => item.subject_id === body?.subject_id && item.role_id === body?.role_id);
+				if (index >= 0)
+					iamSubjectRoles.splice(index, 1);
+				return send(200, { code: 0, message: "success" });
+			}
+
 			if (url.pathname === "/iam/tenants" && req.method === "GET")
 				return send(200, { code: 0, message: "success", data: iamPaged(iamTenants, url) });
 
@@ -812,40 +953,6 @@ export async function startUpstream(port) {
 			}
 
 			return send(404, { code: 10404, msg: "audit_path_not_found" });
-		}
-
-		// ── /role、/permission：旧代策略域最小只读数据（只有 `/system/permission` 还在用；
-		//    `/system/policy` 已迁到 `iam/policies`，C4c code cut 2 后整段可删） ──
-		if (url.pathname === "/role" && req.method === "GET") {
-			const keyword = (url.searchParams.get("keyword") ?? "").trim();
-			const matched = keyword
-				? policyRoles.filter((item) => item.roleName.includes(keyword) || item.roleCode.includes(keyword))
-				: policyRoles;
-			return send(200, { code: 0, msg: "success", data: paged(matched, url) });
-		}
-
-		const rolePermissionPath = url.pathname.match(/^\/role\/([^/]+)\/permission$/);
-		if (rolePermissionPath && req.method === "GET") {
-			const roleCode = decodeURIComponent(rolePermissionPath[1]);
-			if (!policyRoles.some((item) => item.roleCode === roleCode))
-				return send(404, { code: 40301, msg: "role_not_found" });
-			return send(200, { code: 0, msg: "success", data: paged(policyPermissions, url) });
-		}
-
-		const roleDetailPath = url.pathname.match(/^\/role\/([^/]+)$/);
-		if (roleDetailPath && req.method === "GET") {
-			const role = policyRoles.find((item) => item.roleCode === decodeURIComponent(roleDetailPath[1]));
-			if (!role)
-				return send(404, { code: 40301, msg: "role_not_found" });
-			return send(200, { code: 0, msg: "success", data: role });
-		}
-
-		if (url.pathname === "/permission" && req.method === "GET") {
-			const keyword = (url.searchParams.get("keyword") ?? "").trim();
-			const resourceType = Number(url.searchParams.get("resourceType") ?? 0);
-			const matched = policyPermissions.filter((item) => (!keyword || item.permCode.includes(keyword))
-				&& (!resourceType || item.resourceType === resourceType));
-			return send(200, { code: 0, msg: "success", data: paged(matched, url) });
 		}
 
 		return send(404, { message: "upstream_not_found" });

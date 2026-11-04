@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.38.0
+version: 0.39.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -189,3 +189,4 @@ tags:
 | 2026-11-03 | 0.36.7 | `NMCPS-ARCH-006` → 0.2.17（§7 新增第 19 行：建号等级候选 = 严格低于会话等级且 ≤ 3，并落 2 条 `check:ui`；总数 103 → 105）、`NMCPS-DESIGN-005` → 0.5.7（§6.1 建号补「超级管理员需 `tenantId`」与 `GET /tenant`；§6.2 等级语义改为 0/1/2–3/4 四档；§6.3 矩阵按 2026-11-03 复测重写并列客户端收敛两条；§6.4 补 `20102` / `20103`；§6.5 标 `UP-ACC-01` 闭环并新增 `UP-ACC-07` / `UP-ACC-08`）、`NMCPS-REC-002` 复测更新（`UP-ACC-01` 标已闭环，新增 `UP-ACC-07` 建号 `tenantId` 必填与 `UP-ACC-08` 的 `L4` 归属服务账号，缺陷数 6 → 8，附复测命令）。 |
 | 2026-11-04 | 0.37.0 | 登记记录层 ADR：`NMCPS-ADR-0018` 后端代际切换（旧代 go-zero 网关退役，BFF 唯一上游改 `http://192.168.1.55:8888/api/v1`；10 条实测证据、4 张字段映射表、10 个能力缺口、13 个影响文件；局部作废 ADR-0011 的刷新轮换条款，Tier 5，informative）；`NMCPS-REC-001~004` 置 `superseded` 并补 `supersededBy: NMCPS-ADR-0018` 与文首代际说明（探测对象为已退役旧代）；新增 Tier 4 作业单 `documents/3.operations/backend-generation-migration.md`（逐文件 diff 草案 / `check:bff` 假上游改造点 / 验收与回滚，非受治理文档）。 |
 | 2026-11-04 | 0.38.0 | 登记记录层缺陷清单：`NMCPS-REC-005` 新代 `iam/{roles,policies,role-policies,subject-roles}` 缺陷（10 项：无授权校验 / 系统对象可删 / `enabled` 写入无效 / 400 回原始 SQL / 删除失败用 200 承载 / 过滤残缺且分页无上限 / 必填校验缺失 / `tenant_id` 入参被忽略 / 跨租户授权无拦 / 孤儿关系行，Tier 5，informative，`baseline`）；同步 `NMCPS-DESIGN-005` 升 0.8.0（§7 / §8 按新代 `iam` 命名空间重写：策略 CRUD + 角色 CRUD + `role-policies` 授权 + `subject-roles` 授受，ABAC 段 / 试算 / 权限点目录随 G4 / G5 / G3 退役，失败改按 HTTP 形态分派）、`NMCPS-ARCH-006` 升 0.2.20（§3.8 撤销 `/system/policy` 客户端分页例外）。 |
+| 2026-11-04 | 0.39.0 | `NMCPS-ARCH-006` → 0.2.21（§7 补第 20 / 21 行：`/system/policy` 与 `/system/permission` 的契约面断言，`check:ui` 106 → 116）、`NMCPS-DESIGN-005` → 0.8.1（§8.1 补「`GET /iam/subject-roles` 只认 `subject_id`，按角色反查在前端做」这条实测约束，并记 C4c-1 / C4c-2 验收：`check:bff` 106/106、`check:ui` 116/116）。 |

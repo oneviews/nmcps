@@ -42,7 +42,7 @@ tags:
 | C4a | `refactor(system): 用户管理改接 iam/users，试算随 G5 下线` ✅ | `shared/types/{account,tenant,department}.ts`、`layers/system/app/{composables/useAccounts,composables/useTenants,composables/useDepartments,composables/usePolicies,utils/accountError}.ts`、`layers/system/app/components/User/*`、`layers/system/app/pages/system/user.vue`、`pages/system/policy.vue`（移除试算入口）、`shared/types/policy.ts`、i18n、`scripts/{check-ui,check-bff}.mjs`、`scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（84/84）+ `pnpm check:ui`（103/103） |
 | C4b | `refactor(system): 审计页改接 audit/operation-logs 与归档` | `shared/types/audit.ts`、`composables/{useAuditLogs,useAuditExport}.ts`、`pages/system/log.vue`、假上游与自检 | `pnpm check:ui` + 手测 `/system/log` |
 | C4c-1 | `refactor(system): 策略页改接 iam/policies（CRUD + 文档预览）` ✅ | `shared/types/policy.ts`（新代类型段）、`layers/system/app/{composables/usePolicies,utils/policyError,utils/policyDocument}.ts`、`components/Policy/{PolicyForm,PolicyDeleteModal}.vue`、`pages/system/policy.vue`、i18n（`pages.system-policy`）、`scripts/{check-ui,check-bff}.mjs`、`scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（92/92）+ `pnpm check:ui`（111/111） |
-| C4c-2 | `refactor(system): 权限页改接 iam/roles + role-policies + subject-roles，删除旧代白名单组` | `shared/types/policy.ts`（旧代段删除）、`composables/usePermissions.ts`、`pages/system/permission.vue`、`shared/types/api.ts`（旧代组删除）、`check:bff`（旧名 404 断言） | `pnpm check:bff` + `pnpm check:ui` + 手测两页 |
+| C4c-2 | `refactor(system): 权限页改接 iam/roles + role-policies + subject-roles，删除旧代白名单组` ✅ | `shared/types/policy.ts`（旧代段删除 + 角色 / 关系类型）、`layers/system/app/{composables/usePermissions.ts,utils/policyError.ts}`、`components/Permission/{RoleForm,RoleDeleteModal,RolePolicyMatrix,RoleMembers}.vue`、`pages/system/permission.vue`、`shared/types/api.ts`（`abac` / `access` / `permission` / `role` 四个旧名删除）、i18n（`pages.system-permission`）、`scripts/{check-ui,check-bff}.mjs`、`scripts/lib/bff-harness.mjs` | `pnpm lint && pnpm typecheck && pnpm build:server && pnpm check:bff`（106/106）+ `pnpm check:ui`（116/116） |
 
 ---
 
@@ -53,6 +53,11 @@ tags:
 白名单分两组登记（`NMCPS-ADR-0018` D2）：新代十二命名空间 + `health` 是**目标集**，旧代资源名整组带
 `待 C4 客户端迁移后整组删除` 的注释保留 —— 客户端数据层此刻还打 `/api/account`、`/api/role`、`/api/audit`，
 先删会让全部系统页在 C3 与 C4 之间断链（`check:ui` 直接红）。
+
+策略域已在 C4c 收口：`abac`（`/abac/rule`）、`access`（`/access/dryrun`）、`permission`、`role` 四个旧名随
+`/system/policy`（C4c-1）与 `/system/permission`（C4c-2）迁到 `iam/*` 一并删除，由 `check:bff` 的
+「旧代四资源名 → `404 bff_resource_not_allowed`」断言守住；其余旧名（`account` / `device` / `alert` 等）
+仍待各自 C4 批次，删早了会让尚未迁移的页面断链。
 
 ```ts
 export const GATEWAY_RESOURCES = [
@@ -299,6 +304,9 @@ export function isSuccessResponse<T>(res: ApiResponse<T> | undefined | null): re
 | C4c-1 | `scripts/lib/bff-harness.mjs` | 无 `iam/policies`（`/abac/rule` 假路由随旧代退场删除） | 新增 `iamPolicies` 三条种子 + `GET|POST /iam/policies`、`GET|PUT|DELETE /iam/policies/{id}`；`keyword` 真过滤、`code` 过滤不实现（对齐 UP-RBAC-06）、非法 `document` / 重复 `code` 回 **`400` + 纯文本 SQLSTATE**、删除固定一条回 **`200 {code:400}`**（UP-RBAC-05）；另加 `sendText` 以支持纯文本失败体 |
 | C4c-1 | `scripts/check-bff.mjs` ⑧ | — | 新增 8 条：`iam/policies` 透传 snake_case、`keyword` 服务端生效、`code` 过滤被静默忽略、非法 `document` → 400 不判成功、重复 `code` → 400 且原文保留、建策略主键在信封顶层、删除失败 `200 + code 400`、删除成功 `code 0` |
 | C4c-1 | `scripts/check-ui.mjs` 7.3b | 策略页只有「列表尾部落到四个列表页」一条间接覆盖 | 新增 5 条：默认选中首行 + 服务端分页（`page_size=15`，不发 `code` / `policy_type` / `enabled`）、文档 JSON 格式化预览、搜索走服务端 `keyword`、内联新建表单建成并 `?id` replace、删除被拒（`200 + code 400`）时报错且保留弹窗 |
+| C4c-2 | `scripts/lib/bff-harness.mjs` | 只有旧代 `/role`、`/permission` 两条只读假路由 | 删除旧代整段，新增 `iamRoles` 三条种子 + `GET|POST /iam/roles`、`GET|PUT|DELETE /iam/roles/{id}`（`keyword` 真过滤、`enabled` 不实现、重复 `code` 回 **`400` + 纯文本 SQLSTATE**、删除固定一条回 **`200 {code:400}`**）、`GET /iam/role-policies`（按 `role_id` 过滤）+ `AttachPolicy` / `DetachPolicy`（重复挂载 `23505`、摘除幂等）、`GET /iam/subject-roles` + `AssignRole` / `RevokeRole`；另造 `rp-orphan` / `sr-orphan` 两条孤儿关系行（UP-RBAC-10） |
+| C4c-2 | `scripts/check-bff.mjs` ⑧ | 无 `iam/roles` / 关系资源断言 | 新增 14 条：`iam/roles` 透传 snake_case、`keyword` 服务端生效、`enabled` 过滤被静默忽略、建角色重复 `code` → 400 且原文保留、建角色顶层主键、删角色失败 `200 + code 400`、`role-policies` 按 `role_id` 过滤且只回关系行、重复挂载 → `23505`、挂载成功、摘除幂等、`subject-roles` 列表、`AssignRole` 成功、`RevokeRole` 幂等、旧代四资源名（`role` / `permission` / `abac` / `access`）→ `404 bff_resource_not_allowed` |
+| C4c-2 | `scripts/check-ui.mjs` 7.3c | 权限页只有「列表尾部落到四个列表页」一条间接覆盖 | 新增 5 条：默认选中首行 + 服务端分页（`page_size=15`，不发 `enabled` / `tenant_id`）、授权矩阵按策略目录渲染且已挂状态来自 `role-policies`、换角色后矩阵按 `role_id` 重取、孤儿策略关系只报数量、已分配用户按 `role_id` 过滤并屏蔽已删用户 |
 
 C1 落码实测（2026-11-04）：`pnpm check:bff` 83/83、`pnpm check:ui` 105/105。
 C2 落码实测（2026-11-04，同一上游）：`pnpm check:bff` 74/74、`pnpm check:ui` 103/103
@@ -306,6 +314,7 @@ C2 落码实测（2026-11-04，同一上游）：`pnpm check:bff` 74/74、`pnpm 
 C3 落码实测（2026-11-04）：`pnpm check:bff` 82/82（74 + 8）、`pnpm check:ui` 103/103、`pnpm lint` / `pnpm typecheck` 无输出。
 C4a 落码实测（2026-11-04）：`pnpm check:bff` 84/84（82 + 2：`iam/users` 透传 snake_case、空结果归一 `[]`）、`pnpm check:ui` 103/103（等级候选用例改成「建号表单只剩部门一个下拉」，建号用例改为断言 `id` 回读 + `?id` replace，断言总数不变）、`pnpm lint` / `pnpm typecheck` / `pnpm build:server` 无输出。
 C4c-1 落码实测（2026-11-04）：`pnpm check:bff` 92/92（84 + 8：`iam/policies` 的列表 / `keyword` / 被忽略的 `code` 过滤 / 两条 400 原始 SQL / 建策略顶层主键 / 删除失败 `200 + code 400` / 删除成功）、`pnpm check:ui` 111/111（103 + 5 条策略页用例，含「新建前先清搜索」这条实测坑：`keyword` 不清，新行会被过滤掉而看不见）、`pnpm lint` / `pnpm typecheck` / `pnpm build:server` 无输出。
+C4c-2 落码实测（2026-11-04，同一上游）：`pnpm check:bff` 106/106（92 + 14：`iam/roles` 的列表 / `keyword` / 被忽略的 `enabled` 过滤 / 建角色重复 `code` 原始 SQL / 顶层主键 / 删除失败 `200 + code 400`，`role-policies` 的按 `role_id` 过滤 / 重复挂载 `23505` / 挂载成功 / 摘除幂等，`subject-roles` 的列表 / `AssignRole` / `RevokeRole` 幂等，以及旧代四资源名 404）、`pnpm check:ui` 116/116（111 + 5 条权限页用例）。两条实测坑记在这里：① 矩阵与成员区都依赖角色级过滤，默认选中的平台角色没有成员与孤儿行，「孤儿 / 成员」断言必须换到 `?id=r_tenant_admin` 才有意义；② `iam/policies` 目录在同一轮自查里已被策略页新建过一条，矩阵条目数只能断言下界（`>= 3`），写死 `3` 会假红。
 
 断言数变化须同步更新脚本自身摘要的 `N/N` 与相关架构文档里的计数（`.clinerules`「CI self-check conventions」）。
 

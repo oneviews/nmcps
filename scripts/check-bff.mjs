@@ -546,6 +546,83 @@ try {
 		const policyDeleted = await request(exitPort, "/api/iam/policies/pol_tenant_reader", { method: "DELETE" });
 		log("删策略成功 200 code 0", policyDeleted.status === 200 && policyDeleted.json?.code === 0, `${policyDeleted.status} ${describe(policyDeleted.json?.code)}`);
 
+		// ── iam/roles + role-policies + subject-roles（NMCPS-DESIGN-005 §8）：/system/permission 的数据源 ──
+		const roles = await request(exitPort, "/api/iam/roles?page=1&page_size=2");
+		log("iam/roles 放行并透传 snake_case（id / page_size 不被改写）", roles.status === 200 && roles.json?.data?.list?.[0]?.id === "r_platform_admin" && roles.json?.data?.page_size === 2, `${roles.status} ${describe(roles.json?.data?.page_size)}`);
+
+		const roleKeyword = await request(exitPort, "/api/iam/roles?page=1&page_size=10&keyword=tenant.viewer");
+		log("iam/roles 的 keyword 在服务端生效（页面才能走服务端分页）", roleKeyword.json?.data?.total === 1 && roleKeyword.json?.data?.list?.[0]?.code === "tenant.viewer", `total=${describe(roleKeyword.json?.data?.total)}`);
+
+		const roleIgnoredFilter = await request(exitPort, "/api/iam/roles?page=1&page_size=10&enabled=false");
+		log("iam/roles 的 enabled 过滤被上游静默忽略（页面不提供该筛选项）", roleIgnoredFilter.json?.data?.total === 3, `total=${describe(roleIgnoredFilter.json?.data?.total)}`);
+
+		const roleDuplicate = await request(exitPort, "/api/iam/roles", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "dup", code: "tenant.admin" })
+		});
+		log("建角色重复 code → 400，报错原文保留在 message（脱敏由页面按 SQLSTATE 判定）", roleDuplicate.status === 400 && String(roleDuplicate.json?.message).includes("SQLSTATE 23505"), `${roleDuplicate.status} ${describe(roleDuplicate.json?.message).slice(0, 80)}`);
+
+		const roleCreated = await request(exitPort, "/api/iam/roles", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "自查角色", code: "probe.c4c_role" })
+		});
+		log("建角色 200 且新主键在信封顶层（上游 iam_IdResp，无 data）", roleCreated.status === 200 && roleCreated.json?.code === 0 && String(roleCreated.json?.id).startsWith("r_"), `${roleCreated.status} ${describe(roleCreated.json?.id)}`);
+
+		const roleDeleteRejected = await request(exitPort, "/api/iam/roles/r_tenant_viewer_isp_a", { method: "DELETE" });
+		log("删角色失败走 200 + code 400 → 出口仍是 code 400（消费面按失败处理）", roleDeleteRejected.status === 200 && roleDeleteRejected.json?.code === 400 && roleDeleteRejected.json?.status === "warning", `${roleDeleteRejected.status} ${describe(roleDeleteRejected.json?.code)}`);
+
+		const rolePolicies = await request(exitPort, "/api/iam/role-policies?page=1&page_size=10&role_id=r_tenant_admin");
+		log("iam/role-policies 按 role_id 过滤且只回关系行（policy_id 由页面关联策略目录）", rolePolicies.json?.data?.total === 2 && rolePolicies.json?.data?.list?.[0]?.policy_id === "pol_tenant_reader" && rolePolicies.json?.data?.list?.[0]?.name === undefined, `total=${describe(rolePolicies.json?.data?.total)}`);
+
+		const attachDuplicate = await request(exitPort, "/api/iam/role-policies/AttachPolicy", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ role_id: "r_tenant_admin", policy_id: "pol_tenant_reader" })
+		});
+		log("重复挂载策略 → 400 + SQLSTATE 23505（页面提示后按最新关系重取）", attachDuplicate.status === 400 && String(attachDuplicate.json?.message).includes("SQLSTATE 23505"), `${attachDuplicate.status} ${describe(attachDuplicate.json?.message).slice(0, 80)}`);
+
+		const attachCreated = await request(exitPort, "/api/iam/role-policies/AttachPolicy", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ role_id: "r_tenant_admin", policy_id: "pol_platform_full" })
+		});
+		log("挂载策略成功 200 code 0（AttachPolicy 是 POST 动作路由）", attachCreated.status === 200 && attachCreated.json?.code === 0, `${attachCreated.status} ${describe(attachCreated.json?.code)}`);
+
+		const detachIdempotent = await request(exitPort, "/api/iam/role-policies/DetachPolicy", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ role_id: "r_tenant_admin", policy_id: "pol_never_attached" })
+		});
+		log("摘除不存在的策略仍 200（DetachPolicy 幂等）", detachIdempotent.status === 200 && detachIdempotent.json?.code === 0, `${detachIdempotent.status} ${describe(detachIdempotent.json?.code)}`);
+
+		const subjectRoles = await request(exitPort, "/api/iam/subject-roles?page=1&page_size=10");
+		log("iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做）", subjectRoles.json?.data?.total === 3 && subjectRoles.json?.data?.list?.[0]?.role_id === "r_tenant_admin", `total=${describe(subjectRoles.json?.data?.total)}`);
+
+		const assignCreated = await request(exitPort, "/api/iam/subject-roles/AssignRole", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ subject_type: "user", subject_id: "u_alice", role_id: "r_platform_admin" })
+		});
+		log("AssignRole 成功 200 code 0（body 三字段 subject_type / subject_id / role_id）", assignCreated.status === 200 && assignCreated.json?.code === 0, `${assignCreated.status} ${describe(assignCreated.json?.code)}`);
+
+		const revokeIdempotent = await request(exitPort, "/api/iam/subject-roles/RevokeRole", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ subject_type: "user", subject_id: "u_nobody", role_id: "r_platform_admin" })
+		});
+		log("RevokeRole 撤销不存在的绑定仍 200（幂等）", revokeIdempotent.status === 200 && revokeIdempotent.json?.code === 0, `${revokeIdempotent.status} ${describe(revokeIdempotent.json?.code)}`);
+
+		// 旧代策略域资源名已从白名单删除（C4c 两次 code cut）：命中即 404，客户端不能再悄悄回退
+		const legacyResources = await Promise.all([
+			request(exitPort, "/api/role?page=1&pageSize=10"),
+			request(exitPort, "/api/permission?page=1&pageSize=10"),
+			request(exitPort, "/api/abac/rule?page=1&pageSize=10"),
+			request(exitPort, "/api/access/dryrun")
+		]);
+		log("旧代策略域资源（role / permission / abac / access）→ 404 bff_resource_not_allowed", legacyResources.every((res) => res.status === 404 && res.json?.message === "bff_resource_not_allowed"), legacyResources.map((res) => `${res.status}/${describe(res.json?.message)}`).join(" "));
+
 		const systemNamespace = await request(exitPort, "/api/system/overview");
 
 		const transmissionNamespace = await request(exitPort, "/api/transmission/sites");
