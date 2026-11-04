@@ -2,7 +2,7 @@
 	<div class="flex min-h-0 flex-1 flex-col">
 		<!--
 			页面根显式取 `flex-1 min-h-0`（NMCPS-ARCH-006 §3.3）：definite height 链在这里落定。
-			身份 / 范围说明放在详情栏顶部（NMCPS-DESIGN-005 §9.3），页面顶部只留工具栏与两栏骨架。
+			可见范围说明放在详情栏顶部（NMCPS-DESIGN-005 §9.3），页面顶部只留工具栏与两栏骨架。
 		-->
 		<!-- 内容页工具栏（NMCPS-ARCH-006 §4）：全页只有这一层 -->
 		<Teleport to="#app-toolbar-left">
@@ -18,25 +18,22 @@
 			</UTooltip>
 			<template v-else>
 				<!--
-					左区常驻两个筛选控件（NMCPS-DESIGN-005 §9.3 第 2 条）：时间范围与类别决定「我看的是不是全量」，
-					藏进浮层最容易把过滤后的 `total` 当全量读；其余标识类筛选留在浮层。
-					常驻控件只占左区 ≤2 个、总宽 ≤45% 内容盒，控件一律用 Nuxt UI v4 原生组件
-					（NMCPS-ARCH-006 §4.1），不自写等价控件；时间范围用 `Audit/RangePicker.vue`。
+					左区常驻两个筛选控件（NMCPS-DESIGN-005 §9.3 第 2 条）：时间范围与日志族决定
+					「我看的是不是全量」，藏进浮层最容易把过滤后的 `total` 当全量读；其余标识类筛选留在浮层。
+					常驻控件 ≤2 个、总宽 ≤45% 内容盒，控件一律用 Nuxt UI v4 原生组件（NMCPS-ARCH-006 §4.1）。
+					归档记录没有时间条件（`/audit/archive/records` 只认 table_name / status），所以按族隐藏。
 				-->
-				<AuditRangePicker v-model="rangeModel" :label="rangeLabel" />
+				<AuditRangePicker v-if="kind !== AUDIT_LOG_KIND.ARCHIVE" v-model="rangeModel" :label="rangeLabel" />
 
 				<USelect
-					v-model="categoryModel"
-					:items="categoryItems"
+					v-model="kindModel"
+					:items="kindItems"
 					size="sm"
 					class="w-32"
-					:aria-label="$t('pages.system-log.filter.category')"
+					:aria-label="$t('pages.system-log.filter.kind')"
 				/>
 
-				<!--
-					浮层：只有 swagger 列出的参数（`accountId` / `deviceCode` / `sessionId` / `traceId`）。
-					上游没有 `keyword`、也不认 `result`（UP-AUD-03），所以不给搜索框 —— 摆了就等于承诺它能筛。
-				-->
+				<!-- 浮层：只放本族 openapi 真正列出的筛选参数（各族不同，见 FILTER_SPECS） -->
 				<UPopover>
 					<UButton
 						size="sm"
@@ -53,45 +50,18 @@
 							</p>
 
 							<UInput
-								v-model.number="accountIdFilter"
-								type="number"
-								min="1"
-								size="sm"
-								class="w-full"
-								:placeholder="$t('pages.system-log.filter.accountPlaceholder')"
-								:aria-label="$t('pages.system-log.filter.accountPlaceholder')"
-							/>
-
-							<!-- 三个标识都是「从别处粘一个 ID 过来定位」：上游确实按它们过滤，不是装饰 -->
-							<UInput
-								v-model="deviceCodeFilter"
+								v-for="spec in filterSpecs"
+								:key="spec.key"
+								v-model="filterValues[spec.key]"
 								size="sm"
 								class="w-full"
 								autocomplete="off"
-								:placeholder="$t('pages.system-log.filter.devicePlaceholder')"
-								:aria-label="$t('pages.system-log.filter.devicePlaceholder')"
-							/>
-
-							<UInput
-								v-model="sessionIdFilter"
-								size="sm"
-								class="w-full"
-								autocomplete="off"
-								:placeholder="$t('pages.system-log.filter.sessionPlaceholder')"
-								:aria-label="$t('pages.system-log.filter.sessionPlaceholder')"
-							/>
-
-							<UInput
-								v-model="traceIdFilter"
-								size="sm"
-								class="w-full"
-								autocomplete="off"
-								:placeholder="$t('pages.system-log.filter.tracePlaceholder')"
-								:aria-label="$t('pages.system-log.filter.tracePlaceholder')"
+								:placeholder="$t(spec.label)"
+								:aria-label="$t(spec.label)"
 							/>
 
 							<UButton
-								v-if="filtersActive"
+								v-if="popoverFiltersActive"
 								block
 								size="sm"
 								color="neutral"
@@ -117,29 +87,22 @@
 			</template>
 		</Teleport>
 
-		<!-- 右区 = 集合域的两个只读动作：校验链完整性、导出任务（都不是单条记录的动作） -->
+		<!--
+			右区 = 集合域动作：归档取代了旧代的导出（新代没有导出端点，NMCPS-ADR-0018 G7）。
+			归档是写操作，只对两张日志表有意义，查看归档记录本身时不给入口。
+		-->
 		<Teleport to="#app-toolbar-right">
-			<template v-if="toolbarPane === 'list'">
-				<UTooltip :text="$t('pages.system-log.verify.hint')">
+			<template v-if="toolbarPane === 'list' && kind !== AUDIT_LOG_KIND.ARCHIVE">
+				<UTooltip :text="$t('pages.system-log.archive.hint')">
 					<UButton
 						size="sm"
-						color="neutral"
 						variant="outline"
-						icon="carbon:data-check"
-						:label="$t('pages.system-log.verify.open')"
-						:loading="verifying"
+						icon="carbon:archive"
+						:label="$t('pages.system-log.archive.open')"
 						:disabled="!loaded"
-						@click="runVerify"
+						@click="archiveOpen = true"
 					/>
 				</UTooltip>
-				<UButton
-					size="sm"
-					variant="outline"
-					icon="carbon:download"
-					:label="$t('pages.system-log.export.open')"
-					:disabled="!loaded"
-					@click="exportOpen = true"
-				/>
 			</template>
 		</Teleport>
 
@@ -191,31 +154,31 @@
 					@keydown="onListKeydown"
 				>
 					<li
-						v-for="(log, index) in rows"
-						:key="log.logCode"
-						:ref="(element) => setRowRef(log.logCode, element)"
+						v-for="(row, index) in displayRows"
+						:key="row.id"
+						:ref="(element) => setRowRef(row.id, element)"
 						role="option"
-						:aria-selected="log.logCode === selectedId"
-						:tabindex="log.logCode === selectedId || (!selectedId && index === 0) ? 0 : -1"
-						:title="`${log.action} · ${log.logCode}`"
+						:aria-selected="row.id === selectedId"
+						:tabindex="row.id === selectedId || (!selectedId && index === 0) ? 0 : -1"
+						:title="`${row.title} · ${row.id}`"
 						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-						:class="log.logCode === selectedId
+						:class="row.id === selectedId
 							? 'border-primary bg-accented'
 							: 'border-transparent'"
-						@click="selection.select(log)"
-						@keydown.enter.prevent="selection.select(log)"
-						@keydown.space.prevent="selection.select(log)"
+						@click="selection.select(row.record)"
+						@keydown.enter.prevent="selection.select(row.record)"
+						@keydown.space.prevent="selection.select(row.record)"
 					>
 						<div class="flex min-w-0 items-center justify-between gap-2">
 							<p class="truncate text-sm font-medium">
-								{{ log.action }}
+								{{ row.title }}
 							</p>
-							<UBadge :color="auditResultColor(log.result)" variant="subtle" size="sm">
-								{{ $t(auditResultKey(log.result), { result: log.result }) }}
+							<UBadge v-if="row.badge" :color="row.tone" variant="subtle" size="sm">
+								{{ row.badge }}
 							</UBadge>
 						</div>
 						<p class="truncate text-xs text-(--ui-text-muted)">
-							{{ auditTimeOf(log.eventTime) }} · {{ $t(auditCategoryKey(log.category), { category: log.category }) }} · #{{ log.accountId }}
+							{{ row.subtitle || row.id }}
 						</p>
 					</li>
 				</ul>
@@ -236,9 +199,10 @@
 			<template #detail>
 				<div class="flex min-h-full flex-col">
 					<!--
-						顶部固定块（滚动区之外）：身份 / 范围说明 + 校验结果。
-						本域的越权边界在上游（BFF 只白名单透传），所以「谁能看什么」必须在页面里讲清楚，
-						而不是等用户点开一条记录才收到 401。
+						顶部固定块（滚动区之外）：可见范围 + 字段口径说明。
+						本域的越权边界在上游（BFF 只白名单透传），所以「谁能看什么」必须在页面里讲清楚；
+						操作 / 安全日志的条目字段集合未实测（见 shared/types/audit.ts 文件头），
+						也要在用户看到空白字段之前先说明，避免被当成「系统没记」。
 					-->
 					<div v-if="loaded" class="shrink-0 space-y-2 border-b border-(--ui-border) px-4 py-3">
 						<UAlert
@@ -250,41 +214,31 @@
 						/>
 
 						<UAlert
-							v-if="verifyResult"
-							:color="verifyEmpty ? 'warning' : verifyResult.intact ? 'success' : 'error'"
+							v-if="shapeUnverified"
+							color="warning"
 							variant="subtle"
-							:icon="verifyEmpty ? 'carbon:information' : verifyResult.intact ? 'carbon:checkmark-filled' : 'carbon:warning-alt'"
-							:title="$t('pages.system-log.verify.resultTitle')"
-							:description="verifySummary"
-						>
-							<template #actions>
-								<UButton
-									size="xs"
-									color="neutral"
-									variant="subtle"
-									:label="$t('pages.system-log.verify.dismiss')"
-									@click="verifyResult = undefined"
-								/>
-							</template>
-						</UAlert>
+							icon="carbon:warning-alt"
+							:title="$t('pages.system-log.scope.shapeTitle')"
+							:description="$t('pages.system-log.scope.shape')"
+						/>
 					</div>
 
 					<div v-if="selected" class="max-w-[720px] space-y-4 p-4">
 						<div class="space-y-1">
 							<div class="flex flex-wrap items-center gap-2">
-								<UBadge :color="auditCategoryColor(selected.category)" variant="subtle" size="sm">
-									{{ $t(auditCategoryKey(selected.category), { category: selected.category }) }}
+								<UBadge color="neutral" variant="subtle" size="sm">
+									{{ $t(`pages.system-log.kind.${kind}`) }}
 								</UBadge>
-								<UBadge :color="auditResultColor(selected.result)" variant="subtle" size="sm">
-									{{ $t(auditResultKey(selected.result), { result: selected.result }) }}
+								<UBadge v-if="selectedRow?.badge" :color="selectedRow.tone" variant="subtle" size="sm">
+									{{ selectedRow.badge }}
 								</UBadge>
-								<span class="font-mono text-xs text-(--ui-text-muted)">{{ selected.logCode }}</span>
+								<span class="font-mono text-xs break-all text-(--ui-text-muted)">{{ selected.id }}</span>
 							</div>
 							<h2 class="text-base font-semibold break-all">
-								{{ selected.action }}
+								{{ selectedRow?.title }}
 							</h2>
 							<p class="text-xs text-(--ui-text-muted)">
-								{{ auditTimeOf(selected.eventTime) }}
+								{{ selectedRow?.subtitle }}
 							</p>
 						</div>
 
@@ -299,88 +253,37 @@
 
 						<USkeleton v-else-if="detailLoading" class="h-24 w-full" />
 
-						<!-- 列表字段 + 详情字段：字段名沿用上游，空值统一显示 `—` -->
+						<!-- 已登记字段：字段名沿用上游，空值统一显示 `—`（缺失 ≠ 上游缺陷） -->
 						<dl v-else class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-log.detail.account") }}
-							</dt>
-							<dd>#{{ detail?.accountId ?? selected.accountId }}</dd>
-
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-log.detail.clientIp") }}
-							</dt>
-							<dd class="break-all">
-								{{ orDash(detail?.clientIp ?? selected.clientIp) }}
-							</dd>
-
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-log.detail.device") }}
-							</dt>
-							<dd class="break-all">
-								{{ orDash(detail?.deviceCode ?? selected.deviceCode) }}
-							</dd>
-
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-log.detail.session") }}
-							</dt>
-							<dd class="break-all">
-								{{ orDash(detail?.sessionId ?? selected.sessionId) }}
-							</dd>
-
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-log.detail.trace") }}
-							</dt>
-							<dd class="break-all">
-								{{ orDash(detail?.traceId ?? selected.traceId) }}
-							</dd>
-
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.system-log.detail.resource") }}
-							</dt>
-							<dd class="break-all">
-								{{ orDash(detail?.resource ?? selected.resource) }}
-							</dd>
-
-							<template v-if="detail">
+							<template v-for="field in detailFields" :key="field.key">
 								<dt class="text-(--ui-text-muted)">
-									{{ $t("pages.system-log.detail.sourceService") }}
+									{{ $t(`pages.system-log.${field.label}`) }}
 								</dt>
 								<dd class="break-all">
-									{{ orDash(detail.sourceService) }}
+									{{ orDash(field.value) }}
 								</dd>
 							</template>
 						</dl>
 
-						<!-- 链信息：`verify` 报断点时，靠这两段哈希去定位具体条目 -->
-						<div class="space-y-1">
+						<!--
+							未登记字段原样展示：上游多给的字段不该被页面静默丢掉。
+							这一段出现时，说明条目结构与 `AuditOperationLog` / `AuditSecurityLog` 的登记不一致
+							（那两个类型的字段集合尚未实测），照实列出比猜它属于哪个字段更可靠。
+						-->
+						<div v-if="extraFields.length > 0" class="space-y-2">
 							<p class="text-xs font-medium">
-								{{ $t("pages.system-log.detail.chain") }}
+								{{ $t("pages.system-log.detail.extra") }}
 							</p>
-							<p class="font-mono text-[11px] break-all text-(--ui-text-muted)">
-								<span class="select-none">{{ $t("pages.system-log.detail.logHash") }}: </span>{{ orDash(detail?.logHash ?? selected.logHash) }}
-							</p>
-							<p v-if="detail?.prevHash" class="font-mono text-[11px] break-all text-(--ui-text-muted)">
-								<span class="select-none">{{ $t("pages.system-log.detail.prevHash") }}: </span>{{ detail.prevHash }}
-							</p>
-						</div>
-
-						<!-- 快照：实测三项恒为空串（UP-AUD-09），有值才渲染，避免摆三个空盒子 -->
-						<div v-if="snapshots.length > 0" class="space-y-2">
-							<p class="text-xs font-medium">
-								{{ $t("pages.system-log.detail.snapshots") }}
-							</p>
-							<UAlert
-								color="warning"
-								variant="subtle"
-								icon="carbon:warning-alt"
-								:description="$t('pages.system-log.detail.snapshotsHint')"
-							/>
-							<div v-for="snapshot in snapshots" :key="snapshot.label">
-								<p class="text-xs text-(--ui-text-muted)">
-									{{ snapshot.label }}
-								</p>
-								<pre class="mt-1 max-h-48 overflow-auto rounded-md bg-elevated/40 p-2 text-[11px] leading-relaxed">{{ snapshot.value }}</pre>
-							</div>
+							<dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 font-mono text-[11px]">
+								<template v-for="field in extraFields" :key="field.key">
+									<dt class="text-(--ui-text-muted)">
+										{{ field.key }}
+									</dt>
+									<dd class="break-all">
+										{{ orDash(field.value) }}
+									</dd>
+								</template>
+							</dl>
 						</div>
 					</div>
 
@@ -394,173 +297,172 @@
 			</template>
 		</LayoutSplit>
 
-		<AuditExportModal
-			v-model:open="exportOpen"
-			:default-start="applied.start"
-			:default-end="applied.end"
-			:category="applied.category"
-			:account-id="applied.accountId"
-		/>
+		<!-- 归档确认（写操作，不可撤销）：先讲清后果再给主按钮，不用 toast 一闪而过 -->
+		<UModal v-model:open="archiveOpen" :title="$t('pages.system-log.archive.title')">
+			<template #body>
+				<div class="space-y-3">
+					<p class="text-sm">
+						{{ $t("pages.system-log.archive.description") }}
+					</p>
+					<UAlert
+						color="warning"
+						variant="subtle"
+						icon="carbon:warning-alt"
+						:description="$t('pages.system-log.archive.warning')"
+					/>
+					<UAlert
+						v-if="archiveResult"
+						color="success"
+						variant="subtle"
+						icon="carbon:checkmark-filled"
+						:description="archiveSummary"
+					/>
+				</div>
+			</template>
+
+			<template #footer>
+				<div class="flex w-full justify-end gap-2">
+					<UButton
+						color="neutral"
+						variant="ghost"
+						:label="$t('pages.system-log.archive.close')"
+						@click="archiveOpen = false"
+					/>
+					<UButton
+						icon="carbon:archive"
+						:label="$t('pages.system-log.archive.run')"
+						:loading="archiving"
+						@click="runArchive"
+					/>
+				</div>
+			</template>
+		</UModal>
 	</div>
 </template>
 
 <script setup lang="ts">
-	import type { AuditRangeValue } from "~~/layers/system/app/utils/auditDisplay";
-	import type { AuditLog, AuditLogDetail, AuditVerifyResult } from "~~/shared/types/audit";
+	import type { AuditRangePreset, AuditRangeValue } from "~~/layers/system/app/utils/auditDisplay";
+	import type {
+		AuditArchiveRecord,
+		AuditLogKind,
+		AuditOperationLog,
+		AuditRunArchiveResult,
+		AuditSecurityLog
+	} from "~~/shared/types/audit";
 	import { DEFAULT_PAGE_SIZE } from "~~/shared/constants/paging";
-	import { AUDIT_CATEGORY } from "~~/shared/types/audit";
+	import { AUDIT_LOG_KIND } from "~~/shared/types/audit";
 
 	/**
-	 * `/system/log` 审计日志（两栏落码，NMCPS-ADR-0017 迁移步骤 6）。
+	 * `/system/log` 审计日志（两栏落码，NMCPS-ADR-0017 迁移步骤 6；代际 C4b）。
 	 *
 	 * 设计基准：NMCPS-DESIGN-005 §九（`layers/content/collections/cn/architecture/2.domain/system.md`）
 	 * 界面骨架：NMCPS-ARCH-006（`layers/content/collections/cn/architecture/1.architecture/ui-architecture.md`）
-	 * 上游缺陷：NMCPS-REC-004（`layers/content/collections/cn/records/defects/audit-upstream-defects.md`）
+	 * 代际口径：NMCPS-ADR-0018 §三 / D2（审计域从单端点 `category` 拆成三族端点）
 	 *
-	 * ── 决策矩阵：两个身份下本页暴露什么（2026-11-02 实测）─────────────────────
-	 * | 能力 | 超级管理员（level 0） | 租户管理员（level 1） |
-	 * | :--- | :--- | :--- |
-	 * | 列表 / 详情 | 全平台 | **可用，范围由上游按租户过滤**（同一时刻 total 1893 vs 1709） |
-	 * | 校验哈希链 | 可用（写操作：自身 +1 条日志） | 同样可用（已复核 `code: 0`） |
-	 * | 校验结果 | `checkedCount` 是真正校验的条数；零条窗口仍回 `intact: true`（UP-AUD-04）→ 0 条时按中性提示渲染 | 同左 |
-	 * | 导出任务 | 可用（无详情端点，UP-AUD-07） | 同样可用 |
-	 * | 筛选 category | 只给 `session` / `api`：其余取值被静默忽略并返回全量（UP-AUD-02） | 同左 |
-	 * | 筛选 result / keyword | 不提供：上游静默忽略（UP-AUD-03），摆了就等于承诺能筛 | 同左 |
-	 * | 单页条数 | 上限 100：`pageSize=500` 回 20 条却回显 500（UP-AUD-03） | 同左 |
+	 * ── 三族一页（2026-11-04 实测）──────────────────────────────────────────────
+	 * | 族 | 列表端点 | 时间参数 | 详情主键 | 结果字段 |
+	 * | :--- | :--- | :--- | :--- | :--- |
+	 * | 操作日志 | `GET /audit/operation-logs` | `created_from` / `created_to`（epoch 毫秒） | `id`（UUID） | `status` |
+	 * | 安全日志 | `GET /audit/security-logs` | `logged_from` / `logged_to`（epoch 毫秒） | `id`（UUID） | `auth_decision` |
+	 * | 归档记录 | `GET /audit/archive/records` | **无时间条件** | `id`（UUID） | `status` |
 	 *
-	 * 这些收敛只是「不引导用户踩上游缺口」，不是安全边界：BFF 只做白名单透传，鉴权仍在上游。
-	 * 早先记录的「租户管理员一律 401 10201」（UP-AUD-01）已作废：那是过期令牌造成的伪影。
+	 * ── 旧代能力去哪儿了（缺口 G6 / G7，NMCPS-ADR-0018 §五）──────────────────────
+	 * - 哈希链校验（`POST /audit/verify`）：新代**无对应端点** → 入口退役；
+	 * - 导出任务（`GET|POST /audit/export`）：新代**无对应端点** → 换成归档
+	 *   （`POST /audit/archive/run` + 归档记录列表），也是右区唯一动作的来源。
+	 *
+	 * ── 字段口径的诚实边界 ─────────────────────────────────────────────────────
+	 * 操作 / 安全日志的**条目字段集合无法实测**：该实例审计库为空（`list: null`），IAM 写操作也不
+	 * 产生审计行，swagger 只把响应描述成 `audit_BaseResp`。所以这两族的详情按「已登记字段清单 +
+	 * 未登记字段原样段」渲染，缺失一律显示 `—`，页面顶部同时挂一条口径说明（§9.3）。
+	 * 归档记录的字段集合已实测（真跑一次归档后回读），因此不带那条说明。
 	 */
 	definePageMeta({ sort: 4, icon: "carbon:list" });
 
 	const { t } = useI18n();
 	const toast = useToast();
 	const { isSuperAdmin, loaded } = useAuth();
-	const { list: listLogs, get: getLog, verify: verifyChain } = useAuditLogs();
+	const { listOperationLogs, getOperationLog, listSecurityLogs, getSecurityLog } = useAuditLogs();
+	const { listRecords, getRecord, run: runArchiveJob } = useAuditArchive();
+
+	/** 三族记录的联合类型：列表按族取，行渲染走 `auditRowOf()` 的族分支 */
+	type AuditRow = AuditOperationLog | AuditSecurityLog | AuditArchiveRecord;
 
 	/** 当前形态（由 `Layout/Split.vue` 判定并外抛）：决定 `?id` 写历史时用 `replace` 还是 `push` */
 	const shape = ref<"two" | "overlay">("two");
 
-	const rows = ref<AuditLog[]>([]);
+	const kind = ref<AuditLogKind>(AUDIT_LOG_KIND.OPERATION);
+
+	const rows = ref<AuditRow[]>([]);
 	const total = ref(0);
 	const page = ref(1);
 	const pageSize = ref(DEFAULT_PAGE_SIZE);
 	const loading = ref(false);
 	const errorMessage = ref<string>();
 
-	/**
-	 * 读权限：两种身份都能读，差别只在**数据范围**。
-	 *
-	 * 2026-11-02 复核更正 UP-AUD-01：租户管理员调本域端点是 `code: 0`，上游按租户过滤
-	 * （同一时刻超级管理员 `total` 1893、租户管理员 1709，且行内 `accountId` 只落在本租户）。
-	 * 早先测得的「一律 401 10201」源自过期令牌，不是权限事实 —— 所以页面不按身份拦请求。
-	 */
-	const scopeMessage = computed(() => {
-		if (!loaded.value)
-			return "";
+	/** 各族日志的族名（常驻下拉的候选项）：只有这三项，不提供自由输入 */
+	const kindItems = computed(() => [
+		{ label: t("pages.system-log.kind.operation"), value: AUDIT_LOG_KIND.OPERATION },
+		{ label: t("pages.system-log.kind.security"), value: AUDIT_LOG_KIND.SECURITY },
+		{ label: t("pages.system-log.kind.archive"), value: AUDIT_LOG_KIND.ARCHIVE }
+	]);
 
-		return isSuperAdmin.value
-			? t("pages.system-log.scope.superAdmin")
-			: t("pages.system-log.scope.tenantAdmin");
+	/** 每族真正可用的筛选参数（顺序即浮层里的顺序，openapi 逐项核对过） */
+	const FILTER_SPECS: Record<AuditLogKind, { key: string, label: string }[]> = {
+		[AUDIT_LOG_KIND.OPERATION]: [
+			{ key: "keyword", label: "pages.system-log.filter.keyword" },
+			{ key: "username", label: "pages.system-log.filter.username" },
+			{ key: "module", label: "pages.system-log.filter.module" },
+			{ key: "status", label: "pages.system-log.filter.status" }
+		],
+		[AUDIT_LOG_KIND.SECURITY]: [
+			{ key: "subject_name", label: "pages.system-log.filter.subjectName" },
+			{ key: "action", label: "pages.system-log.filter.action" },
+			{ key: "auth_decision", label: "pages.system-log.filter.authDecision" },
+			{ key: "ip_address", label: "pages.system-log.filter.ip" }
+		],
+		[AUDIT_LOG_KIND.ARCHIVE]: [
+			{ key: "table_name", label: "pages.system-log.filter.tableName" },
+			{ key: "status", label: "pages.system-log.filter.status" }
+		]
+	};
+
+	const filterSpecs = computed(() => FILTER_SPECS[kind.value]);
+
+	/** 浮层输入框的输入态（防抖 300ms 才落生效，D2） */
+	const filterValues = reactive<Record<string, string>>({
+		keyword: "",
+		username: "",
+		module: "",
+		status: "",
+		subject_name: "",
+		action: "",
+		auth_decision: "",
+		ip_address: "",
+		table_name: ""
 	});
 
-	const displayRows = computed(() => rows.value);
+	/** 生效态：只保留当前族用得到的键（切族时不把别族的残留值发出去） */
+	const appliedFilters = ref<Record<string, string>>({});
 
-	/**
-	 * 记录选择契约（NMCPS-ARCH-006 §5.2 / NMCPS-ADR-0017 D2 / D6）：`?id` 是「当前选中哪条」的唯一事实源。
-	 *
-	 * `getId` 用 `logCode`（`AUD…`），它同时是详情端点路径段；`?id` **不进** 列表请求参数，
-	 * 所以改选中 / 深链进入都不会重新拉列表。`autoSelect` 让两栏形态默认落第一行。
-	 */
-	const selection = useRecordSelection<AuditLog>({
-		rows: displayRows,
-		getId: (log) => log.logCode,
-		getLabel: (log) => log.action,
-		isLoading: loading,
-		isOverlay: () => shape.value === "overlay",
-		autoSelect: true,
-		defaultRecord: (logList) => logList[0]
-	});
-
-	const { selectedId, selected, clear: clearSelection } = selection;
-
-	const hasSelection = computed(() => !!selectedId.value);
-
-	/**
-	 * 工具栏内容跟随当前面板（NMCPS-ARCH-006 §4.4）：两栏 = 左区集合域 + 右区集合域动作同屏；
-	 * 覆盖式列表态只给集合域动作，详情态左区换成唯一「返回」、右区不给动作（本域无单条记录动作）。
-	 */
-	const toolbarPane = computed<"list" | "detail">(() =>
-		shape.value === "overlay" && hasSelection.value ? "detail" : "list");
-
-	const recordLabel = computed(() => selection.label.value);
-	const { clearRequests } = useRecordContext(recordLabel);
-
-	watch(clearRequests, () => clearSelection());
-
-	// ── 键盘：listbox 语义（§3.6 / D8）────────────────────────────────────────
-	const rowElements = new Map<string, HTMLElement>();
-
-	function setRowRef(code: string, element: unknown): void {
-		if (element instanceof HTMLElement)
-			rowElements.set(code, element);
-		else
-			rowElements.delete(code);
-	}
-
-	/** `↑/↓/Home/End` 移动焦点并同步选中（selection follows focus）；`Enter` / `Space` 由行自己处理 */
-	function onListKeydown(event: KeyboardEvent): void {
-		const codes = displayRows.value.map((log) => log.logCode);
-		if (codes.length === 0)
-			return;
-
-		const current = selectedId.value ? codes.indexOf(selectedId.value) : -1;
-		let next: number;
-
-		switch (event.key) {
-		case "ArrowDown":
-			next = current < 0 ? 0 : Math.min(codes.length - 1, current + 1);
-			break;
-		case "ArrowUp":
-			next = current < 0 ? codes.length - 1 : Math.max(0, current - 1);
-			break;
-		case "Home":
-			next = 0;
-			break;
-		case "End":
-			next = codes.length - 1;
-			break;
-		default:
-			return;
-		}
-
-		event.preventDefault();
-		const code = codes[next]!;
-		selection.set(code);
-		void nextTick(() => rowElements.get(code)?.focus());
-	}
-
-	// ── 筛选 ──────────────────────────────────────────────────────────────────
-	// 输入态与生效态分开：文本类防抖 300ms 才落生效（D2），改筛选一律回到第一页。
-	// 只放上游真正认的参数：`result` / `keyword` 会被静默忽略（UP-AUD-03），所以没有搜索框。
-	const categoryFilter = ref<string>("");
-	/** `0` = 不限：`accountId=0` 被上游当「未提供」，哨兵值不透传 */
-	const accountIdFilter = ref<number>(0);
-	const deviceCodeFilter = ref<string>("");
-	const sessionIdFilter = ref<string>("");
-	const traceIdFilter = ref<string>("");
 	const startFilter = ref<string>("");
 	const endFilter = ref<string>("");
-	/**
-	 * 当前时间窗口命中哪个快捷项：只影响按钮文案与浮层高亮，不参与取数（取数只用 `start` / `end`）。
-	 * 手改 `datetime-local` 或点日历选日时降级为 `custom`。
-	 */
-	const rangePreset = ref<AuditRangeValue["preset"]>("all");
+	/** 当前窗口命中哪个快捷项：只影响按钮文案与浮层高亮，不参与取数（取数只用 start / end） */
+	const rangePreset = ref<AuditRangePreset | "custom">("all");
+	const appliedStart = ref<string>("");
+	const appliedEnd = ref<string>("");
+
+	const filtersActive = computed(() =>
+		Object.keys(appliedFilters.value).length > 0
+		|| (kind.value !== AUDIT_LOG_KIND.ARCHIVE && (appliedStart.value !== "" || appliedEnd.value !== "")));
 
 	/**
-	 * 时间范围控件的值（`components/Audit/RangePicker.vue`）：三个字段都落到上面已有的 ref，
-	 * 组件只负责「点快捷项 / 选日历日期 / 手填时间」，取数仍由下面的 `watch` 统一落地。
+	 * 浮层图标的高亮只看**还留在浮层里**的筛选项：时间与族名已常驻左区、自己就带着值，
+	 * 若继续按 `filtersActive` 高亮，会出现「浮层里什么都没设却一直亮着」的误导。
 	 */
+	const popoverFiltersActive = computed(() => Object.keys(appliedFilters.value).length > 0);
+
+	/** 时间范围控件（`components/Audit/RangePicker.vue`）的值：三个字段都落到上面已有的 ref */
 	const rangeModel = computed<AuditRangeValue>({
 		get: () => ({ start: startFilter.value, end: endFilter.value, preset: rangePreset.value }),
 		set: (next) => {
@@ -570,51 +472,6 @@
 		}
 	});
 
-	const applied = ref<{
-		category: string
-		accountId: number
-		deviceCode: string
-		sessionId: string
-		traceId: string
-		start: string
-		end: string
-	}>({ category: "", accountId: 0, deviceCode: "", sessionId: "", traceId: "", start: "", end: "" });
-
-	const filtersActive = computed(() =>
-		applied.value.category !== ""
-		|| applied.value.accountId !== 0
-		|| applied.value.deviceCode !== ""
-		|| applied.value.sessionId !== ""
-		|| applied.value.traceId !== ""
-		|| applied.value.start !== ""
-		|| applied.value.end !== "");
-
-	/**
-	 * 浮层图标的高亮只看**还留在浮层里**的筛选项：时间与类别已常驻左区、自己就带着值，
-	 * 若继续按 `filtersActive` 高亮，会出现「浮层里什么都没设却一直亮着」的误导。
-	 */
-	const popoverFiltersActive = computed(() =>
-		applied.value.accountId !== 0
-		|| applied.value.deviceCode !== ""
-		|| applied.value.sessionId !== ""
-		|| applied.value.traceId !== "");
-
-	/** 只提供实测存在的两个类别：随便给个字符串会被上游静默忽略并返回全量（UP-AUD-02） */
-	const categoryItems = computed(() => [
-		{ label: t("pages.system-log.filter.anyCategory"), value: "any" },
-		{ label: t("pages.system-log.category.session"), value: AUDIT_CATEGORY.SESSION },
-		{ label: t("pages.system-log.category.api"), value: AUDIT_CATEGORY.API }
-	]);
-
-	/** `USelect` 需要空态可选项：用 `any` 哨兵而不是空串，避免「选中了但看不出选的是什么」 */
-	const categoryModel = computed({
-		get: () => applied.value.category || "any",
-		set: (value: string) => {
-			categoryFilter.value = value === "any" ? "" : value;
-		}
-	});
-
-	/** 时间范围快捷项由 `Audit/RangePicker.vue` 渲染（文案键与 `AUDIT_RANGE_PRESETS` 逐项对应） */
 	/**
 	 * 常驻按钮文案 = 当前窗口摘要（`NMCPS-DESIGN-005` §9.3 第 2 条：范围必须一眼可见）。
 	 *
@@ -629,7 +486,19 @@
 			return t(`pages.system-log.filter.range.${rangePreset.value}`);
 
 		const compact = (value: string) => (value ? value.slice(5).replace("T", " ") : "…");
-		return `${compact(applied.value.start)} → ${compact(applied.value.end)}`;
+		return `${compact(appliedStart.value)} → ${compact(appliedEnd.value)}`;
+	});
+
+	/** 三族记录共同的展示名：列表行主标题（面包屑记录段也用它） */
+	function labelOf(record: AuditRow): string {
+		return auditRowOf(kind.value, record).title;
+	}
+
+	const kindModel = computed({
+		get: () => kind.value,
+		set: (value: AuditLogKind) => {
+			kind.value = value;
+		}
 	});
 
 	function describeError(error: unknown): string {
@@ -642,6 +511,12 @@
 			: t("pages.system-log.errors.failed");
 	}
 
+	/** 生效态里取某个筛选值（空串视作「没设」，不发给上游） */
+	function filterValue(key: string): string | undefined {
+		const value = appliedFilters.value[key];
+		return value || undefined;
+	}
+
 	// ── 列表取数 ──────────────────────────────────────────────────────────────
 	async function load(): Promise<void> {
 		if (loading.value)
@@ -651,17 +526,39 @@
 		errorMessage.value = undefined;
 
 		try {
-			const result = await listLogs({
-				page: page.value,
-				pageSize: pageSize.value,
-				category: applied.value.category || undefined,
-				accountId: applied.value.accountId || undefined,
-				deviceCode: applied.value.deviceCode || undefined,
-				sessionId: applied.value.sessionId || undefined,
-				traceId: applied.value.traceId || undefined,
-				startTime: toAuditTimeParam(applied.value.start),
-				endTime: toAuditTimeParam(applied.value.end)
-			});
+			// 三族的端点、筛选参数、时间参数各不相同，这里按族分支，不做「一套参数打三处」的假设
+			let result: { list: AuditRow[] | null, total: number };
+
+			if (kind.value === AUDIT_LOG_KIND.ARCHIVE) {
+				result = await listRecords({
+					page: page.value,
+					page_size: pageSize.value,
+					table_name: filterValue("table_name"),
+					status: filterValue("status")
+				});
+			} else if (kind.value === AUDIT_LOG_KIND.SECURITY) {
+				result = await listSecurityLogs({
+					page: page.value,
+					page_size: pageSize.value,
+					subject_name: filterValue("subject_name"),
+					action: filterValue("action"),
+					auth_decision: filterValue("auth_decision"),
+					ip_address: filterValue("ip_address"),
+					logged_from: auditEpochMs(appliedStart.value),
+					logged_to: auditEpochMs(appliedEnd.value)
+				});
+			} else {
+				result = await listOperationLogs({
+					page: page.value,
+					page_size: pageSize.value,
+					keyword: filterValue("keyword"),
+					username: filterValue("username"),
+					module: filterValue("module"),
+					status: filterValue("status"),
+					created_from: auditEpochMs(appliedStart.value),
+					created_to: auditEpochMs(appliedEnd.value)
+				});
+			}
 
 			rows.value = result.list ?? [];
 			total.value = result.total ?? 0;
@@ -688,15 +585,16 @@
 
 	/** 落生效态并重新取第一页（`page` 变了由 `watch(page)` 触发加载，避免重复请求） */
 	function applyFilters(): void {
-		applied.value = {
-			category: categoryFilter.value,
-			accountId: Number(accountIdFilter.value) || 0,
-			deviceCode: deviceCodeFilter.value.trim(),
-			sessionId: sessionIdFilter.value.trim(),
-			traceId: traceIdFilter.value.trim(),
-			start: startFilter.value,
-			end: endFilter.value
-		};
+		const next: Record<string, string> = {};
+		for (const spec of FILTER_SPECS[kind.value]) {
+			const value = (filterValues[spec.key] ?? "").trim();
+			if (value)
+				next[spec.key] = value;
+		}
+
+		appliedFilters.value = next;
+		appliedStart.value = kind.value === AUDIT_LOG_KIND.ARCHIVE ? "" : startFilter.value;
+		appliedEnd.value = kind.value === AUDIT_LOG_KIND.ARCHIVE ? "" : endFilter.value;
 
 		if (page.value !== 1) {
 			page.value = 1;
@@ -707,25 +605,17 @@
 	}
 
 	function resetFilters(): void {
-		categoryFilter.value = "";
-		accountIdFilter.value = 0;
-		deviceCodeFilter.value = "";
-		sessionIdFilter.value = "";
-		traceIdFilter.value = "";
+		for (const key of Object.keys(filterValues))
+			filterValues[key] = "";
 		startFilter.value = "";
 		endFilter.value = "";
 		rangePreset.value = "all";
 		applyFilters();
 	}
 
-	// 三个文本标识是「粘贴一个 ID 来定位」，防抖 300ms（D2）；其余是离散选择，改完立刻生效
-	watchDebounced(
-		[deviceCodeFilter, sessionIdFilter, traceIdFilter],
-		() => applyFilters(),
-		{ debounce: 300 }
-	);
-	// 单页条数变化同样走 `applyFilters()`：换条数后 `page * pageSize` 的偏移必然错位，必须回第一页
-	watch([categoryFilter, accountIdFilter, startFilter, endFilter, pageSize], () => applyFilters());
+	// 文本类筛选是「粘一个值过来定位」，防抖 300ms（D2）；时间与每页条数是离散选择，改完立刻生效
+	watchDebounced(filterValues, () => applyFilters(), { debounce: 300, deep: true });
+	watch([startFilter, endFilter, pageSize], () => applyFilters());
 
 	watch(page, () => {
 		void load();
@@ -737,124 +627,222 @@
 			reload();
 	}, { immediate: true });
 
+	// ── 列表行与选择 ──────────────────────────────────────────────────────────
+	/** 行视图：族 → 摘要（模板里不写三套分支，见 `auditRowOf()`） */
+	const displayRows = computed(() => rows.value.map((record) => ({
+		record,
+		...auditRowOf(kind.value, record)
+	})));
+
+	/**
+	 * 记录选择契约（NMCPS-ARCH-006 §5.2 / NMCPS-ADR-0017 D2 / D6）：`?id` 是「当前选中哪条」的唯一事实源。
+	 *
+	 * `getId` 用记录主键 `id`（UUID），它同时是详情端点路径段；`?id` **不进**列表请求参数，
+	 * 所以改选中 / 深链进入都不会重新拉列表。`autoSelect` 让两栏形态默认落第一行。
+	 */
+	const selection = useRecordSelection<AuditRow>({
+		rows,
+		getId: (record) => record.id,
+		getLabel: labelOf,
+		isLoading: loading,
+		isOverlay: () => shape.value === "overlay",
+		autoSelect: true,
+		defaultRecord: (list) => list[0]
+	});
+
+	const { selectedId, selected, clear: clearSelection } = selection;
+
+	/** 切族 = 换端点 + 换字段：回第一页、清掉选中（旧记录在新族里不存在），再取数 */
+	watch(kind, () => {
+		page.value = 1;
+		clearSelection();
+		applyFilters();
+	});
+
+	const hasSelection = computed(() => !!selectedId.value);
+
+	/** 选中行的摘要（详情标题与徽标复用，避免模板里再算一次） */
+	const selectedRow = computed(() => (selected.value ? auditRowOf(kind.value, selected.value) : undefined));
+
+	/**
+	 * 工具栏内容跟随当前面板（NMCPS-ARCH-006 §4.4）：两栏 = 左区集合域 + 右区集合域动作同屏；
+	 * 覆盖式列表态只给集合域动作，详情态左区换成唯一「返回」、右区不给动作（本域无单条记录动作）。
+	 */
+	const toolbarPane = computed<"list" | "detail">(() =>
+		shape.value === "overlay" && hasSelection.value ? "detail" : "list");
+
+	const recordLabel = computed(() => selection.label.value);
+	const { clearRequests } = useRecordContext(recordLabel);
+
+	watch(clearRequests, () => clearSelection());
+
+	// ── 键盘：listbox 语义（§3.6 / D8）────────────────────────────────────────
+	const rowElements = new Map<string, HTMLElement>();
+
+	function setRowRef(id: string, element: unknown): void {
+		if (element instanceof HTMLElement)
+			rowElements.set(id, element);
+		else
+			rowElements.delete(id);
+	}
+
+	/** `↑/↓/Home/End` 移动焦点并同步选中（selection follows focus）；`Enter` / `Space` 由行自己处理 */
+	function onListKeydown(event: KeyboardEvent): void {
+		const ids = displayRows.value.map((row) => row.id);
+		if (ids.length === 0)
+			return;
+
+		const current = selectedId.value ? ids.indexOf(selectedId.value) : -1;
+		let next: number;
+
+		switch (event.key) {
+		case "ArrowDown":
+			next = current < 0 ? 0 : Math.min(ids.length - 1, current + 1);
+			break;
+		case "ArrowUp":
+			next = current < 0 ? ids.length - 1 : Math.max(0, current - 1);
+			break;
+		case "Home":
+			next = 0;
+			break;
+		case "End":
+			next = ids.length - 1;
+			break;
+		default:
+			return;
+		}
+
+		event.preventDefault();
+		const id = ids[next]!;
+		selection.set(id);
+		void nextTick(() => rowElements.get(id)?.focus());
+	}
+
 	// ── 详情取数 ──────────────────────────────────────────────────────────────
-	// 列表项已含 12 个字段；详情多出 `sourceService` / 快照 / `prevHash`，单独拉一次。
-	// 实测快照三项恒为空串（UP-AUD-09），所以右栏「有值才渲染」，不摆空盒子。
-	const detail = ref<AuditLogDetail>();
+	// 三族各有一个详情端点（旧代是一个 `GET /audit/{logCode}`）。列表项已含主要字段，
+	// 详情仍单独拉一次：上游在详情里可能给列表没有的字段，页面按「有值才渲染」处理。
+	const detail = ref<AuditRow>();
 	const detailLoading = ref(false);
 	const detailError = ref<string>();
 
-	watch(selected, async (log) => {
+	/** 族 → 详情端点：切换族或快速连点时靠 `kind` + `id` 双闸门避免慢响应覆盖新记录 */
+	async function fetchDetail(id: string): Promise<AuditRow> {
+		if (kind.value === AUDIT_LOG_KIND.ARCHIVE)
+			return getRecord(id);
+		if (kind.value === AUDIT_LOG_KIND.SECURITY)
+			return getSecurityLog(id);
+
+		return getOperationLog(id);
+	}
+
+	watch(selected, async (record) => {
 		detail.value = undefined;
 		detailError.value = undefined;
 
-		if (!log)
+		if (!record)
 			return;
 
-		const code = log.logCode;
+		const id = record.id;
+		const requestedKind = kind.value;
 		detailLoading.value = true;
 
 		try {
-			const result = await getLog(code);
-			// 快速连点时用当前选中做闸门，避免慢响应覆盖新记录
-			if (selectedId.value === code)
+			const result = await fetchDetail(id);
+			// 快速连点 / 切族时用当前选中与当前族做闸门
+			if (selectedId.value === id && kind.value === requestedKind)
 				detail.value = result;
 		} catch (error) {
-			if (selectedId.value === code)
+			if (selectedId.value === id && kind.value === requestedKind)
 				detailError.value = describeError(error);
 		} finally {
-			if (selectedId.value === code)
+			if (selectedId.value === id && kind.value === requestedKind)
 				detailLoading.value = false;
 		}
 	}, { immediate: true });
 
-	/** 有值才渲染的快照项（`beforeSnapshot` / `afterSnapshot` / `detailJson`） */
-	const snapshots = computed(() => {
-		const source = detail.value;
-		if (!source)
-			return [];
+	/** 详情展示用的记录：有详情用详情，详情还没回来就用列表项（不闪空） */
+	const detailRecord = computed<Record<string, unknown>>(() =>
+		(detail.value ?? selected.value ?? {}) as unknown as Record<string, unknown>);
 
-		return [
-			{ label: t("pages.system-log.detail.beforeSnapshot"), value: source.beforeSnapshot },
-			{ label: t("pages.system-log.detail.afterSnapshot"), value: source.afterSnapshot },
-			{ label: t("pages.system-log.detail.detailJson"), value: source.detailJson }
-		].filter((item) => !!item.value);
-	});
+	/** `*_at` / `*_before` 这类字段按本地时字面值裁剪展示，其余原样 */
+	function isTimeField(key: string): boolean {
+		return /(?:_at|_before)$/.test(key);
+	}
+
+	/** 已登记字段的取值（顺序由 `AUDIT_DETAIL_FIELDS` 决定，缺字段显示 `—`） */
+	const detailFields = computed(() => AUDIT_DETAIL_FIELDS[kind.value].map((field) => {
+		const raw = auditField(detailRecord.value, field.key);
+		return {
+			key: field.key,
+			label: field.label,
+			value: isTimeField(field.key) ? auditTimeOf(raw) : raw
+		};
+	}));
+
+	/** 未登记字段：原样列出（操作 / 安全日志的条目结构尚未实测，见页面头注释） */
+	const extraFields = computed(() => auditExtraFields(kind.value, detailRecord.value));
+
+	/**
+	 * 字段口径说明只在「字段集合未实测」的两族出现（`NMCPS-REC-004`）：
+	 * 归档记录的字段已实测，摆这条说明反而会让用户以为归档数据也不可信。
+	 */
+	const shapeUnverified = computed(() => kind.value !== AUDIT_LOG_KIND.ARCHIVE);
 
 	function orDash(value: string | number | undefined): string {
 		return value === undefined || value === "" ? "—" : String(value);
 	}
 
-	// ── 校验哈希链（写操作）───────────────────────────────────────────────────
-	const verifying = ref(false);
-	const verifyResult = ref<AuditVerifyResult>();
-	/** 本次校验用的窗口文本（结果横幅里要说清「校验的是哪一段」） */
-	const verifyWindow = ref("");
+	/**
+	 * 读权限：两种身份都能读，差别只在**数据范围**（由上游按租户过滤）。
+	 *
+	 * 本域没有「我是谁就能看什么」的客户端判定：BFF 只白名单透传，越权判定在上游；
+	 * 这里只是把「你看到的范围是谁的范围」讲清楚，不据身份拦请求。
+	 */
+	const scopeMessage = computed(() => {
+		if (!loaded.value)
+			return "";
+
+		return isSuperAdmin.value
+			? t("pages.system-log.scope.superAdmin")
+			: t("pages.system-log.scope.tenantAdmin");
+	});
+
+	// ── 归档（取代旧代导出，缺口 G7）──────────────────────────────────────────
+	const archiveOpen = ref(false);
+	const archiving = ref(false);
+	const archiveResult = ref<AuditRunArchiveResult>();
+
+	/** 归档结果按「表名: 行数」原样回显：0 行不是失败（空库实测就是 0） */
+	const archiveSummary = computed(() => {
+		const entries = Object.entries(archiveResult.value ?? {});
+		return entries.length > 0
+			? `${t("pages.system-log.archive.result")} ${entries.map(([table, count]) => `${table}: ${count}`).join(" · ")}`
+			: "";
+	});
 
 	/**
-	 * `POST /api/audit/verify` 是**写操作**：调用本身会新增一条 `api` 类审计日志（UP-AUD-05）。
-	 * 所以它是显式按钮而不是「进页面自动跑」，跑完顺手重拉列表，让新增的那条可见。
+	 * 跑一次归档：**写操作**，按上游保留期把过期日志搬到归档表。
+	 *
+	 * 不加 `table_name` = 两张表都归（实测返回两个表的行数）。跑完顺手重拉当前列表：
+	 * 归档会改变表的行数，不重拉就会看到过期数据。
 	 */
-	async function runVerify(): Promise<void> {
-		if (verifying.value)
+	async function runArchive(): Promise<void> {
+		if (archiving.value)
 			return;
 
-		const startTime = toAuditTimeParam(applied.value.start);
-		const endTime = toAuditTimeParam(applied.value.end);
-
-		// 单端区间在校验语义上没有定义（上游文档只写了「可选起止」），页面要求成对给出
-		if (!!startTime !== !!endTime) {
-			toast.add({ title: t("pages.system-log.verify.needRange"), color: "warning" });
-			return;
-		}
-
-		verifying.value = true;
+		archiving.value = true;
 
 		try {
-			verifyResult.value = await verifyChain({ startTime, endTime });
-			verifyWindow.value = startTime
-				? auditRangeLabel(applied.value.start, applied.value.end)
-				: t("pages.system-log.verify.fullChain");
-
+			archiveResult.value = await runArchiveJob();
 			await load();
 		} catch (error) {
 			toast.add({
-				title: t("pages.system-log.verify.failed"),
+				title: t("pages.system-log.archive.failed"),
 				description: describeError(error),
 				color: "error"
 			});
 		} finally {
-			verifying.value = false;
+			archiving.value = false;
 		}
 	}
-
-	/**
-	 * 空窗口的「链完整」是空真：上游对 0 条的窗口仍回 `intact: true` / `checkedCount: 0`（UP-AUD-05），
-	 * 直接套绿色成功会让用户以为整条链没问题 —— 这种结果按中性提示渲染，文案明说校验了 0 条。
-	 */
-	const verifyEmpty = computed(() => !!verifyResult.value?.intact && verifyResult.value.checkedCount === 0);
-
-	/**
-	 * `brokenAtLogId` 是**整链序号**而不是 `logCode`（UP-AUD-05），所以文案只说「第 N 条」，
-	 * 不去指认具体记录 —— 指错比不指更糟。
-	 */
-	const verifySummary = computed(() => {
-		const result = verifyResult.value;
-		if (!result)
-			return "";
-
-		if (verifyEmpty.value)
-			return t("pages.system-log.verify.empty", { window: verifyWindow.value });
-
-		return result.intact
-			? t("pages.system-log.verify.intact", { count: result.checkedCount, window: verifyWindow.value })
-			: t("pages.system-log.verify.broken", {
-				count: result.checkedCount,
-				index: result.brokenAtLogId,
-				window: verifyWindow.value
-			});
-	});
-
-	// ── 导出 ──────────────────────────────────────────────────────────────────
-	const exportOpen = ref(false);
 </script>

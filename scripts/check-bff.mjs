@@ -500,7 +500,8 @@ try {
 		log("掩码不影响其它字段（name / status 原样）", device?.name === "核心交换机" && device?.status === "online", describe(device));
 		log("响应体不出现明文凭据", !asset.text.includes("auth-secret-1") && !asset.text.includes("priv-secret-1"), asset.text.slice(0, 200));
 
-		const logs = await request(exitPort, "/api/audit/operation-logs?page=1&page_size=1");
+		// 假上游对「没有命中的查询」回 `list: null`（与真实上游一致，NMCPS-ADR-0018 D6）
+		const logs = await request(exitPort, "/api/audit/operation-logs?page=1&page_size=1&keyword=__none__");
 		log("上游 data.list:null → 出口归一为 []", logs.status === 200 && Array.isArray(logs.json?.data?.list) && logs.json.data.list.length === 0, describe(logs.json?.data?.list));
 		log("归一不影响 data 内分页字段（page / page_size / total）", logs.json?.data?.page === 1 && logs.json?.data?.page_size === 1 && logs.json?.data?.total === 0, describe(logs.json?.data));
 		const users = await request(exitPort, "/api/iam/users?page=1&page_size=2");

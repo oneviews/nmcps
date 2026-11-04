@@ -1,67 +1,75 @@
 // layers/system/app/composables/useAuditLogs.ts
-// 审计日志数据面（`/system/log`）：只封装 2026-11-02 实测可用的三个端点。
+// 审计日志数据面（`/system/log`）：新代 `audit` 命名空间的三条读路径。
 //
 // 设计基准：NMCPS-DESIGN-005 §9.1（layers/content/collections/cn/architecture/2.domain/system.md）
-// 上游缺陷：NMCPS-REC-004（layers/content/collections/cn/records/defects/audit-upstream-defects.md）
-//   - 失效令牌与越权共用 `401 10201`（UP-AUD-01）→ 两种身份都照常请求，错误统一提示重新登录；
-//   - `result` / `keyword` 等未知查询参数被静默忽略（UP-AUD-03）→ 这里不提供这些参数；
-//   - `pageSize` 无稳定上限（`500` 回 20 条却回显 500，UP-AUD-03）→ 客户端先夹到 100。
+//
+// 代际：旧代是一个 `GET /api/audit?category=…`，新代按日志族拆成两个列表端点
+// （`/audit/operation-logs`、`/audit/security-logs`），各带自己的详情端点与筛选参数
+// （NMCPS-ADR-0018 §三）。旧代的 `verify`（哈希链校验）与 `export`（导出任务）在新代
+// **没有对应端点**（缺口 G6 / G7），改由归档链路承担 —— 见 `useAuditArchive.ts`。
+//
+// 实测约束（2026-11-04）：
+//   - 空结果上游给 `data.list: null`；BFF 出口已归一为 `[]`，composable 再兜一次；
+//   - 详情不存在时上游回 **HTTP 200 + `code: 40401`**（不是 404），由 `apiGuard` 抛出 ApiError；
+//   - 分页字段是 `page_size`（旧代 `pageSize`），时间边界是 epoch 毫秒整数。
 //
 // 鉴权口径：BFF 只做白名单透传（`GATEWAY_RESOURCES` 含 `audit`），越权判定全在上游。
 import type {
-	AuditListQuery,
-	AuditListResult,
-	AuditLogDetail,
-	AuditVerifyPayload,
-	AuditVerifyResult
+	AuditOperationLog,
+	AuditOperationLogQuery,
+	AuditPaged,
+	AuditSecurityLog,
+	AuditSecurityLogQuery
 } from "~~/shared/types/audit";
 import { AUDIT_MAX_PAGE_SIZE } from "~~/shared/types/audit";
+
+/** 把入参里的空串 / `undefined` 清掉：上游对空串的处理没有明确定义，别发出去 */
+function compact<T extends Record<string, unknown>>(source: T): Record<string, unknown> {
+	const output: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(source)) {
+		if (value === undefined || value === null || value === "")
+			continue;
+		output[key] = value;
+	}
+	return output;
+}
+
+/** 夹住分页参数：`page ≥ 1`、`1 ≤ page_size ≤ AUDIT_MAX_PAGE_SIZE` */
+function paging(query: { page: number, page_size: number }): { page: number, page_size: number } {
+	return {
+		page: Math.max(1, Math.trunc(query.page) || 1),
+		page_size: Math.min(AUDIT_MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.page_size) || 15))
+	};
+}
 
 export function useAuditLogs() {
 	const api = useApi();
 
-	/**
-	 * 列表：空串参数一律不发。
-	 *
-	 * 上游对「零值 / 空串」的处理并不统一（`accountId=0` 与 `category=""` 都被当「未提供」，
-	 * 未知 `category` 更是直接返回全量，UP-AUD-02 / 03），因此筛选值由调用方保证非空。
-	 */
-	function list(query: AuditListQuery): Promise<AuditListResult> {
-		const page = Math.max(1, Math.trunc(query.page) || 1);
-		const pageSize = Math.min(AUDIT_MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.pageSize) || 20));
-
-		return api.get<AuditListResult>("/api/audit", {
-			query: {
-				page,
-				pageSize,
-				accountId: query.accountId || undefined,
-				deviceCode: query.deviceCode || undefined,
-				sessionId: query.sessionId || undefined,
-				category: query.category || undefined,
-				traceId: query.traceId || undefined,
-				startTime: query.startTime || undefined,
-				endTime: query.endTime || undefined
-			}
+	/** 操作日志列表：只放 openapi 列出的参数，空值不发 */
+	function listOperationLogs(query: AuditOperationLogQuery): Promise<AuditPaged<AuditOperationLog>> {
+		const { page, page_size, ...filters } = query;
+		return api.get<AuditPaged<AuditOperationLog>>("/api/audit/operation-logs", {
+			query: { ...paging({ page, page_size }), ...compact(filters) }
 		});
 	}
 
-	/** 详情：路径段是 `logCode`（`AUD…`），不是数值 ID；不存在时上游回 `404 10301` */
-	function get(logCode: string): Promise<AuditLogDetail> {
-		return api.get<AuditLogDetail>(`/api/audit/${encodeURIComponent(logCode)}`);
+	/** 操作日志详情：路径段是 UUID；不存在时上游回 `code: 40401` */
+	function getOperationLog(id: string): Promise<AuditOperationLog> {
+		return api.get<AuditOperationLog>(`/api/audit/operation-logs/${encodeURIComponent(id)}`);
 	}
 
-	/**
-	 * 校验哈希链：`{ intact, checkedCount, brokenAtLogId }`。
-	 *
-	 * 注意这是**写操作**：`verify` 自身会新增一条 `api` 类审计日志（实测每次调用 +1 条），
-	 * 所以它不是「纯查询」，页面对入口做加载态与结果说明，不静默轮询。
-	 */
-	function verify(payload: AuditVerifyPayload = {}): Promise<AuditVerifyResult> {
-		return api.post<AuditVerifyResult>("/api/audit/verify", {
-			startTime: payload.startTime || undefined,
-			endTime: payload.endTime || undefined
+	/** 安全日志列表：参数与操作日志不同源（`subject_*` / `auth_decision` / `logged_*`） */
+	function listSecurityLogs(query: AuditSecurityLogQuery): Promise<AuditPaged<AuditSecurityLog>> {
+		const { page, page_size, ...filters } = query;
+		return api.get<AuditPaged<AuditSecurityLog>>("/api/audit/security-logs", {
+			query: { ...paging({ page, page_size }), ...compact(filters) }
 		});
 	}
 
-	return { list, get, verify };
+	/** 安全日志详情：不存在时上游回 `code: 40401`（`安全审计日志不存在`） */
+	function getSecurityLog(id: string): Promise<AuditSecurityLog> {
+		return api.get<AuditSecurityLog>(`/api/audit/security-logs/${encodeURIComponent(id)}`);
+	}
+
+	return { listOperationLogs, getOperationLog, listSecurityLogs, getSecurityLog };
 }

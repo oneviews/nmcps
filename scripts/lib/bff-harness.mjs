@@ -179,21 +179,49 @@ export async function startUpstream(port) {
 	};
 
 	/**
-	 * 审计域假数据（`GET /audit`、`GET /audit/{logCode}`）：给 `/system/log` 工具栏自查
-	 * （`NMCPS-DESIGN-005` §9.3 第 2 条）用 —— `category` 要与真实上游一样**精确匹配**、
-	 * 时间窗要按字面字符串比较，否则「切类别 / 选快捷区间后请求参数真的变了」这条用例测不出真伪。
+	 * 审计域假数据（新代 `audit/*` 三族端点，NMCPS-ADR-0018 §三）：给 `/system/log` 的
+	 * 工具栏 / 详情 / 归档自查用。
 	 *
-	 * `eventTime` 保留上游的 RFC3339 形态（带偏移），比较前由 `auditEventKey()` 裁成
-	 * `YYYY-MM-DD HH:MM:SS` —— 页面发出的正是这个格式（`toAuditTimeParam()`）。
+	 * 三族各有自己的端点与字段（旧代是单端点 + `category`）：
+	 *   - 操作日志 `GET /audit/operation-logs`，时间参数 `created_from` / `created_to`（epoch 毫秒）；
+	 *   - 安全日志 `GET /audit/security-logs`，时间参数 `logged_from` / `logged_to`（epoch 毫秒）；
+	 *   - 归档记录 `GET /audit/archive/records`，**没有时间条件**。
+	 *
+	 * 与真实上游一致的两条口径（都实测过）：
+	 *   1. **空结果给 `list: null`**（NMCPS-ADR-0018 D6），BFF 出口才归一成 `[]`；
+	 *   2. 详情不存在回 **HTTP 200 + `code: 40401`**（不是 404），三个族共用这个码。
 	 */
-	const auditRecords = [
-		{ logCode: "AUD-0001", category: "session", accountId: 1, deviceCode: "", sessionId: "sess-1", traceId: "trace-1", action: "auth.login.success", resource: "auth", result: 1, clientIp: "10.0.0.1", eventTime: "2026-11-02T03:15:09+08:00", logHash: "hash-1" },
-		{ logCode: "AUD-0002", category: "api", accountId: 1, deviceCode: "DEV-1001", sessionId: "sess-1", traceId: "trace-2", action: "GET /api/v1/device", resource: "/api/v1/device", result: 1, clientIp: "10.0.0.1", eventTime: "2026-11-02T03:20:00+08:00", logHash: "hash-2" },
-		{ logCode: "AUD-0003", category: "api", accountId: 1, deviceCode: "DEV-1001", sessionId: "sess-2", traceId: "trace-3", action: "POST /api/v1/account", resource: "/api/v1/account", result: 2, clientIp: "10.0.0.1", eventTime: "2026-11-01T22:05:00+08:00", logHash: "hash-3" }
+	const auditOperationLogs = [
+		{ id: "op-0001", user_id: "u_alice", username: "alice", module: "iam", operation: "POST /api/v1/iam/users", target_type: "user", target_id: "u_bob", status: "success", ip_address: "10.0.0.1", trace_id: "trace-1", created_at: "2026-11-02T03:15:09+08:00" },
+		{ id: "op-0002", user_id: "u_alice", username: "alice", module: "asset", operation: "PUT /api/v1/asset/device/dev-1001", target_type: "device", target_id: "dev-1001", status: "failed", ip_address: "10.0.0.2", trace_id: "trace-2", created_at: "2026-11-02T03:20:00+08:00" },
+		{ id: "op-0003", user_id: "u_bob", username: "bob", module: "iam", operation: "DELETE /api/v1/iam/users/u_carol", target_type: "user", target_id: "u_carol", status: "success", ip_address: "10.0.0.3", trace_id: "trace-3", created_at: "2026-11-01T22:05:00+08:00" }
 	];
 
-	/** `2026-11-02T03:15:09+08:00` → `2026-11-02 03:15:09`（与页面发出的时间参数同格式） */
-	const auditEventKey = (value) => value.replace("T", " ").slice(0, 19);
+	const auditSecurityLogs = [
+		{ id: "sec-0001", subject_type: "user", subject_id: "u_alice", subject_name: "alice", action: "auth.login", resource: "/api/v1/iam/auth/login", auth_decision: "allow", ip_address: "10.0.0.1", trace_id: "trace-1", logged_at: "2026-11-02T03:15:09+08:00" },
+		{ id: "sec-0002", subject_type: "user", subject_id: "u_alice", subject_name: "alice", action: "iam.user.delete", resource: "/api/v1/iam/users/u_carol", auth_decision: "deny", ip_address: "10.0.0.1", trace_id: "trace-4", logged_at: "2026-11-02T03:30:00+08:00" }
+	];
+
+	/** 归档记录：字段集合与真实上游逐字一致（实测 `POST /audit/archive/run` 后回读） */
+	const auditArchiveRecords = [
+		{ id: "arc-0001", table_name: "sys_operation_log", archive_batch: "arc-0001", rows_archived: 3, cutoff_before: "2026-08-06T10:34:39.998235+08:00", started_at: "2026-11-04T10:34:40+08:00", finished_at: "2026-11-04T10:34:40+08:00", status: "success", created_at: "2026-11-04T10:34:40+08:00" },
+		{ id: "arc-0002", table_name: "sys_audit_log", archive_batch: "arc-0002", rows_archived: 0, cutoff_before: "2026-08-06T10:34:40.120011+08:00", started_at: "2026-11-04T10:34:41+08:00", finished_at: "2026-11-04T10:34:41+08:00", status: "success", created_at: "2026-11-04T10:34:41+08:00" }
+	];
+
+	/** 时间边界是 epoch 毫秒整数：空串 = 不设边界，非数字按「不设边界」处理（不自作主张报错） */
+	const inEpochWindow = (value, from, to) => {
+		const stamp = Date.parse(value);
+		if (Number.isNaN(stamp))
+			return false;
+		if (from !== "" && Number.isFinite(Number(from)) && stamp < Number(from))
+			return false;
+		if (to !== "" && Number.isFinite(Number(to)) && stamp > Number(to))
+			return false;
+		return true;
+	};
+
+	/** 精确匹配的字符串筛选（空串 = 不筛）：上游对枚举参数是精确匹配，这里照样板做 */
+	const matchesText = (value, expected) => expected === "" || String(value ?? "") === expected;
 
 	/**
 	 * 策略域假数据（`GET /role`、`GET /role/{roleCode}/permission`、`GET /permission`、
@@ -603,48 +631,85 @@ export async function startUpstream(port) {
 			return;
 		}
 
-		// ── /audit*：审计域（`/system/log` 工具栏自查；网关透传路径可能带 `/api/v1` 前缀） ──
+		// ── /audit*：审计域三族（`/system/log`；网关透传路径可能带 `/api/v1` 前缀） ──
 		const auditPath = url.pathname.match(/^\/(?:api\/v1\/)?audit(\/.*)?$/);
 		if (auditPath) {
 			const rest = auditPath[1] ?? "";
+			const query = (key) => (url.searchParams.get(key) ?? "").trim();
 
-			// 新代 `GET /audit/operation-logs`：实测空结果给 `list: null`（NMCPS-ADR-0018 D6），
-			// 专门给 check:bff 断言「BFF 出口把它归一成 []」用
-			if (rest === "/operation-logs" && req.method === "GET")
-				return send(200, { code: 0, message: "success", data: { list: null, page: 1, page_size: 1, total: 0 } });
-
-			if (rest === "" && req.method === "GET") {
-				const category = (url.searchParams.get("category") ?? "").trim();
-				const startTime = (url.searchParams.get("startTime") ?? "").trim();
-				const endTime = (url.searchParams.get("endTime") ?? "").trim();
-				const page = Math.max(1, Number(url.searchParams.get("page") ?? 1));
-				const pageSize = Math.max(1, Number(url.searchParams.get("pageSize") ?? 20));
-
-				// 与真实上游一致：`category` 精确匹配、时间窗按字面值比较（非法值这里不模拟）
-				const filtered = auditRecords.filter((item) => {
-					const key = auditEventKey(item.eventTime);
-					return (!category || item.category === category)
-						&& (!startTime || key >= startTime)
-						&& (!endTime || key <= endTime);
-				});
-
-				auditLog.lastQuery = { category, startTime, endTime, page, pageSize };
-
-				const start = (page - 1) * pageSize;
-				return send(200, {
-					code: 0,
-					msg: "success",
-					data: { list: filtered.slice(start, start + pageSize), total: filtered.length, page, pageSize }
-				});
+			// 操作日志：字符串筛选 + epoch 毫秒时间窗
+			if (rest === "/operation-logs" && req.method === "GET") {
+				const filtered = auditOperationLogs.filter((item) =>
+					matchesText(item.username, query("username"))
+					&& matchesText(item.module, query("module"))
+					&& matchesText(item.status, query("status"))
+					&& (!query("keyword") || item.operation.includes(query("keyword")) || item.username.includes(query("keyword")))
+					&& inEpochWindow(item.created_at, query("created_from"), query("created_to")));
+				auditLog.lastQuery = { kind: "operation", query: Object.fromEntries(url.searchParams) };
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
 			}
 
-			const auditDetail = rest.match(/^\/([^/]+)$/);
-			if (auditDetail && req.method === "GET") {
-				const record = auditRecords.find((item) => item.logCode === decodeURIComponent(auditDetail[1]));
-				// 与真实上游一致：未知 `logCode` → `404 10301`（NMCPS-DESIGN-005 §9.4）
+			// 安全日志：参数与操作日志不同源（`subject_*` / `auth_decision` / `logged_*`）
+			if (rest === "/security-logs" && req.method === "GET") {
+				const filtered = auditSecurityLogs.filter((item) =>
+					matchesText(item.subject_name, query("subject_name"))
+					&& matchesText(item.action, query("action"))
+					&& matchesText(item.auth_decision, query("auth_decision"))
+					&& matchesText(item.ip_address, query("ip_address"))
+					&& inEpochWindow(item.logged_at, query("logged_from"), query("logged_to")));
+				auditLog.lastQuery = { kind: "security", query: Object.fromEntries(url.searchParams) };
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			// 归档记录：**没有时间条件**，只认 `table_name` / `status`
+			if (rest === "/archive/records" && req.method === "GET") {
+				const filtered = auditArchiveRecords.filter((item) =>
+					matchesText(item.table_name, query("table_name"))
+					&& matchesText(item.status, query("status")));
+				auditLog.lastQuery = { kind: "archive", query: Object.fromEntries(url.searchParams) };
+				return send(200, { code: 0, message: "success", data: iamPaged(filtered, url) });
+			}
+
+			// 归档（写操作）：实测回「表名 → 本批次行数」，并留下批次记录
+			if (rest === "/archive/run" && req.method === "POST") {
+				const body = await readJsonBody(req);
+				const tableName = typeof body?.table_name === "string" ? body.table_name : "";
+				const stamp = new Date().toISOString();
+				const tables = tableName ? [tableName] : ["sys_operation_log", "sys_audit_log"];
+				const result = {};
+
+				for (const table of tables) {
+					result[table] = 0;
+					auditArchiveRecords.unshift({
+						id: `arc-run-${auditArchiveRecords.length + 1}`,
+						table_name: table,
+						archive_batch: `arc-run-${auditArchiveRecords.length + 1}`,
+						rows_archived: 0,
+						cutoff_before: stamp,
+						started_at: stamp,
+						finished_at: stamp,
+						status: "success",
+						created_at: stamp
+					});
+				}
+
+				return send(200, { code: 0, message: "success", data: result });
+			}
+
+			// 三族详情：不存在时与真实上游一致 —— **HTTP 200 + `code: 40401`**
+			const detail = rest.match(/^\/(operation-logs|security-logs|archive\/records)\/([^/]+)$/);
+			if (detail && req.method === "GET") {
+				const [collection, rawId] = [detail[1], detail[2]];
+				const id = decodeURIComponent(rawId);
+				const source = collection === "operation-logs"
+					? auditOperationLogs
+					: collection === "security-logs" ? auditSecurityLogs : auditArchiveRecords;
+				const record = source.find((item) => item.id === id);
+
 				if (!record)
-					return send(404, { code: 10301, msg: "log_not_found" });
-				return send(200, { code: 0, msg: "success", data: { ...record, sourceService: "", beforeSnapshot: "", afterSnapshot: "", detailJson: "", prevHash: "" } });
+					return send(200, { code: 40401, message: "记录不存在" });
+
+				return send(200, { code: 0, message: "success", data: record });
 			}
 
 			return send(404, { code: 10404, msg: "audit_path_not_found" });

@@ -1029,16 +1029,22 @@ if (upstreamPort) {
 }
 
 // 7.4 审计日志工具栏（NMCPS-DESIGN-005 §9.3 第 2 条 / NMCPS-ARCH-006 §4.1）：
-// 时间范围与类别常驻左区、其余标识类筛选留浮层，且两个常驻控件必须真的改写请求参数 ——
-// 只断言「控件在那儿」会把「摆了个假的」也算通过。依赖假上游的审计域假数据（AUD-0001…）。
+// 时间范围与日志族常驻左区、其余标识类筛选留浮层，且两个常驻控件必须真的改写请求参数 ——
+// 只断言「控件在那儿」会把「摆了个假的」也算通过。依赖假上游的三族假数据
+// （op-0001… / sec-0001… / arc-0001…，见 `scripts/lib/bff-harness.mjs`）。
+// 新代口径（NMCPS-ADR-0018 §三）：三族各一个端点，时间边界是 **epoch 毫秒整数**；
+// 旧代是单端点 + `category` + `startTime` 字面值，参数名全部变了。
 if (upstreamPort) {
 	const auditRequests = [];
 	const recordAuditRequest = (request) => {
 		const url = new URL(request.url());
-		if (url.pathname === "/api/audit")
-			auditRequests.push(url.searchParams);
+		if (url.pathname.startsWith("/api/audit"))
+			auditRequests.push({ path: url.pathname, params: url.searchParams });
 	};
 	page.on("request", recordAuditRequest);
+
+	/** 最近一次**列表**请求：详情请求不带 `page`，用参数区分，避免把详情当列表读 */
+	const lastListRequest = () => auditRequests.filter((item) => item.params.has("page")).at(-1);
 
 	await page.goto(`${BASE_URL}/system/log`, { waitUntil: "networkidle" });
 	await page.waitForTimeout(400);
@@ -1054,7 +1060,7 @@ if (upstreamPort) {
 		};
 	});
 	log(
-		"审计日志工具栏左区常驻时间范围按钮与类别下拉",
+		"审计日志工具栏左区常驻时间范围按钮与日志族下拉",
 		auditToolbar.text.includes("全部时间")
 		&& auditToolbar.ariaLabels.includes("时间范围")
 		&& auditToolbar.comboboxes === 1
@@ -1072,37 +1078,66 @@ if (upstreamPort) {
 	});
 	log("常驻筛选控件不超左区宽度预算（≤45% 内容盒）", leftRatio !== null && leftRatio <= 45, `${leftRatio}%`);
 
-	// 浮层里不再重复时间 / 类别控件（搬走就要搬干净，否则出现两份同义控件）
+	// 列表：假上游 3 条操作日志 → 行标题取 `operation`（族不同字段不同，模板只走一个分支）
+	const auditRows = await page.evaluate(() => {
+		const rowsEls = Array.from(document.querySelectorAll("[role='option']"));
+		return {
+			count: rowsEls.length,
+			titles: rowsEls.map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim())
+		};
+	});
+	log(
+		"操作日志列表按端点渲染（3 行、标题取 operation）",
+		auditRows.count === 3 && auditRows.titles.some((title) => title.includes("POST /api/v1/iam/users")),
+		`${auditRows.count} 行 / 首行="${auditRows.titles[0] ?? "无"}"`
+	);
+
+	// 详情：点第二行必须打**族详情端点**（`/api/audit/operation-logs/{id}`，旧代是 `/audit/{logCode}`），
+	// 且字段按已登记清单渲染（`detail.username` = 操作账号）。点第二行而不是第一行：
+	// 两栏形态默认自动选中第一行，点它不会触发新的详情请求，断言会假通过。
+	auditRequests.length = 0;
+	await page.locator("[role='option']").nth(1).click();
+	await page.waitForTimeout(500);
+	const detailRequest = auditRequests.find((item) => /^\/api\/audit\/operation-logs\/[^/]+$/.test(item.path));
+	const detailBody = await page.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " "));
+	log(
+		"选中行走族详情端点并渲染已登记字段",
+		!!detailRequest
+		&& detailRequest.path === "/api/audit/operation-logs/op-0002"
+		&& detailBody.includes("操作账号")
+		&& detailBody.includes("op-0002"),
+		detailRequest ? detailRequest.path : "没有详情请求"
+	);
+
+	// 浮层：操作日志族有 4 个标识类筛选（关键字 / 操作账号 / 所属模块 / 状态）；
+	// 时间与族名已常驻左区，浮层里不得重复出现
 	await page.locator("#app-toolbar-left button[aria-label='筛选条件']").click();
 	await page.waitForTimeout(300);
 	const filterPopover = await page.evaluate(() => {
-		// 页面上可能同时挂着多个 `[data-slot='content']`（侧栏、命令面板等），
-		// 取「可见且含输入框」的那个才是刚打开的筛选浮层
 		const panels = Array.from(document.querySelectorAll("[data-slot='content']"))
 			.filter((el) => el.checkVisibility?.() ?? false);
 		const content = panels.find((el) => el.querySelector("input")) ?? panels.at(-1);
 		return {
 			placeholders: Array.from(content?.querySelectorAll("input") ?? []).map((el) => el.getAttribute("placeholder") ?? ""),
 			datetimeInputs: content?.querySelectorAll("input[type='datetime-local']").length ?? 0,
-			// 每页条数的 `USelect` 本来就在浮层里，所以这里按 aria-label 找「类别」，而不是数 combobox
-			categoryCombobox: !!content?.querySelector("[aria-label='类别']"),
-			// 每页条数已按 §3.8 移到列表栏尾部：浮层里不该再有任何下拉
+			kindCombobox: !!content?.querySelector("[aria-label='日志族']"),
 			comboboxes: content?.querySelectorAll("[role='combobox']").length ?? 0
 		};
 	});
 	log(
-		"筛选浮层只留标识类筛选（不再重复时间 / 类别）",
+		"筛选浮层只留标识类筛选（不再重复时间 / 日志族）",
 		filterPopover.datetimeInputs === 0
-		&& !filterPopover.categoryCombobox
+		&& !filterPopover.kindCombobox
 		&& filterPopover.comboboxes === 0
-		&& filterPopover.placeholders.includes("追踪 ID")
+		&& filterPopover.placeholders.includes("关键字")
+		&& filterPopover.placeholders.includes("操作账号")
 		&& filterPopover.placeholders.length === 4,
-		`datetime=${filterPopover.datetimeInputs} 类别下拉=${filterPopover.categoryCombobox} 下拉数=${filterPopover.comboboxes} 输入框=${filterPopover.placeholders.join("/")}`
+		`datetime=${filterPopover.datetimeInputs} 族下拉=${filterPopover.kindCombobox} 下拉数=${filterPopover.comboboxes} 输入框=${filterPopover.placeholders.join("/")}`
 	);
 	await page.keyboard.press("Escape");
 	await page.waitForTimeout(200);
 
-	// 时间快捷项：选「近 24 小时」后请求必须带上 startTime / endTime（页面算的是本地时字面值）
+	// 时间快捷项：「近 24 小时」→ 请求带 created_from / created_to（epoch 毫秒整数，间隔 24h）
 	auditRequests.length = 0;
 	await page.locator("#app-toolbar-left button[aria-label='时间范围']").click();
 	await page.waitForTimeout(300);
@@ -1110,53 +1145,91 @@ if (upstreamPort) {
 	await page.waitForTimeout(800);
 	await page.keyboard.press("Escape");
 	await page.waitForTimeout(200);
-	const ranged = auditRequests.at(-1);
+	const ranged = lastListRequest();
+	const rangedSpan = ranged
+		? Number(ranged.params.get("created_to")) - Number(ranged.params.get("created_from"))
+		: Number.NaN;
 	log(
-		"时间范围快捷项改写 startTime / endTime",
-		!!ranged?.get("startTime") && !!ranged?.get("endTime"),
-		ranged ? `startTime=${ranged.get("startTime")} endTime=${ranged.get("endTime")}` : "没有列表请求"
+		"时间范围快捷项改写 created_from / created_to（epoch 毫秒）",
+		/^\d{10,}$/.test(ranged?.params.get("created_from") ?? "")
+		&& /^\d{10,}$/.test(ranged?.params.get("created_to") ?? "")
+		&& Math.abs(rangedSpan - 86_400_000) <= 60_000,
+		ranged
+			? `created_from=${ranged.params.get("created_from")} created_to=${ranged.params.get("created_to")} 间隔=${Math.round(rangedSpan / 60000)}min`
+			: "没有列表请求"
 	);
 
 	const rangeLabelText = await page.evaluate(() => (document.querySelector("#app-toolbar-left")?.textContent ?? "").replace(/\s+/g, " ").trim());
 	log("时间范围按钮文案回显当前窗口", rangeLabelText.includes("近 24 小时"), rangeLabelText);
 
-	// 日历选日：点第一天 → 起点当天 00:00:00（终点先空，reka 才能继续收尾），
-	// 再点第二天 → 终点当天 23:59:59。整天窗口含首尾两端，少这 59 秒就漏掉当天最后半分钟。
-	// 取当月 1 号 / 2 号：双月视图的首屏一定是当月，不会落到未渲染的邻月日期上。
+	// 日历选日：点第一天 → 起点当天 `00:00:00`（本地时）的 epoch；再点第二天 → 终点 `23:59:59`。
+	// 整天窗口含首尾两端，少这 59 秒就漏掉当天最后半分钟；取当月 1 号 / 2 号，双月视图首屏一定渲染它们。
 	const now = new Date();
 	const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 	const [firstDay, secondDay] = [`${monthPrefix}-01`, `${monthPrefix}-02`];
+	/** `datetime-local` 字面值 → 页面应发出的 epoch 毫秒（两边同一台机器、同一时区） */
+	const epochOf = (literal) => String(Date.parse(literal));
 	auditRequests.length = 0;
 	await page.locator("#app-toolbar-left button[aria-label='时间范围']").click();
 	await page.waitForTimeout(300);
 	await page.locator(`[data-slot='cellTrigger'][data-value='${firstDay}']`).first().click();
 	await page.waitForTimeout(700);
-	const dayOnly = auditRequests.at(-1);
+	const dayOnly = lastListRequest();
 	await page.locator(`[data-slot='cellTrigger'][data-value='${secondDay}']`).first().click();
 	await page.waitForTimeout(700);
 	await page.keyboard.press("Escape");
 	await page.waitForTimeout(200);
-	const dayRange = auditRequests.at(-1);
+	const dayRange = lastListRequest();
 	log(
-		"日历选整天改写 startTime / endTime",
-		dayOnly?.get("startTime") === `${firstDay} 00:00:00`
-		&& !dayOnly.get("endTime")
-		&& dayRange?.get("startTime") === `${firstDay} 00:00:00`
-		&& dayRange?.get("endTime") === `${secondDay} 23:59:59`,
-		`首点=${dayOnly?.get("startTime") ?? "无"}→${dayOnly?.get("endTime") ?? "空"} 收尾=${dayRange?.get("startTime") ?? "无"}→${dayRange?.get("endTime") ?? "空"}`
+		"日历选整天改写 created_from / created_to（含首尾两端）",
+		dayOnly?.params.get("created_from") === epochOf(`${firstDay}T00:00:00`)
+		&& !dayOnly.params.get("created_to")
+		&& dayRange?.params.get("created_from") === epochOf(`${firstDay}T00:00:00`)
+		&& dayRange?.params.get("created_to") === epochOf(`${secondDay}T23:59:59`),
+		`首点=${dayOnly?.params.get("created_from") ?? "无"}→${dayOnly?.params.get("created_to") ?? "空"} 收尾=${dayRange?.params.get("created_from") ?? "无"}→${dayRange?.params.get("created_to") ?? "空"}`
 	);
 
-	// 类别：切到「接口调用」→ 请求带 category=api（把过滤后的 total 误当全量的根源就在这一步）
+	// 日志族：切到「安全日志」→ 换端点 `/api/audit/security-logs`，时间参数换成 logged_from / logged_to
+	// （两族的筛选参数不同源，这一步就是「切族真的换了契约」的证据）
 	auditRequests.length = 0;
 	await page.locator("#app-toolbar-left [role='combobox']").first().click();
 	await page.waitForTimeout(300);
-	await page.getByRole("option", { name: "接口调用" }).first().click();
-	await page.waitForTimeout(800);
-	const categorised = auditRequests.at(-1);
+	await page.getByRole("option", { name: "安全日志" }).first().click();
+	await page.waitForTimeout(900);
+	const switched = auditRequests
+		.filter((item) => item.path === "/api/audit/security-logs" && item.params.has("page"))
+		.at(-1);
 	log(
-		"类别下拉改写 category 参数",
-		categorised?.get("category") === "api",
-		categorised ? `category=${categorised.get("category")}` : "没有列表请求"
+		"日志族下拉切换端点与时间参数（security-logs + logged_from / logged_to）",
+		!!switched
+		&& switched.params.get("logged_from") === epochOf(`${firstDay}T00:00:00`)
+		&& switched.params.get("logged_to") === epochOf(`${secondDay}T23:59:59`),
+		switched
+			? `${switched.path} logged_from=${switched.params.get("logged_from")} logged_to=${switched.params.get("logged_to")}`
+			: "没有 security-logs 请求"
+	);
+
+	// 归档族：`/audit/archive/records` **没有时间条件** → 范围控件收起、请求里不出现时间参数
+	auditRequests.length = 0;
+	await page.locator("#app-toolbar-left [role='combobox']").first().click();
+	await page.waitForTimeout(300);
+	await page.getByRole("option", { name: "归档记录" }).first().click();
+	await page.waitForTimeout(900);
+	const archiveList = auditRequests
+		.filter((item) => item.path === "/api/audit/archive/records" && item.params.has("page"))
+		.at(-1);
+	const archiveToolbar = await page.evaluate(() => ({
+		ariaLabels: Array.from(document.querySelector("#app-toolbar-left")?.querySelectorAll("button") ?? []).map((el) => el.getAttribute("aria-label") ?? "")
+	}));
+	log(
+		"归档族不设时间条件（收起范围控件、请求不带时间参数）",
+		!!archiveList
+		&& !archiveList.params.has("created_from")
+		&& !archiveList.params.has("logged_from")
+		&& !archiveToolbar.ariaLabels.includes("时间范围"),
+		archiveList
+			? `${archiveList.path} 参数=${Array.from(archiveList.params.keys()).join("/")}`
+			: "没有归档请求"
 	);
 
 	// 窄视口：时间范围退成图标（文案进 `aria-label`），左区仍放得下（§4.4 不换行、§3.3 无横向滚动）
@@ -1188,8 +1261,8 @@ if (upstreamPort) {
 	const auditPageSizes = [];
 	const recordPageSize = (request) => {
 		const url = new URL(request.url());
-		if (url.pathname === "/api/audit")
-			auditPageSizes.push(url.searchParams.get("pageSize"));
+		if (url.pathname === "/api/audit/operation-logs")
+			auditPageSizes.push(url.searchParams.get("page_size"));
 	};
 	page.on("request", recordPageSize);
 
@@ -1214,11 +1287,11 @@ if (upstreamPort) {
 		`${footers.map(([path, f]) => `${path}=${f.height}px/${f.selectors}个`).join(" ")}`
 	);
 
-	// 默认 15 条：`/system/log` 首次列表请求必须带 pageSize=15（默认值漂回 20 就红）
+	// 默认 15 条：`/system/log` 首次列表请求必须带 page_size=15（默认值漂回 20 就红）
 	log(
-		"列表默认每页 15 条（请求带 pageSize=15）",
+		"列表默认每页 15 条（请求带 page_size=15）",
 		auditPageSizes.length > 0 && auditPageSizes[0] === "15",
-		`首个 pageSize=${auditPageSizes[0] ?? "无请求"}`
+		`首个 page_size=${auditPageSizes[0] ?? "无请求"}`
 	);
 
 	// 选中行底色：读计算样式，浅色与深色各测一次（`dark` 类切换会立即换掉 --ui-bg-* 变量）
