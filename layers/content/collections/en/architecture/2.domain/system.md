@@ -12,7 +12,7 @@ authority: normative
 scope:
   - domain.system
 status: baseline
-version: 0.6.0
+version: 0.7.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -32,7 +32,7 @@ tags:
 
 > **Responsibility**: single authority for `domain.system` — system logs, policy management, user and permission management. IAM architecture: `NMCPS-ARCH-003`.
 > **Audience**: implementation engineers / AI assistants.
-> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1`. **§9 was rewritten against the new `audit/*` families in 0.6.0**; §6 still describes the old generation (`/api/v1/account`, `accountLevel` — the cn 0.6.0 `iam/users` rewrite is not translated yet), and §7 / §8 (`/api/v1/role`, `/api/v1/permission`, `/api/v1/abac/rule`, `/api/v1/access/dryrun`) are still old generation too. Those sections must be rewritten against the `iam` namespace; until then, live probing wins, and the switch record is indexed by `NMCPS-GOV-003`.
+> **Generation note (2026-11-04)**: the backend has moved wholesale to the NMS unified gateway at `http://192.168.1.55:8888/api/v1`. **§6 was rewritten against `iam/users` in 0.6.0 and §9 against the `audit/*` families in 0.7.0**; §7 / §8 (`/api/v1/role`, `/api/v1/permission`, `/api/v1/abac/rule`, `/api/v1/access/dryrun`) are still old generation and must be rewritten against the `iam` namespace; until then, live probing wins, and the switch record is indexed by `NMCPS-GOV-003`.
 
 ---
 
@@ -83,73 +83,75 @@ System management is the "governance plane" of the NMS: it manages runtime logs,
 
 ## 6. `/system/user` user management (implementation baseline)
 
-> Source: live probing of `http://192.168.1.55:8888/api/v1` on 2026-11-01 and again on **2026-11-03** with both identities (super admin / tenant admin), cross-checked against swagger. Deviations from the contract are filed in `NMCPS-REC-002` (`layers/content/collections/cn/records/defects/account-upstream-defects.md`); this section only states what the page may rely on.
+> Source: live probing of `http://192.168.1.55:8888/api/v1` on **2026-11-04** (`/swagger/openapi.json` plus real responses).
+> Contract mapping: `NMCPS-ADR-0018` §4.2; this section only states what the page may rely on.
+> The old generation (`/account`, `/tenant`) field semantics and defects stay in `NMCPS-REC-002` as **history** (`status: superseded`).
 
 ### 6.1 Data source and endpoints
 
 | Capability | BFF path | Upstream | Notes |
 | :--- | :--- | :--- | :--- |
-| List | `GET /api/account` | `GET /api/v1/account` | `page` / `pageSize` / `keyword` / `accountLevel` / `status` |
-| Create | `POST /api/account` | `POST /api/v1/account` | `accountName` / `displayName` / `password` / `accountLevel` required; **a super admin must also send `tenantId`** (positive, `0` counts as missing); `mfaEnabled` / `mustResetPassword` optional |
-| Status | `PUT /api/account/{accountCode}/status` | same | body `{ status }`, returns `{ ok: true }` |
-| Detail | `GET /api/account/{accountCode}` | same | not used by the page: the list already carries every displayed field |
-| Tenants | `GET /api/tenant` | same | the only source for the `tenantId` a super admin must pick at creation; returns `list` / `total` / `page` / `pageSize` with `tenantId` / `tenantCode` / `tenantName` per row |
+| List | `GET /api/iam/users` | `GET /api/v1/iam/users` | `page` / `page_size` / `keyword` / `status` / `department_id` |
+| Create | `POST /api/iam/users` | same | `username` / `password` required; `email` / `display_name` / `department_id` optional. **No `tenant_id`** |
+| Detail | `GET /api/iam/users/{id}` | same | measured to exist; the page still relies on the list only, which already carries every displayed field |
+| Profile / status update | `PUT /api/iam/users/{id}` | same | `id` is required in the body as well; writable: `department_id` / `email` / `phone` / `display_name` / `status` / `mfa_enabled` |
+| Delete | `DELETE /api/iam/users/{id}` | same | soft delete (`deleted_at`); the list stops returning the row |
+| Tenants | `GET /api/iam/tenants` | same | only used to turn a row's `tenant_id` into a tenant name |
+| Departments | `GET /api/iam/departments` | same | create-form candidates plus the ownership filter; rows carry their own `tenant_id` |
 
-- The `{id}` path segment is the `accountCode` (`ACC…`), not the numeric `accountId`.
-- **There is no profile-update endpoint** (no `PUT /api/v1/account/{id}`) and no delete endpoint: `displayName` is immutable after creation, and "delete" means `status=2` (disabled).
-- The BFF whitelist must contain `account` (and `tenant` for the tenant picker) in `GATEWAY_RESOURCES` (`shared/types/api.ts`); otherwise every call returns `404 bff_resource_not_allowed`.
+- The `{id}` path segment is the user primary key (`u_…`), not the old `accountCode` (`ACC…`).
+- An empty result arrives as `list: null` and the BFF normalises it to `[]` at the exit (`NMCPS-ADR-0018` D6), so the page can `.map` directly.
+- The BFF allow-list must contain `iam` (`GATEWAY_RESOURCES` in `shared/types/api.ts`); otherwise every call returns `404 bff_resource_not_allowed`.
 
 ### 6.2 Field semantics
 
-- `accountLevel`: `0` platform super admin (`tenantId: 0`) / `1` tenant admin / `2`–`3` subordinate tenant-level accounts / `4` service account (upstream wording: "provisioned by the system", a manual create returns `20102`). **The level offered at creation must be strictly lower than the caller's own** (a larger number) and `≤ 3`: super admin `1`–`3`, tenant admin `2`–`3`; same or higher returns `20103` ("can only manage downwards"). Levels outside `1`–`3` are still rendered read-only as "undefined level" in the list.
-- `status`: `1` enabled / `2` disabled / `3` locked / `4` pending activation (swagger wording). Writing `0` or `5` → `10101`; `4` is produced by `mustResetPassword` at creation time, so the page never writes `4` itself.
-- `createdAt`: `GET` returns local time while `POST` returns UTC (one field, two time zones) → displayed verbatim, never time-zone converted (UP-ACC-05).
-- The list payload has **no** `tenantId` / `tenantCode` / `email` / `phone`: the page shows no tenant column and no email/phone columns (v1 fields that upstream does not have).
-- `accountName` is unique: duplicates → `10302`. Passing `accountLevel=0` as a **filter** is treated as "not provided" (zero value) and returns everything, so the page offers no "super admins only" filter (UP-ACC-02).
+- `username`: unique — a duplicate returns `10002 user already exists`; immutable after creation (it is absent from the `PUT` body).
+- `status`: string enum `active` / `disabled` / `locked` (`chk_sys_user_status`). The page only writes `active` ↔ `disabled`; `locked` is set upstream on failed sign-ins.
+- `tenant_id` / `department_id`: the list **carries** both fields, `null` when unassigned. A department carries its tenant, so the page expresses ownership by picking a department. The old gap `UP-ACC-05` (list lacked tenant attribution) closes here.
+- `mfa_enabled`: read-only display (gap G8: no MFA binding endpoint in the new generation, so no binding flow).
+- `created_at` / `updated_at`: RFC3339 with an offset (`2026-11-03T18:59:06+08:00`) → displayed verbatim, never time-zone converted.
+- **There is no `accountLevel`** (gap G1): the level model is retired wholesale — the page neither displays it, filters by it, nor sends it.
+- Password policy: measured as "password length must be 6-128 characters" (`40001`); the old complexity / reuse rules no longer apply.
 
-### 6.3 Permission matrix (measured)
+### 6.3 Permission matrix and page behaviour
 
-| Action | Super admin (`accountLevel: 0`, `tenantId: 0`) | Tenant admin (`accountLevel: 1`, `tenantId ≥ 1`) |
+| Action | Platform-level account (session `tenant_id: null`) | Tenant-level account (session carries `tenant_id`) |
 | :--- | :--- | :--- |
-| List scope | Whole platform | Own tenant only |
-| Create | `1`–`3` allowed, **`tenantId` is mandatory** (`0` or missing → `10101 missing required parameter tenantId`) | `2` / `3` allowed (`tenantId` is derived from the token, do not send it); `0` / `1` → `20103 can only manage downwards` |
-| Create level ceiling | `4` → `20102 level does not match the owning layer … service accounts are provisioned by the system`; `> 4` → `10101` | same |
-| Status update | Any account | Own tenant only, cross-tenant → `10301` |
-| Role assignment `POST /api/account/role` | always `10201` (domain reject) | allowed for accounts in the tenant |
-| Tenant membership `POST /api/tenant/{id}/member` | allowed | allowed for own tenant |
+| List scope | the whole platform, as returned upstream | whatever upstream limits to |
+| Filters | `keyword` / `status` / `department_id` | same (within scope) |
+| Create | `username` + `password` + optional department | same |
+| Profile / status update | any user except yourself | users in scope except yourself |
+| Delete | any user except yourself | users in scope except yourself |
 
-> Correction from the 2026-11-03 re-probe: the 0.5.6 matrix line "tenant admin may create `0` / `2` / `4` (should be rejected)" is obsolete — upstream now enforces "can only manage downwards" (`20103` for same or higher level) and treats `4` as a system-provisioned service account (`20102`). The same probe found a new mandatory `tenantId` on create, so a super admin that omits it can never create an account (`10101`); filed as `UP-ACC-07`.
-
-Client-side narrowing (**not a security boundary**; it only avoids guiding users into calls upstream rejects or should reject):
-
-1. The level picker is narrowed to "strictly lower than self and `≤ 3`": super admin `L1`–`L3`, tenant admin `L2`–`L3`, defaulting to the first (highest-privilege) option. Before 0.5.6 the picker offered only `1` (tenant admin) and `0` / `1` (super admin), i.e. every possible submission was a value upstream must reject (`20103`).
-2. A super admin must also pick a tenant: the list comes from `GET /api/tenant` (only `default` exists in this environment) and `tenantId` travels with the create call; tenant admins never see the field (upstream derives it from the token, and sending it can cross tenant boundaries).
-3. The row action "change status" is disabled for the caller's own account (`accountCode` equals the session account) to avoid self-lockout.
-4. No role-binding or tenant-membership controls: the former is rejected with `10201` for super admins, the latter cannot be targeted because the list lacks `tenantId`; both belong to `/system/permission` and the tenant domain.
-5. Upstream remains the only authorisation point: the BFF only enforces the whitelist, and client narrowing never changes backend decisions.
+1. Ownership has exactly one dimension — a **department** dropdown: `POST /iam/users` has no `tenant_id`, so a second tenant picker would only produce a field that can never be sent.
+2. Both row actions (change status / delete) are disabled on your own account, to avoid self-lockout and self-deletion.
+3. Deletion gets its own confirmation dialog (a soft delete cannot be undone from this page) and is described apart from "disable" — disabling is no longer a stand-in for deleting.
+4. Role binding (`subject-roles`) is still not offered here: a read/write symmetric entry has to be designed together with `/system/permission` (C4c).
+5. `isSuperAdmin` is an **approximation**: session `tenant_id === null` means platform level. Judging by role (`platform_admin`) needs a new ADR, see gap G1.
+6. Upstream remains the only authorisation point: the BFF only forwards within the allow-list, and client narrowing never changes backend decisions.
 
 ### 6.4 Error codes → page handling
 
 | Code | Upstream meaning | Page handling |
 | :--- | :--- | :--- |
-| `10302` | Account name already exists | inline error on `accountName` |
-| `20101` | Password violates the complexity / lifetime policy | inline error on `password` |
-| `20102` | Level does not match the owning layer (`4` is a system-provisioned service account) | "this layer cannot create that level", attached to the level field |
-| `20103` | Can only manage downwards: same or higher privilege | "the level must be lower than your own", attached to the level field |
-| `10101` | Invalid parameters (level out of range / **missing `tenantId`**) | "invalid parameters" notice; the missing-`tenantId` case names the field |
-| `10301` | Target missing or outside the current tenant domain | "account not found or not permitted" |
-| `10201` | Unauthenticated / domain reject | "session expired or the current identity may not do this" |
-| `10509` | Upstream internal error (missing field, level out of range) | generic failure + check required fields |
+| `10002` | User already exists | inline error on `username` |
+| `40001` | Field validation failed (`message` names the field, e.g. "password length must be 6-128 characters") | map the `message` keyword onto `username` / `password`, otherwise a page-level notice showing the upstream text |
+| `10003` | Wrong account or password (the same code for a wrong current password on change) | generic failure notice |
+| `10007` / `40101` / `401` | Session invalid | left to `useApi`'s single-flight refresh; if that still fails, prompt for re-login |
+| `10301` / `404` | Target missing / out of scope | "user not found or not permitted" |
+| `10201` / `403` | Domain reject | "the current identity may not do this" |
+| `10509` / `500` | Upstream internal error | generic failure + check required fields |
+| `0` | Network failure (non-envelope) | network error notice |
 
 Upstream missing / unreachable / timeout reuse the operational guidance from `upstreamHintKey()` (same wording as the login page and `/user/security`).
 
 ### 6.5 Known gaps
 
-`UP-ACC-01`–`UP-ACC-08` in `NMCPS-REC-002`: tenant-admin privilege escalation (**closed on 2026-11-03**: `20103` now fires), the `accountLevel=0` filter being ignored, `500` for missing fields or out-of-range levels, no profile-update or delete endpoint, missing tenant attribution plus inconsistent time zones, super admins being unable to assign roles, the new mandatory `tenantId` on create (`UP-ACC-07`), and `4` becoming a system-provisioned service account (`UP-ACC-08`). The page depends only on the four confirmed endpoints and treats none of the gaps as contract.
+- **Closed**: `UP-ACC-04` (no profile-update / no delete endpoint → `PUT` + `DELETE`), `UP-ACC-05` (list lacked tenant attribution → `tenant_id` / `department_id` present).
+- **Still open**: `G1` (no `accountLevel`; role-based judgement needs a new ADR), `G2` (no `mustResetPassword`), `G8` (no MFA binding endpoint).
+- The old `UP-ACC-01`–`UP-ACC-08` stay in `NMCPS-REC-002` (`status: superseded`) as history and are no longer the contract for this page.
 
 ---
-
-
 
 ## 7. `/system/policy` policy management (implementation baseline)
 
@@ -367,5 +369,6 @@ The new generation returns business errors as **HTTP 200 + `code≠0`**; the BFF
 | 2026-11-02 | 0.5.5 | **§9.3 item 2: the time-range popover becomes a "preset column + two-month calendar"**. The popover used to hold a single column of presets plus two `datetime-local` inputs, so a range like "last Wednesday to last Friday" had to be typed as two timestamps. It is now `components/Audit/RangePicker.vue` (popover shape copied from the Nuxt UI dashboard template's `HomeDateRangePicker`): a left preset column (matched preset highlighted, hidden on narrow viewports) beside a two-month `UCalendar range`, with two `datetime-local` inputs underneath for second-level precision; a day selection lands on a whole-day window `00:00:00` … `23:59:59`, and the first click opens the range while the second closes it (the end stays empty in between so reka keeps extending instead of restarting). All three entries (presets / calendar / typing) write the same `start` / `end` / `preset`; fetching still happens through the page's existing `watch`. Rendering details and two measured gotchas: `NMCPS-ARCH-006` §4.1 (0.2.15). |
 | 2026-11-03 | 0.5.6 | **The page size moves from the filter popover to the list footer, and all four list pages default to 15 rows**. Three measured problems: (1) the selected row fill was unreadable in both themes (`bg-elevated/60` on a white pane composites to nearly the same pixel) — `NMCPS-ARCH-006` 0.2.16 switches it to `bg-accented`; (2) the page size defaulted to 20 and only `/system/log` had one, buried in its filter popover, while `/system/user` and `/system/permission` had no entry at all and `/system/policy` did not paginate — now `DEFAULT_PAGE_SIZE = 15` (options 15 / 30 / 50 / 100, sourced from `shared/constants/paging.ts`) and all four pages render the selector in the footer; (3) the footer height is a single 49px token (`--app-list-footer-h`). This file follows: §7.3 item 3 notes client-side pagination slicing only the render layer while deep links still hit the full set, §9.2 changes the `pageSize` options to 15 / 30 / 50 / 100, §9.3 item 2 moves the page size out of the popover and item 6 adds the three footer assertions. |
 | 2026-11-03 | 0.5.7 | **§6 account-creation rules corrected from the 2026-11-03 re-probe (fixes "tenant admin can never create an account")**. Symptom: a tenant admin on `?id=new` saw only level `1` (its own) in the picker, and every submit returned `20103 can only manage downwards` — the level select had no viable option. Three measured facts: (1) the target level must be **strictly lower than the caller's own** (super admin `1`–`3`, tenant admin `2`–`3`); same or higher → `20103`, and `4` → `20102` (service accounts are provisioned by the system); (2) `POST /account` now requires `tenantId` (`0` counts as missing), so a super admin omitting it fails with `10101` — the form therefore gains a tenant picker fed by `GET /api/tenant`; (3) `UP-ACC-01` (tenant escalation) is closed upstream, so §6.5 and `NMCPS-REC-002` are updated and `UP-ACC-07` (mandatory `tenantId`) / `UP-ACC-08` (`4` belongs to service accounts) are filed. §6.1 adds the tenant endpoint, §6.2 rewrites level semantics, §6.3 rewrites the matrix and adds client narrowing items 1–2, §6.4 adds `20102` / `20103`. |
-| 2026-11-04 | 0.6.0 | **§9 rewritten against the new `audit/*` families (C4b)**: the old single endpoint `GET /audit?category=…` plus `POST /audit/verify` and `GET|POST /audit/export` is retired wholesale in favour of six read paths split by log family plus one write path — operation logs `GET /audit/operation-logs`, security logs `GET /audit/security-logs`, archive records `GET /audit/archive/records` (each with its own detail endpoint) and `POST /audit/archive/run`. The primary key moves from `logCode` to `id` (UUID), paging from `pageSize` to `page_size`, time bounds from strings to **epoch-millisecond integers** (`created_from` / `created_to`, `logged_from` / `logged_to`), and the empty `list: null` is normalised to `[]` at the BFF exit. The page becomes "three families, one page": a log-family `USelect` stands in the left area, the popover only holds that family's openapi parameters, and the archive family folds the range control away. Verification and export entries retire with gaps G6 / G7 and the archive dialog replaces export; the error-code table becomes `40401` / `10007` / `40001` (the old `10201` now means "wrong password"). Field semantics are layered honestly: archive-record fields are measured, operation / security entry fields have no real samples yet, so the page renders registered fields only and lists unregistered ones raw. The `/system/log` cases in `check:ui` go 8 → 11 (family switch swaps endpoint and time parameters, the archive family sends no time condition, selecting a row hits the family detail endpoint) and the total goes 105 → 106; the empty-list normalisation path in `check:bff` moves to `operation-logs`. |
+| 2026-11-04 | 0.6.0 | **§6 user management rewritten against the new `iam/users` (C4a)**: the endpoint table becomes `GET|POST /iam/users`, `GET|PUT|DELETE /iam/users/{id}`, `GET /iam/tenants` and `GET /iam/departments`; field semantics switch to snake_case (`id` / `username` / `display_name` / `status: active|disabled|locked` / `mfa_enabled` / `tenant_id` / `department_id`), `pageSize` → `page_size`, and the empty `list: null` is normalised to `[]` at the BFF exit; **the level model (`accountLevel`) retires wholesale** (gap G1) and ownership at creation is expressed through a department (`POST /iam/users` has no `tenant_id`, as measured); deletion is new (`DELETE`, soft delete via `deleted_at`, closing `UP-ACC-04`) and the list now carries tenant attribution (`UP-ACC-05` closed); the error-code table becomes the measured `10002` / `40001` / `10003` / `10007` / `10301` set and the password policy the measured \"6-128 characters\"; the `POST /access/dryrun` entry and its dialog retire with gap G5. |
+| 2026-11-04 | 0.7.0 | **§9 rewritten against the new `audit/*` families (C4b)**: the old single endpoint `GET /audit?category=…` plus `POST /audit/verify` and `GET|POST /audit/export` is retired wholesale in favour of six read paths split by log family plus one write path — operation logs `GET /audit/operation-logs`, security logs `GET /audit/security-logs`, archive records `GET /audit/archive/records` (each with its own detail endpoint) and `POST /audit/archive/run`. The primary key moves from `logCode` to `id` (UUID), paging from `pageSize` to `page_size`, time bounds from strings to **epoch-millisecond integers** (`created_from` / `created_to`, `logged_from` / `logged_to`), and the empty `list: null` is normalised to `[]` at the BFF exit. The page becomes "three families, one page": a log-family `USelect` stands in the left area, the popover only holds that family's openapi parameters, and the archive family folds the range control away. Verification and export entries retire with gaps G6 / G7 and the archive dialog replaces export; the error-code table becomes `40401` / `10007` / `40001` (the old `10201` now means "wrong password"). Field semantics are layered honestly: archive-record fields are measured, operation / security entry fields have no real samples yet, so the page renders registered fields only and lists unregistered ones raw. The `/system/log` cases in `check:ui` go 8 → 11 (family switch swaps endpoint and time parameters, the archive family sends no time condition, selecting a row hits the family detail endpoint) and the total goes 105 → 106; the empty-list normalisation path in `check:bff` moves to `operation-logs`. |
 
