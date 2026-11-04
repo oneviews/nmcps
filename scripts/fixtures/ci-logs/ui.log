@@ -1,5 +1,5 @@
 # key: ui
-# source: CI run 41923275927 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-04 回填）
+# source: CI run 41925325753 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-04 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ 两步验证区块标明上游无端点（G8） — 已标注
 ✅ 已登录时改密表单可操作 — inputs=3

@@ -1,5 +1,5 @@
 # key: bff
-# source: CI run 41923275927 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-04 回填）
+# source: CI run 41925325753 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-04 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ 挂载策略成功 200 code 0（AttachPolicy 是 POST 动作路由） — 200 0
 ✅ 摘除不存在的策略仍 200（DetachPolicy 幂等） — 200 0
