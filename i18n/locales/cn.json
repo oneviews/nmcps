@@ -730,7 +730,8 @@
 				"updatedAt": "更新时间"
 			},
 			"form": {
-				"description": "描述",
+				"description": "名称、编码与策略文档在前端必填；上游不校验必填与编码格式，文档只校验能否解析成 JSON，不做策略语义校验。",
+				"descriptionLabel": "描述",
 				"editDescription": "只允许改名称与描述：策略编码与文档在创建后不可编辑，文档按当前值原样提交。",
 				"name": "策略名称",
 				"namePlaceholder": "例如：运维只读",
@@ -745,7 +746,7 @@
 				"descriptionPlaceholder": "这条策略控制什么（可留空）",
 				"document": "策略文档",
 				"documentHint": "必须是合法 JSON；上游按 jsonb 落库，非法 JSON 会被直接拒绝",
-				"documentPlaceholder": "{'[{\"Action\":[\"*\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]'}",
+				"documentPlaceholder": "[{'{'}\"Action\":[\"*\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]{'}'}]",
 				"documentReadonly": "文档按当前值原样提交，本页不提供编辑。",
 				"cancel": "取消",
 				"create": "创建",

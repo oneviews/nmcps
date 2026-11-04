@@ -17,6 +17,12 @@ Follow the project's existing conventions at all times:
 - Lift a filter into the page toolbar only when it decides the data scope (time window, low-cardinality enum): at most 2 standing controls, ≤45% of the content box, and the popover's "has filters" highlight must narrow to what actually remains inside the popover (`NMCPS-ARCH-006` §4.1).
 - A time-range filter is one summary `UButton` plus a `UPopover` holding a preset column and a `UCalendar range` calendar — never two side-by-side `datetime-local` inputs. Build date values with the `@internationalized/date` that Nuxt UI already ships, and let a calendar pick land on a whole-day window (`00:00:00` … `23:59:59`), not on `23:59`. The popover is sized by its content, so never wrap the calendar in `w-0 flex-1` (the month grids collapse to zero width and overlap).
 
+## Copy and i18n conventions
+
+- All visible copy lives in `i18n/locales/{cn,en}.json`; a `.vue` `<template>` must never hardcode CJK, and both locale files carry the same key set with the same `{placeholders}`. Run `pnpm check:i18n` after touching copy or a page template.
+- Interface copy and upstream data are different things (`NMCPS-ARCH-006` §7 row 22): policy names, role names, tenant names, descriptions and raw upstream errors are rendered verbatim and are never localised or aliased in the display layer. So Chinese showing up in the English UI is data, not a copy defect — first check whether the string exists in `i18n/locales/*.json`; if it does, fix the value, if it does not, fix the data source.
+- Never wrap a whole phrase in vue-i18n literal escaping. Only the characters that break the message syntax (`@`, `|`, `{`, `}`) get escaped, e.g. `[{'{'}"Action":["*"]{'}'}]` — `{'[...]'}` renders an extra pair of single quotes.
+
 ## CI self-check conventions
 
 - Before editing a UI / integration self-check step in `.github/workflows/ci.yml`, confirm the instance under test gets its required environment: `check:ui` and `check:bff` boot their own fake upstream plus build output, so hand-starting a server (or pointing `CHECK_UI_BASE_URL` at an external one) requires providing `NUXT_BFF_UPSTREAM_BASE` yourself — otherwise the "upstream ready" and login cases fail as false positives (measured 2026-10-31).

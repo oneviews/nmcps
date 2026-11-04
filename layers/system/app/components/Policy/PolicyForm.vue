@@ -67,7 +67,7 @@
 			</UFormField>
 
 			<UFormField
-				:label="t('pages.system-policy.form.description')"
+				:label="t('pages.system-policy.form.descriptionLabel')"
 				name="description"
 			>
 				<UInput

@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.0
+version: 0.39.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -190,3 +190,4 @@ tags:
 | 2026-11-04 | 0.37.0 | 登记记录层 ADR：`NMCPS-ADR-0018` 后端代际切换（旧代 go-zero 网关退役，BFF 唯一上游改 `http://192.168.1.55:8888/api/v1`；10 条实测证据、4 张字段映射表、10 个能力缺口、13 个影响文件；局部作废 ADR-0011 的刷新轮换条款，Tier 5，informative）；`NMCPS-REC-001~004` 置 `superseded` 并补 `supersededBy: NMCPS-ADR-0018` 与文首代际说明（探测对象为已退役旧代）；新增 Tier 4 作业单 `documents/3.operations/backend-generation-migration.md`（逐文件 diff 草案 / `check:bff` 假上游改造点 / 验收与回滚，非受治理文档）。 |
 | 2026-11-04 | 0.38.0 | 登记记录层缺陷清单：`NMCPS-REC-005` 新代 `iam/{roles,policies,role-policies,subject-roles}` 缺陷（10 项：无授权校验 / 系统对象可删 / `enabled` 写入无效 / 400 回原始 SQL / 删除失败用 200 承载 / 过滤残缺且分页无上限 / 必填校验缺失 / `tenant_id` 入参被忽略 / 跨租户授权无拦 / 孤儿关系行，Tier 5，informative，`baseline`）；同步 `NMCPS-DESIGN-005` 升 0.8.0（§7 / §8 按新代 `iam` 命名空间重写：策略 CRUD + 角色 CRUD + `role-policies` 授权 + `subject-roles` 授受，ABAC 段 / 试算 / 权限点目录随 G4 / G5 / G3 退役，失败改按 HTTP 形态分派）、`NMCPS-ARCH-006` 升 0.2.20（§3.8 撤销 `/system/policy` 客户端分页例外）。 |
 | 2026-11-04 | 0.39.0 | `NMCPS-ARCH-006` → 0.2.21（§7 补第 20 / 21 行：`/system/policy` 与 `/system/permission` 的契约面断言，`check:ui` 106 → 116）、`NMCPS-DESIGN-005` → 0.8.1（§8.1 补「`GET /iam/subject-roles` 只认 `subject_id`，按角色反查在前端做」这条实测约束，并记 C4c-1 / C4c-2 验收：`check:bff` 106/106、`check:ui` 116/116）。 |
+| 2026-11-04 | 0.39.1 | `NMCPS-ARCH-006` → 0.2.22（§7 补第 22 行「文案与数据的分界」：界面文案只来自 `i18n/locales/{cn,en}.json`、模板不写死中文，上游数据按原值渲染不做本地化映射；正文写明「英文界面出现中文 = 数据问题」的判定顺序）。配套新增 `pnpm check:i18n`（九组断言：键集合一致 / en 值不含中文 / 值形状 / 占位符一致 / `layers/system` 引用闭合 / 93 个 `.vue` 模板无硬编码中文）并接入 CI quality job；`check:ui` 用例数不变（116）。 |
