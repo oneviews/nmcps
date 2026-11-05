@@ -3,3 +3,4 @@
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 $ vue-tsc -b --pretty
 ▎ TNB ACTIVE — `typescript` is the tsgo-backed fork
+# drill: 注入漂移 2026-11-05T06:43:19Z（随后自动回滚）
