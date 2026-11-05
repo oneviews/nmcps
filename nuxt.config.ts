@@ -56,6 +56,15 @@ export default defineNuxtConfig({
 			readinessPath: "/health",
 			readinessTimeoutMs: 2000
 		},
+		// 仿真平台（第二出站通道，NMCPS-ADR-0019 裁决 B / NMCPS-ARCH-002 §六）：
+		// baseUrl 为空＝通道未启用（不是错误，`/api/sim/**` 回 503 simulator_not_configured）；
+		// allowWrite 默认 false —— 写端点一律 405，页面以只读态呈现。
+		simulator: {
+			baseUrl: "",
+			allowWrite: false,
+			timeoutMs: 15000,
+			readinessPath: "/api/health"
+		},
 		public: {
 			// 前端访问 BFF 的基址：web 同源留空；桌面构建必须指向已部署的 BFF
 			bffBase: ""

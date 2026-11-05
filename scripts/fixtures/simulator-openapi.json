@@ -1,0 +1,372 @@
+{
+	"_meta": {
+		"source": "http://192.168.1.55:8001/openapi.json",
+		"capturedAt": "2026-11-05",
+		"note": "openapi.json 的机械投影（paths → 动词列表）：check:bff ⑨-6 只消费这两项。`source` 抄上游 servers[0].url 的自述地址（内网也照抄、勿改占位符，刷新会按上游重写）。刷新：pnpm check:bff --refresh-simulator-snapshot"
+	},
+	"info": {
+		"title": "混合网络仿真平台",
+		"version": "0.1.0"
+	},
+	"pathCount": 113,
+	"paths": {
+		"/api/browser/{sim_id}/capture": [
+			"POST"
+		],
+		"/api/browser/{sim_id}/proxies": [
+			"GET"
+		],
+		"/api/browser/{sim_id}/start": [
+			"POST"
+		],
+		"/api/browser/{sim_id}/stop": [
+			"POST"
+		],
+		"/api/configs": [
+			"GET"
+		],
+		"/api/configs/summary": [
+			"GET"
+		],
+		"/api/configs/{name}": [
+			"GET",
+			"POST",
+			"DELETE"
+		],
+		"/api/configs/{name}/snmp-v3": [
+			"GET",
+			"POST"
+		],
+		"/api/configs/{name}/topology-preview": [
+			"GET"
+		],
+		"/api/devices": [
+			"GET",
+			"POST"
+		],
+		"/api/devices/clear": [
+			"POST"
+		],
+		"/api/devices/import": [
+			"POST"
+		],
+		"/api/devices/importable": [
+			"GET"
+		],
+		"/api/devices/{dev_id}": [
+			"GET",
+			"PATCH",
+			"DELETE"
+		],
+		"/api/gateway/{sim_id}": [
+			"GET"
+		],
+		"/api/gateway/{sim_id}/connect": [
+			"POST"
+		],
+		"/api/gateway/{sim_id}/disconnect": [
+			"POST"
+		],
+		"/api/health": [
+			"GET"
+		],
+		"/api/integrity/baseline": [
+			"POST"
+		],
+		"/api/integrity/check": [
+			"POST"
+		],
+		"/api/integrity/status": [
+			"GET"
+		],
+		"/api/integrity/watch/start": [
+			"POST"
+		],
+		"/api/integrity/watch/stop": [
+			"POST"
+		],
+		"/api/lldp": [
+			"GET"
+		],
+		"/api/lldp/neighbors/{node_id}": [
+			"GET"
+		],
+		"/api/lldp/summary": [
+			"GET"
+		],
+		"/api/metrics/current/{sim_id}": [
+			"GET"
+		],
+		"/api/metrics/export/{sim_id}": [
+			"GET"
+		],
+		"/api/metrics/history/{sim_id}": [
+			"GET"
+		],
+		"/api/metrics/summary/{sim_id}": [
+			"GET"
+		],
+		"/api/metrics/{sim_id}": [
+			"DELETE"
+		],
+		"/api/network": [
+			"GET"
+		],
+		"/api/network/links": [
+			"GET",
+			"POST"
+		],
+		"/api/network/links/{link_id}": [
+			"GET",
+			"PATCH",
+			"DELETE"
+		],
+		"/api/network/links/{link_id}/disable": [
+			"POST"
+		],
+		"/api/network/links/{link_id}/down": [
+			"POST"
+		],
+		"/api/network/links/{link_id}/power": [
+			"POST"
+		],
+		"/api/network/links/{link_id}/radio": [
+			"PATCH"
+		],
+		"/api/network/links/{link_id}/reconfigure": [
+			"POST"
+		],
+		"/api/network/links/{link_id}/tc": [
+			"PATCH"
+		],
+		"/api/network/links/{link_id}/toggle": [
+			"POST"
+		],
+		"/api/network/links/{link_id}/up": [
+			"POST"
+		],
+		"/api/network/nodes": [
+			"GET",
+			"POST"
+		],
+		"/api/network/nodes/{node_id}": [
+			"GET",
+			"PATCH",
+			"DELETE"
+		],
+		"/api/network/nodes/{node_id}/disable": [
+			"POST"
+		],
+		"/api/network/nodes/{node_id}/enable": [
+			"POST"
+		],
+		"/api/network/nodes/{node_id}/execute": [
+			"POST"
+		],
+		"/api/network/nodes/{node_id}/ip": [
+			"PATCH"
+		],
+		"/api/network/nodes/{node_id}/power": [
+			"POST"
+		],
+		"/api/network/nodes/{node_id}/radio": [
+			"PATCH",
+			"GET"
+		],
+		"/api/network/nodes/{node_id}/restart": [
+			"POST"
+		],
+		"/api/network/nodes/{node_id}/start": [
+			"POST"
+		],
+		"/api/network/nodes/{node_id}/stop": [
+			"POST"
+		],
+		"/api/network/overrides/{scenario}": [
+			"GET",
+			"DELETE"
+		],
+		"/api/network/runtime-inventory": [
+			"GET"
+		],
+		"/api/network/runtime/links": [
+			"POST"
+		],
+		"/api/network/runtime/links/{link_id}": [
+			"DELETE"
+		],
+		"/api/network/runtime/nodes": [
+			"POST"
+		],
+		"/api/network/runtime/nodes/{node_id}": [
+			"DELETE"
+		],
+		"/api/network/runtime/preview": [
+			"GET",
+			"POST"
+		],
+		"/api/network/scan-subnets": [
+			"GET"
+		],
+		"/api/network/snmp-accounts": [
+			"GET"
+		],
+		"/api/network/snmp-v3": [
+			"POST"
+		],
+		"/api/network/stats": [
+			"GET"
+		],
+		"/api/network/wireless-nodes": [
+			"GET"
+		],
+		"/api/nms/snmp-exporter-reset": [
+			"GET"
+		],
+		"/api/nms/snmp-exporter-reset/run": [
+			"POST"
+		],
+		"/api/nms/vmagent": [
+			"GET"
+		],
+		"/api/nms/vmagent/reload": [
+			"POST"
+		],
+		"/api/nms/vmagent/targets": [
+			"POST"
+		],
+		"/api/nms/vmagent/targets/{scenario}": [
+			"GET"
+		],
+		"/api/protocol/catalog": [
+			"GET"
+		],
+		"/api/protocol/catalog/{protocol_id}": [
+			"GET"
+		],
+		"/api/protocol/compare": [
+			"POST"
+		],
+		"/api/protocol/comparison-config/{scenario}": [
+			"GET"
+		],
+		"/api/protocol/recommend/{scenario}": [
+			"GET"
+		],
+		"/api/protocol/sessions/{sim_id}": [
+			"GET"
+		],
+		"/api/protocol/sessions/{sim_id}/set": [
+			"POST"
+		],
+		"/api/protocol/transport/{scenario}": [
+			"GET"
+		],
+		"/api/simulation/engines": [
+			"GET"
+		],
+		"/api/simulation/sessions": [
+			"GET",
+			"POST"
+		],
+		"/api/simulation/sessions/{sim_id}": [
+			"DELETE"
+		],
+		"/api/simulation/sessions/{sim_id}/bgtraffic": [
+			"GET",
+			"POST",
+			"DELETE"
+		],
+		"/api/simulation/sessions/{sim_id}/boot-progress": [
+			"GET"
+		],
+		"/api/simulation/sessions/{sim_id}/build-plan": [
+			"GET"
+		],
+		"/api/simulation/sessions/{sim_id}/connectivity": [
+			"GET"
+		],
+		"/api/simulation/sessions/{sim_id}/diagnostics": [
+			"GET"
+		],
+		"/api/simulation/sessions/{sim_id}/pause": [
+			"POST"
+		],
+		"/api/simulation/sessions/{sim_id}/resume": [
+			"POST"
+		],
+		"/api/simulation/sessions/{sim_id}/start": [
+			"POST"
+		],
+		"/api/simulation/sessions/{sim_id}/status": [
+			"GET"
+		],
+		"/api/simulation/sessions/{sim_id}/stop": [
+			"POST"
+		],
+		"/api/simulation/sessions/{sim_id}/topology": [
+			"GET"
+		],
+		"/api/simulation/sessions/{sim_id}/trigger": [
+			"POST"
+		],
+		"/api/snmp/onboard": [
+			"POST",
+			"GET"
+		],
+		"/api/snmp/onboard/export": [
+			"GET"
+		],
+		"/api/snmp/onboard/live": [
+			"GET"
+		],
+		"/api/snmp/onboard/revoke": [
+			"POST"
+		],
+		"/api/snmp/onboard/rotate": [
+			"POST"
+		],
+		"/api/snmp/tools": [
+			"GET"
+		],
+		"/api/snmp/topology": [
+			"POST"
+		],
+		"/api/test/iperf": [
+			"POST"
+		],
+		"/api/test/lldp": [
+			"POST"
+		],
+		"/api/test/mtr": [
+			"POST"
+		],
+		"/api/test/netcat": [
+			"POST"
+		],
+		"/api/test/ping": [
+			"POST"
+		],
+		"/api/test/traceroute": [
+			"POST"
+		],
+		"/api/weaknet/current": [
+			"GET"
+		],
+		"/api/weaknet/presets": [
+			"GET"
+		],
+		"/api/weaknet/profiles": [
+			"GET"
+		],
+		"/api/weaknet/sessions/{sim_id}": [
+			"GET"
+		],
+		"/api/weaknet/sessions/{sim_id}/apply": [
+			"POST"
+		],
+		"/api/weaknet/sessions/{sim_id}/clear": [
+			"POST"
+		]
+	}
+}

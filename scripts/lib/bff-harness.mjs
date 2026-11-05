@@ -2,6 +2,7 @@
 // 自查脚本共用的本地脚手架：拉起 `.output/server/index.mjs`（BFF）与一个假上游。
 // 前置：`pnpm build:server` —— 本模块只消费构建产物，不自行构建。
 // 使用方：`scripts/check-bff.mjs`（纯 HTTP 契约）、`scripts/check-ui.mjs`（浏览器端到端）。
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -296,7 +297,7 @@ export async function startUpstream(port) {
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
 	 */
-	const control = { down: false };
+	const control = { down: false, topologyEmpty: false };
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -325,7 +326,15 @@ export async function startUpstream(port) {
 			return send(200, { down: false });
 		}
 		if (url.pathname === "/__control/state")
-			return send(200, { down: control.down });
+			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty });
+		if (url.pathname === "/__control/topology-empty") {
+			control.topologyEmpty = true;
+			return send(200, { topologyEmpty: true });
+		}
+		if (url.pathname === "/__control/topology-full") {
+			control.topologyEmpty = false;
+			return send(200, { topologyEmpty: false });
+		}
 
 		if (control.down) {
 			req.socket.destroy();
@@ -340,6 +349,36 @@ export async function startUpstream(port) {
 			// 就绪探针超时用例：永远拖到客户端超时
 			await delay(5_000);
 			return send(200, { status: "ok" });
+		}
+
+		// ── /topology*：拓扑图（`/topology/monitor`；网关透传路径带 `/api/v1` 前缀） ──
+		// 形状对齐 `shared/types/topology.ts`（2026-10-14 只读实测：`id` 是管理 IP、`status` 数值口径
+		// 1=在线 / 2=告警 / 0=离线、链路 `bandwidth` 实测全为 0）。`__control/topology-empty`
+		// 用于「空拓扑渲染空态而不是空白画布」的断言（NMCPS-DESIGN-001 A4）。
+		if (/^\/(?:api\/v1\/)?topology\/graph$/.test(url.pathname) && req.method === "GET") {
+			const graph = control.topologyEmpty
+				? { nodes: [], edges: [], combos: [] }
+				: {
+					nodes: [
+						{ id: "10.0.0.1", name: "核心路由器-1", category: "network-device", type: "core", tier: 1, status: 1 },
+						{ id: "10.0.0.2", name: "汇聚交换机-1", category: "network-device", type: "distribution", tier: 2, status: 1 },
+						{ id: "10.0.0.3", name: "接入交换机-1", category: "network-device", type: "access", tier: 2, status: 2 },
+						{ id: "10.0.0.4", name: "无线AP-1", category: "ap", type: "access", tier: 3, status: 1 },
+						{ id: "10.0.0.5", name: "单链路终端-1", category: "client", type: "endnode", tier: 4, status: 1 },
+						{ id: "10.0.0.6", name: "单链路终端-2", category: "client", type: "endnode", tier: 4, status: 0 }
+					],
+					edges: [
+						{ source: "10.0.0.1", target: "10.0.0.2", bandwidth: 0, linkType: "fiber", status: "up" },
+						{ source: "10.0.0.1", target: "10.0.0.3", bandwidth: 0, linkType: "fiber", status: "up" },
+						{ source: "10.0.0.2", target: "10.0.0.4", bandwidth: 0, linkType: "fiber", status: "up" },
+						{ source: "10.0.0.3", target: "10.0.0.4", bandwidth: 0, linkType: "fiber", status: "down" },
+						{ source: "10.0.0.4", target: "10.0.0.5", bandwidth: 0, linkType: "wireless", status: "up" },
+						{ source: "10.0.0.4", target: "10.0.0.6", bandwidth: 0, linkType: "wireless", status: "down" }
+					],
+					combos: [{ id: "combo-access", label: "接入区" }]
+				};
+
+			return send(200, { code: 0, msg: "success", data: graph });
 		}
 
 		// ── /account*：账号域（`/system/user` 两栏自查；BFF 网关透传路径可能带 `/api/v1` 前缀） ──
@@ -965,6 +1004,142 @@ export async function startUpstream(port) {
 
 	server.authLog = authLog;
 	server.control = control;
+
+	return server;
+}
+
+/**
+ * 假仿真平台（第二上游，NMCPS-ADR-0019 裁决 B）：只实现 BFF 白名单里那些端点的形状。
+ *
+ * 记录每次请求的 `{ method, path, headers }`（`server.log`）——「出站不带 authorization、
+ * 不把 nmcps_at 转 Bearer」这类断言只能靠上游侧的客观记录来取证，不能问 BFF 自己。
+ *
+ * 返回体形状对齐 NMCPS-CONTRACT-001 §六 的实测形状（`nodes_by_type` 用动态键、
+ * 链路的 `status` 是 up/down 字符串）；这里只求形状够用，数值不必等于真实仿真。
+ */
+export async function startSimulator(port) {
+	const log = [];
+
+	/** 写端点的请求体（只用于回显，解析失败按 undefined） */
+	async function readBody(req) {
+		const chunks = [];
+		for await (const chunk of req) {
+			chunks.push(chunk);
+		}
+		const raw = Buffer.concat(chunks).toString("utf8");
+		if (!raw)
+			return undefined;
+		try {
+			return JSON.parse(raw);
+		} catch {
+			return raw;
+		}
+	}
+
+	const server = createHttpServer(async (req, res) => {
+		const url = new URL(req.url, `http://${HOST}:${port}`);
+		const path = url.pathname;
+		log.push({ method: req.method, path, headers: req.headers });
+
+		const send = (status, payload) => {
+			const body = JSON.stringify(payload);
+			res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+			res.end(body);
+		};
+
+		// ── 只读 ──
+		if (path === "/api/network/runtime-inventory" && req.method === "GET") {
+			// 形状对齐 `shared/types/simulator.ts`（NMCPS-CONTRACT-001 §6.3）：IP 在 `ip_address`，
+			// 与 8888 图节点（`id` = 管理 IP）对齐靠它 —— 页面用它叠「仿真中」标记。
+			const node = (id, name, type, ip) => ({
+				id,
+				name,
+				type,
+				status: "online",
+				x: null,
+				y: null,
+				interfaces: [],
+				ip_address: ip,
+				mac_address: null,
+				device_type: type,
+				role: null,
+				ports: [],
+				weaknet_config: null,
+				protocol_config: null,
+				radio: null
+			});
+
+			return send(200, {
+				running: true,
+				scenario: "drill-a",
+				overrides: { exists: false, updated_at: null, node_count: 0, link_count: 0, topology_count: 0 },
+				nodes: [
+					node("n1", "核心路由器-1", "router", "10.0.0.1"),
+					node("n2", "汇聚交换机-1", "switch", "10.0.0.2")
+				],
+				links: [
+					{
+						id: "l1",
+						source: "n1",
+						target: "n2",
+						source_interface: "Gi0/1",
+						target_interface: "Gi0/2",
+						type: "wired",
+						status: "up",
+						bandwidth: "1Gbps",
+						delay: "2ms",
+						loss: "0%",
+						real_stats: null,
+						weaknet_config: null,
+						protocol_config: null,
+						tc: null
+					}
+				]
+			});
+		}
+
+		if (path === "/api/network/stats" && req.method === "GET") {
+			return send(200, {
+				node_count: 36,
+				link_count: 48,
+				nodes_by_type: { router: 3, switch: 6, ap: 18, station: 9 },
+				links_by_type: { wired: 40, wireless: 8 },
+				nodes_online: 36,
+				links_up: 48
+			});
+		}
+
+		if (path === "/api/lldp/summary" && req.method === "GET") {
+			return send(200, { neighbor_count: 12, switches: ["S1", "S2"] });
+		}
+
+		const neighbor = path.match(/^\/api\/lldp\/neighbors\/([^/]+)$/);
+		if (neighbor && req.method === "GET") {
+			return send(200, {
+				node_id: decodeURIComponent(neighbor[1]),
+				neighbors: [{ id: "n2", name: "S1", local_port: "Gi0/1", remote_port: "Gi0/2", ttl: 120, mib_oids: {} }]
+			});
+		}
+
+		if (path === "/api/network/runtime/preview" && req.method === "GET") {
+			return send(200, { nodes: [], links: [], warnings: [] });
+		}
+
+		// ── 写（`allowWrite: true` 才会到这里） ──
+		const write = req.method !== "GET" && /^\/api\/network\/(?:links|nodes|runtime)\//.test(path);
+		if (write) {
+			return send(200, { ok: true, method: req.method, path, received_body: await readBody(req) });
+		}
+
+		return send(404, { detail: "simulator_path_not_found", path, method: req.method });
+	});
+
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(port, HOST, resolve);
+	});
+
+	server.log = log;
 
 	return server;
 }

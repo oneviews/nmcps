@@ -14,7 +14,7 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -106,7 +106,7 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 | 配置 | `nuxt.config.ts` → `runtimeConfig.simulator` | `{ baseUrl, allowWrite, timeoutMs, readinessPath }`，全部可被 `NUXT_SIMULATOR_*` 覆盖；`baseUrl` 为空＝**通道未启用**，不是错误 |
 | 读配置 | `server/utils/bff/simConfig.ts` | 与 `getBffConfig()` 同形：缺省值集中一处、`baseUrl` 去尾斜杠、`allowWrite` 严格布尔 |
 | 出站 | `server/utils/bff/simulator.ts` | 独立 `$fetch` 实例；超时与 `AbortSignal`；响应归一为 `ApiResponse` |
-| 路由 | `server/api/sim/[...slug].ts` | 先过白名单再出站；未命中 → 404 `bff_resource_not_allowed`，动词不符 → 405 |
+| 路由 | `server/api/sim/[...slug].ts`（`/api/sim` 无路径段由 `server/api/sim/index.ts` 回 400 `bff_path_missing`，不落到主网关） | 先过白名单再出站；未命中 → 404 `bff_resource_not_allowed`，动词不符 → 405 |
 | 白名单 | `shared/constants/simulatorRoutes.ts` | 逐条 `{ method, template, write }`；`{param}` 模板匹配，非前缀放行 |
 
 ### 6.2 为什么必须是独立通道
@@ -127,15 +127,26 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 
 ### 6.5 就绪分离
 
-`/ready` 只反映主上游。仿真平台不可达**不得**让 `/ready` 变红——它只影响依赖它的页面，页面局部降级（拓扑页退化为「仅 8888 静态拓扑」），避免可选上游的抖动升级成整站不可用。未配 `baseUrl` 时 `/api/sim/**` 返回 503 `simulator_not_configured`，与「未配主上游」同口径。
+`/ready` 只反映主上游。仿真平台不可达**不得**让 `/ready` 变红——它只影响依赖它的页面，页面局部降级（拓扑页退化为「仅 8888 静态拓扑」），避免可选上游的抖动升级成整站不可用。未配 `baseUrl` 时 `/api/sim/**` 返回 503 `simulator_not_configured`，与「未配主上游」同口径。本通道的失败词汇集中在 `shared/constants/upstreamReasons.ts` 的 `SIMULATOR_MESSAGES`（`notConfigured` / `unreachable` / `timeout` / `writeDisabled` / `baseInvalid`），前端据 message 而非状态码区分「通道没开」与「仿真挂了」。
 
 ### 6.6 与存储分层的关系
 
 仿真平台是**零存储数据源**：读到的运行时状态（节点、链路、会话）只在请求生命周期内存在，不回写 RDBMS / TSDB；控制指令直接转发给仿真引擎，BFF 只做白名单与日志。§三 的存储分层因此不变——仿真数据不参与历史留存，需要留痕的指标仍由主上游 `/metric/*` 提供。
 
-### 6.7 守卫（随 P1 落码实现）
+### 6.7 守卫（`check:bff` 第 ⑨ 组，已随 P1 代码落码）
 
-`check:bff` 第 ⑨ 组六条断言：未配 → 503 且信封为 `ApiResponse`；白名单内到达假上游、白名单外 404、动词不符 405；路径穿越（`..`、`%2e%2e`、段内含 `/`）→ 400；`allowWrite: false` 时写端点 405、`true` 时到达假上游；出站头不含 `authorization` 且不读 `nmcps_at`；白名单 ⊆ `/openapi.json` 快照。断言与代码同批落地，未实现前不得在文档里标为已通过。
+六条断言拆成 21 个检查点，与代码同批落地（`pnpm check:bff` 实测 127/127 全绿）：
+
+| 断言 | 覆盖 | 判据 |
+| :--- | :--- | :--- |
+| ⑨-1 | 通道未启用 / 无路径段 | 未配 `baseUrl` → 503 `simulator_not_configured`、信封仍是 `ApiResponse`、上游零命中；`/api/sim` 与 `/api/sim/` → 400 `bff_path_missing`（不落到主网关的 404） |
+| ⑨-2 | 白名单边界 | 白名单内到达假仿真平台并套信封；白名单外 404 `bff_resource_not_allowed`；永久排除项（`browser` / `execute` / `test`）同样 404；动词不符（GET 只登记 POST 的端点）→ 405 `bff_method_not_allowed` |
+| ⑨-3 | 路径穿越 | `%2e%2e%2f` 等编码穿越 → 400 `bff_path_invalid` |
+| ⑨-4 | 写开关两侧 | `allowWrite: false` → 写端点 405 `simulator_write_disabled` 且上游零命中；`true` → 到达上游且方法与路径原样 |
+| ⑨-5 | 出站头 | 客户端自带 `authorization` 与 `nmcps_at` cookie 时，**假上游侧记录的请求头**里两者都不存在（取证问上游，不问 BFF 自己） |
+| ⑨-6 | 白名单 ⊆ 快照 | 白名单 23 条逐条断「路径 + 动词」∈ `scripts/fixtures/simulator-openapi.json`（`/openapi.json` 的机械投影，113 条路径）；条目抽取为空即红 |
+
+快照刷新只有一个入口：`NUXT_SIMULATOR_BASE_URL=http://<host>:8001 pnpm check:bff --refresh-simulator-snapshot`（重写 `_meta.capturedAt` 与 `paths`）。`_meta.capturedAt` 超过 180 天只打 `⚠️` 不判红——上游补丁版本不该把 CI 拖红；反过来，把白名单任一条模板写错（实测改成 `/api/network/stats-v2`）⑨-6 会立刻点名该条，守卫不是摆设。
 
 ---
 
@@ -144,4 +155,4 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化数据源架构（分类、存储分层、云边数据适配层、数据流转）。 |
-| 2026-11-05 | 0.2.0 | 增「§六 第二数据源：仿真平台」：通道形态（`runtimeConfig.simulator` / `simConfig.ts` / `simulator.ts` / `server/api/sim/**` / `simulatorRoutes.ts`）、为何必须独立通道（Bearer 不外发、401 语义分离）、白名单哲学（逐端点、按层归档、永久排除七项、`openapi.json` 机械来源）、写开关（`allowWrite` 默认 false、日志、不留第二本账）、就绪分离（仿真不可达不影响 `/ready`）、零存储定位与 ⑨ 组守卫；§二 增「仿真平台运行时」一行，§五 补第二通道说明。按 ADR-0019 §七 义务 2 落地。 |
+| 2026-11-05 | 0.3.0 | **落码前义务 4 已履行：⑨ 组守卫随 P1 代码落地（`pnpm check:bff` 127/127）**。① 新增 `scripts/fixtures/simulator-openapi.json`——上游 `/openapi.json` 的机械投影（113 条路径 → 动词列表 + `_meta.source/capturedAt`），刷新只有 `NUXT_SIMULATOR_BASE_URL=<上游> pnpm check:bff --refresh-simulator-snapshot` 一个入口，`capturedAt` 超 180 天只 `⚠️` 不判红；② `check:bff` 增第 ⑨ 组 21 个检查点，逐条对应 ⑨-1~⑨-6（见 §6.7 表），假仿真平台 `startSimulator()`（`scripts/lib/bff-harness.mjs`）在**上游侧**记录请求头，用于取证「出站不带 `authorization`、不把 `nmcps_at` 转 Bearer」；③ §6.1 路由行补 `server/api/sim/index.ts`：`/api/sim` 无路径段回 400 `bff_path_missing`，否则会落到主网关得 404，把「少写了路径」误报成「路径不允许」；④ §6.5 补 `SIMULATOR_MESSAGES` 词汇表；⑤ 反向验证：把白名单一条模板改成 `/api/network/stats-v2`，⑨-6 立刻点名该条变红。 |

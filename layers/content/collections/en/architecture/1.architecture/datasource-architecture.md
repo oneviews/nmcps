@@ -12,7 +12,7 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -104,7 +104,7 @@ The BFF (Nitro) has exactly two egress channels: the primary upstream (`runtimeC
 | Config | `nuxt.config.ts` → `runtimeConfig.simulator` | `{ baseUrl, allowWrite, timeoutMs, readinessPath }`, all overridable via `NUXT_SIMULATOR_*`; an empty `baseUrl` means **channel disabled**, not an error |
 | Config reader | `server/utils/bff/simConfig.ts` | Same shape as `getBffConfig()`: defaults in one place, trailing slash stripped, `allowWrite` strictly boolean |
 | Egress | `server/utils/bff/simulator.ts` | Its own `$fetch` instance; timeout and `AbortSignal`; responses normalised to `ApiResponse` |
-| Route | `server/api/sim/[...slug].ts` | Whitelist first, egress second; no match → 404 `bff_resource_not_allowed`, wrong verb → 405 |
+| Route | `server/api/sim/[...slug].ts` (a path-less `/api/sim` is answered 400 `bff_path_missing` by `server/api/sim/index.ts`, never by the primary gateway) | Whitelist first, egress second; no match → 404 `bff_resource_not_allowed`, wrong verb → 405 |
 | Whitelist | `shared/constants/simulatorRoutes.ts` | One row per entry `{ method, template, write }`; `{param}` template matching, never prefix passthrough |
 
 ### 6.2 Why it must be a separate channel
@@ -125,15 +125,26 @@ The whitelist is not a hand-copied constant: it is derived mechanically from the
 
 ### 6.5 Readiness separation
 
-`/ready` reflects the primary upstream only. An unreachable simulator **must not** redden `/ready` — it affects just the pages that depend on it, which degrade locally (a topology page falls back to "8888 static topology only"), so an optional upstream's hiccup never becomes a site-wide outage. With no `baseUrl`, `/api/sim/**` returns 503 `simulator_not_configured`, the same shape as an unconfigured primary upstream.
+`/ready` reflects the primary upstream only. An unreachable simulator **must not** redden `/ready` — it affects just the pages that depend on it, which degrade locally (a topology page falls back to "8888 static topology only"), so an optional upstream's hiccup never becomes a site-wide outage. With no `baseUrl`, `/api/sim/**` returns 503 `simulator_not_configured`, the same shape as an unconfigured primary upstream. This channel's failure vocabulary lives in `SIMULATOR_MESSAGES` (`shared/constants/upstreamReasons.ts`: `notConfigured` / `unreachable` / `timeout` / `writeDisabled` / `baseInvalid`), so the front end tells "channel is off" from "simulator is down" by message rather than by status code.
 
 ### 6.6 Relationship to storage layering
 
 The simulator is a **zero-storage data source**: the runtime state it returns (nodes, links, sessions) lives only for the request, never written back to RDBMS / TSDB; control commands are forwarded to the simulation engine while the BFF only applies the whitelist and logs. §3's layering therefore stands unchanged — simulator data is not retained historically, and metrics that need a history still come from the primary upstream's `/metric/*`.
 
-### 6.7 Guards (shipped with P1 code)
+### 6.7 Guards (`check:bff` group ⑨, shipped with the P1 code)
 
-The six assertions of `check:bff` group ⑨: unconfigured → 503 with an `ApiResponse` envelope; whitelisted path reaches the fake upstream, non-whitelisted 404, wrong verb 405; path traversal (`..`, `%2e%2e`, a segment containing `/`) → 400; `allowWrite: false` makes write endpoints 405 while `true` reaches the fake upstream; the egress carries no `authorization` and never reads `nmcps_at`; whitelist ⊆ the `/openapi.json` snapshot. Assertions land in the same batch as the code and must not be documented as passing before they exist.
+Six assertions, split into 21 checkpoints, landed with the code (`pnpm check:bff` measured 127/127 green):
+
+| Assertion | Covers | Criterion |
+| :--- | :--- | :--- |
+| ⑨-1 | Channel disabled / path-less | No `baseUrl` → 503 `simulator_not_configured` with an `ApiResponse` envelope and zero upstream hits; `/api/sim` and `/api/sim/` → 400 `bff_path_missing` (never the primary gateway's 404) |
+| ⑨-2 | Whitelist boundary | A whitelisted path reaches the fake upstream and is wrapped in the envelope; anything else 404 `bff_resource_not_allowed`; the permanent exclusions (`browser` / `execute` / `test`) also 404; wrong verb (GET on a POST-only endpoint) → 405 `bff_method_not_allowed` |
+| ⑨-3 | Path traversal | Encoded traversal (`%2e%2e%2f`) → 400 `bff_path_invalid` |
+| ⑨-4 | Both sides of the write switch | `allowWrite: false` → write endpoints 405 `simulator_write_disabled` with zero upstream hits; `true` → reaches the upstream with verb and path intact |
+| ⑨-5 | Egress headers | When the client sends `authorization` and an `nmcps_at` cookie, both are absent from the headers **recorded on the fake upstream** (ask the upstream, not the BFF) |
+| ⑨-6 | Whitelist ⊆ snapshot | All 23 entries proved "path + verb" ∈ `scripts/fixtures/simulator-openapi.json` (a mechanical projection of `/openapi.json`: 113 paths); an empty extraction reddens |
+
+The snapshot has exactly one refresh entry: `NUXT_SIMULATOR_BASE_URL=http://<host>:8001 pnpm check:bff --refresh-simulator-snapshot` (rewrites `_meta.capturedAt` and `paths`). A `_meta.capturedAt` older than 180 days only prints `⚠️` and never reddens — an upstream patch release must not break CI. Conversely, mistyping one whitelist template (measured with `/api/network/stats-v2`) makes ⑨-6 name that exact entry, so the guard is not decorative.
 
 ---
 
@@ -143,3 +154,4 @@ The six assertions of `check:bff` group ⑨: unconfigured → 503 with an `ApiRe
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: data source architecture (classification, storage layering, cloud/edge adapter, data flow). |
 | 2026-11-05 | 0.2.0 | Adds "§6 Second data source: the simulator": channel shape (`runtimeConfig.simulator` / `simConfig.ts` / `simulator.ts` / `server/api/sim/**` / `simulatorRoutes.ts`), why it must be separate (no Bearer egress, distinct 401 semantics), whitelist philosophy (per endpoint, grouped by layer, seven permanent exclusions, mechanically derived from `openapi.json`), write switch (`allowWrite` off by default, logging, no second ledger), readiness separation (an unreachable simulator never reddens `/ready`), the zero-storage stance and the group ⑨ guards; §2 gains a "simulator runtime" row and §5 gains the second-channel note. Delivers ADR-0019 §7 obligation 2. |
+| 2026-11-05 | 0.3.0 | **Pre-code obligation 4 is now fulfilled: the group ⑨ guards ship with the P1 code (`pnpm check:bff` 127/127).** ① `scripts/fixtures/simulator-openapi.json` is new — a mechanical projection of the upstream `/openapi.json` (113 paths → verb lists plus `_meta.source/capturedAt`), refreshable only via `NUXT_SIMULATOR_BASE_URL=<upstream> pnpm check:bff --refresh-simulator-snapshot`, with a `capturedAt` older than 180 days merely warning. ② `check:bff` gained group ⑨ (21 checkpoints) mapped one-to-one onto ⑨-1~⑨-6 (table in §6.7); the fake simulator `startSimulator()` (`scripts/lib/bff-harness.mjs`) records request headers **on the upstream side**, which is what proves the egress carries no `authorization` and never trades the `nmcps_at` cookie for a Bearer. ③ The §6.1 route row now names `server/api/sim/index.ts`: a path-less `/api/sim` answers 400 `bff_path_missing` instead of falling through to the primary gateway and reporting "path not allowed" for what was really a missing path. ④ §6.5 gained the `SIMULATOR_MESSAGES` vocabulary. ⑤ Reverse-checked: changing one whitelist template to `/api/network/stats-v2` reddens ⑨-6 and names that entry. |

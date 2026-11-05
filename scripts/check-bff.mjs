@@ -18,13 +18,85 @@
 //      刷新**不轮换**、业务错误 `200 + code≠0` 还原为 4xx、CSRF 403、登出幂等恒 ok
 //   ⑧ 出口归一与脱敏（NMCPS-ADR-0018 D6 / D7）：新命名空间放行、`data.list: null` → `[]`、
 //      `snmp_auth_pass` / `snmp_priv_pass` 掩码 `***` 且明文不出网
-import { existsSync } from "node:fs";
-import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+//   ⑨ 仿真平台通道（NMCPS-ADR-0019 决策 B / NMCPS-ARCH-002 §六，⑨-1~⑨-6）：
+//      未配 baseUrl 的 503、白名单内到达假仿真平台、白名单外 404、动词不符 / 永久排除 404·405、
+//      路径穿越 400、`allowWrite` 开关两侧、出站不带 authorization 也不转 nmcps_at、
+//      白名单 ⊆ `scripts/fixtures/simulator-openapi.json` 快照
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+
+const SIMULATOR_SNAPSHOT_PATH = "scripts/fixtures/simulator-openapi.json";
+const SIMULATOR_ROUTES_SOURCE = "shared/constants/simulatorRoutes.ts";
 
 // ── 前置自检：先说自己缺什么，而不是让第一条断言替我们报错 ──────────────
 if (!existsSync(SERVER_ENTRY)) {
 	console.error(`❌ 缺少构建产物 ${SERVER_ENTRY}：先跑 \`pnpm build:server\`，再重试 \`pnpm check:bff\`。`);
 	process.exit(1);
+}
+
+/**
+ * 从白名单源码抽取条目（纯 node ESM，不 import TS）。
+ *
+ * 抽取失败（写法漂移、条目被删空）由 ⑨-6 直接判红 —— 这里不做兜底默认值，
+ * 否则「白名单被清空」会变成「一条也不用查」的假绿。
+ */
+function readSimulatorWhitelist() {
+	const text = readFileSync(SIMULATOR_ROUTES_SOURCE, "utf8");
+	const start = text.indexOf("export const SIMULATOR_ROUTES");
+	if (start === -1) {
+		return [];
+	}
+	const end = text.indexOf("] as const;", start);
+	const body = end === -1 ? text.slice(start) : text.slice(start, end);
+
+	return [...body.matchAll(/\{\s*method:\s*"([A-Z]+)",\s*template:\s*"([^"]+)",\s*write:\s*(true|false)/g)]
+		.map((match) => ({ method: match[1], template: match[2], write: match[3] === "true" }));
+}
+
+function readSimulatorSnapshot() {
+	return JSON.parse(readFileSync(SIMULATOR_SNAPSHOT_PATH, "utf8"));
+}
+
+/** openapi.json → 快照投影（paths → 动词列表）：⑨-6 只消费这两项，故不存 40 个 schema */
+function projectSimulatorSpec(spec) {
+	const verbs = new Set(["get", "post", "put", "patch", "delete"]);
+	const paths = {};
+	for (const key of Object.keys(spec.paths).sort()) {
+		paths[key] = Object.keys(spec.paths[key]).filter((verb) => verbs.has(verb)).map((verb) => verb.toUpperCase());
+	}
+
+	return {
+		_meta: {
+			source: `${String(spec.servers?.[0]?.url ?? "").replace(/\/+$/, "")}/openapi.json`,
+			capturedAt: new Date().toISOString().slice(0, 10),
+			note: "openapi.json 的机械投影（paths → 动词列表）：check:bff ⑨-6 只消费这两项。`source` 抄上游 servers[0].url 的自述地址（内网也照抄、勿改占位符，刷新会按上游重写）。刷新：pnpm check:bff --refresh-simulator-snapshot"
+		},
+		info: { title: spec.info?.title ?? "", version: spec.info?.version ?? "" },
+		pathCount: Object.keys(paths).length,
+		paths
+	};
+}
+
+// ── 快照重采：`pnpm check:bff --refresh-simulator-snapshot`（上游升级后唯一正确的刷新入口） ──
+if (process.argv.includes("--refresh-simulator-snapshot")) {
+	const baseUrl = (process.env.NUXT_SIMULATOR_BASE_URL ?? process.env.SIMULATOR_OPENAPI_BASE ?? "").trim().replace(/\/+$/, "");
+
+	if (!baseUrl) {
+		console.error("❌ 刷新快照需要上游地址：NUXT_SIMULATOR_BASE_URL=http://<host>:8001 pnpm check:bff --refresh-simulator-snapshot");
+		process.exit(1);
+	}
+
+	const response = await fetch(`${baseUrl}/openapi.json`);
+
+	if (!response.ok) {
+		console.error(`❌ ${baseUrl}/openapi.json 返回 ${response.status}，未写入快照。`);
+		process.exit(1);
+	}
+
+	const snapshot = projectSimulatorSpec(await response.json());
+	writeFileSync(SIMULATOR_SNAPSHOT_PATH, `${JSON.stringify(snapshot, null, "\t")}\n`);
+	console.log(`✅ 已刷新 ${SIMULATOR_SNAPSHOT_PATH}：${snapshot.pathCount} 条路径，info.version=${snapshot.info.version}`);
+	process.exit(0);
 }
 
 const results = [];
@@ -630,6 +702,108 @@ try {
 	});
 } finally {
 	await closeUpstream(upstream);
+}
+
+// ── ⑨ 仿真平台通道（NMCPS-ADR-0019 决策 B / NMCPS-ARCH-002 §六） ──────────
+const simulatorPort = await freePort();
+const simulator = await startSimulator(simulatorPort);
+const simulatorBase = `http://${HOST}:${simulatorPort}`;
+
+try {
+	// ⑨-1 通道未启用：与「未配主上游」同口径 503，且不触达任何上游
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: "", NUXT_SIMULATOR_BASE_URL: "" }, async (port) => {
+		const hitsBefore = simulator.log.length;
+		const notConfigured = await request(port, "/api/sim/api/network/stats");
+		log("⑨-1 未配 baseUrl → 503 simulator_not_configured", notConfigured.status === 503 && notConfigured.json?.message === "simulator_not_configured", `${notConfigured.status} ${describe(notConfigured.json?.message)}`);
+		log("⑨-1 未配 baseUrl 仍用 ApiResponse 信封", ["code", "status", "message", "timestamp"].every((key) => key in (notConfigured.json ?? {})), describe(notConfigured.json));
+		log("⑨-1 未配 baseUrl 不触达仿真平台", simulator.log.length === hitsBefore, `hits=${simulator.log.length - hitsBefore}`);
+
+		const simBare = await request(port, "/api/sim");
+		log("⑨-1 /api/sim 无路径段 → 400 bff_path_missing", simBare.status === 400 && simBare.json?.message === "bff_path_missing", `${simBare.status} ${describe(simBare.json?.message)}`);
+
+		const simBareSlash = await request(port, "/api/sim/");
+		log("⑨-1 /api/sim/ 同样 400（不回落到网关 404，也不回 SPA HTML）", simBareSlash.status === 400 && simBareSlash.json?.message === "bff_path_missing", `${simBareSlash.status} ${describe(simBareSlash.headers.get("content-type"))}`);
+	});
+
+	// ⑨-2 / ⑨-3 / ⑨-5 白名单边界与出站头（allowWrite 关闭态）
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: "", NUXT_SIMULATOR_BASE_URL: simulatorBase }, async (port) => {
+		const stats = await request(port, "/api/sim/api/network/stats");
+		log("⑨-2 白名单内只读端点到达假仿真平台（200 且裸 JSON 已套信封）", stats.status === 200 && stats.json?.code === 0 && stats.json?.data?.node_count === 36, `${stats.status} node_count=${describe(stats.json?.data?.node_count)}`);
+
+		const inventory = await request(port, "/api/sim/api/network/runtime-inventory");
+		log("⑨-2 runtime-inventory 一次取全量（nodes / links 同包返回）", inventory.json?.data?.nodes?.length === 2 && inventory.json?.data?.links?.length === 1, `nodes=${describe(inventory.json?.data?.nodes?.length)} links=${describe(inventory.json?.data?.links?.length)}`);
+
+		const unknown = await request(port, "/api/sim/api/network/not-a-route");
+		log("⑨-2 白名单外路径 → 404 bff_resource_not_allowed", unknown.status === 404 && unknown.json?.message === "bff_resource_not_allowed", `${unknown.status} ${describe(unknown.json?.message)}`);
+
+		// 永久排除项（命令执行 / 无头浏览器 / 守护任务…）：解锁须另立 ADR，这里必须 404
+		const excluded = await Promise.all([
+			request(port, "/api/sim/api/browser/sessions"),
+			request(port, "/api/sim/api/network/nodes/n1/execute", { method: "POST" }),
+			request(port, "/api/sim/api/test/lldp")
+		]);
+		log("⑨-2 永久排除端点（browser / execute / test）→ 404 且不触达上游", excluded.every((res) => res.status === 404 && res.json?.message === "bff_resource_not_allowed"), excluded.map((res) => String(res.status)).join(" "));
+
+		const wrongVerb = await request(port, "/api/sim/api/network/runtime/nodes");
+		log("⑨-2 动词不符（GET 一个只登记 POST 的端点）→ 405 bff_method_not_allowed", wrongVerb.status === 405 && wrongVerb.json?.message === "bff_method_not_allowed", `${wrongVerb.status} ${describe(wrongVerb.json?.message)}`);
+
+		const traversal = await request(port, "/api/sim/api/network/%2e%2e%2fetc%2fpasswd");
+		log("⑨-3 路径穿越（%2e%2e%2f）→ 400 bff_path_invalid", traversal.status === 400 && traversal.json?.message === "bff_path_invalid", `${traversal.status} ${describe(traversal.json?.message)}`);
+
+		// ⑨-5 出站头：客户端自带的 authorization 与 nmcps_at cookie 都不许出网
+		const hitsBefore = simulator.log.length;
+		const withCreds = await request(port, "/api/sim/api/lldp/summary", {
+			headers: { authorization: "Bearer at-must-not-leak" },
+			cookie: "nmcps_at=at-must-not-leak"
+		});
+		const seen = simulator.log.slice(hitsBefore);
+		log("⑨-5 白名单只读端点带凭据请求仍到达上游（200）", withCreds.status === 200 && seen.length === 1, `${withCreds.status} hits=${seen.length}`);
+		log("⑨-5 出站头不含 authorization（不转发客户端令牌）", seen.length > 0 && seen.every((item) => item.headers.authorization === undefined), describe(seen[0]?.headers.authorization));
+		log("⑨-5 出站头不含 cookie（不读 nmcps_at 也不换 Bearer）", seen.length > 0 && seen.every((item) => item.headers.cookie === undefined), describe(seen[0]?.headers.cookie));
+	});
+
+	// ⑨-4 写开关：关闭态 405 且不触达上游；开启态到达上游
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: "", NUXT_SIMULATOR_BASE_URL: simulatorBase }, async (port) => {
+		const hitsBefore = simulator.log.length;
+		const writeOff = await request(port, "/api/sim/api/network/nodes/n1/start", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ force: true })
+		});
+		log("⑨-4 allowWrite=false → 写端点 405 simulator_write_disabled", writeOff.status === 405 && writeOff.json?.message === "simulator_write_disabled", `${writeOff.status} ${describe(writeOff.json?.message)}`);
+		log("⑨-4 allowWrite=false 的写请求不触达上游", simulator.log.length === hitsBefore, `hits=${simulator.log.length - hitsBefore}`);
+	});
+
+	await withBff({ NUXT_BFF_UPSTREAM_BASE: "", NUXT_SIMULATOR_BASE_URL: simulatorBase, NUXT_SIMULATOR_ALLOW_WRITE: "true" }, async (port) => {
+		const hitsBefore = simulator.log.length;
+		const writeOn = await request(port, "/api/sim/api/network/nodes/n1/start", {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: "Bearer at-must-not-leak" },
+			cookie: "nmcps_at=at-must-not-leak",
+			body: JSON.stringify({ force: true })
+		});
+		const seen = simulator.log.slice(hitsBefore);
+		log("⑨-4 allowWrite=true → 写端点到达假仿真平台（方法 / 路径原样）", writeOn.status === 200 && writeOn.json?.data?.ok === true && writeOn.json?.data?.method === "POST" && writeOn.json?.data?.path === "/api/network/nodes/n1/start", `${writeOn.status} ${describe(writeOn.json?.data?.path)}`);
+		log("⑨-4 allowWrite=true 的写调用出站仍无 authorization / cookie", seen.length > 0 && seen.every((item) => item.headers.authorization === undefined && item.headers.cookie === undefined), `${seen.length} 次`);
+	});
+
+	// ⑨-6 白名单 ⊆ openapi 快照：上游改名、漏登记、模板写错都在这里露头
+	const whitelist = readSimulatorWhitelist();
+	const snapshot = readSimulatorSnapshot();
+	const snapshotPaths = snapshot.paths ?? {};
+	const missing = whitelist.filter((entry) => !(snapshotPaths[entry.template] ?? []).includes(entry.method));
+
+	log("⑨-6 白名单条目可从源码抽取（抽取为空即红，避免「白名单被清空」的假绿）", whitelist.length > 0, `${whitelist.length} 条`);
+	log("⑨-6 白名单 ⊆ openapi 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.length ? missing.map((item) => `${item.method} ${item.template}`).join(", ") : `${whitelist.length}/${whitelist.length}`);
+	log("⑨-6 快照自身一致（pathCount = paths 键数，info.version 非空）", snapshot.pathCount === Object.keys(snapshotPaths).length && !!snapshot.info?.version, `${describe(snapshot.pathCount)} 条 / v${describe(snapshot.info?.version)} / 采集于 ${describe(snapshot._meta?.capturedAt)}`);
+
+	// 快照过期只告警不红：上游小版本不该把 CI 拖红（ARCH-002 §6.3）
+	const snapshotAgeDays = Math.floor((Date.now() - Date.parse(snapshot._meta?.capturedAt ?? "")) / 86_400_000);
+	if (Number.isFinite(snapshotAgeDays) && snapshotAgeDays > 180) {
+		console.warn(`⚠️  仿真平台 openapi 快照已 ${snapshotAgeDays} 天未刷新：NUXT_SIMULATOR_BASE_URL=<上游> pnpm check:bff --refresh-simulator-snapshot`);
+	}
+} finally {
+	await closeUpstream(simulator);
 }
 
 const passed = results.filter((item) => item.ok).length;

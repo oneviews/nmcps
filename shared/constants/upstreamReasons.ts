@@ -32,3 +32,24 @@ export const BFF_UPSTREAM_MESSAGES = {
 } as const;
 
 export type BffUpstreamMessage = (typeof BFF_UPSTREAM_MESSAGES)[keyof typeof BFF_UPSTREAM_MESSAGES];
+
+/**
+ * 仿真平台（第二上游）的失败词汇表：与主上游分开命名，前端不必靠状态码猜是哪条腿断了。
+ *
+ * 依据 NMCPS-ARCH-002 §6.5（layers/content/collections/cn/architecture/1.architecture/datasource-architecture.md）：
+ * 未配 `baseUrl` 与「未配主上游」同口径（503），但 message 不同 —— 通道未启用不是错误。
+ */
+export const SIMULATOR_MESSAGES = {
+	/** 运维未配置 `NUXT_SIMULATOR_BASE_URL`（通道未启用，页面退化为只读静态拓扑） */
+	notConfigured: "simulator_not_configured",
+	/** 仿真平台不可达（DNS / 连接被拒 / 掉线） */
+	unreachable: "simulator_unreachable",
+	/** 仿真平台在超时窗口内没有响应 */
+	timeout: "simulator_timeout",
+	/** `allowWrite: false` 时的写端点（直接 405，不触达上游） */
+	writeDisabled: "simulator_write_disabled",
+	/** 配置的基址不合法（拼接失败） */
+	baseInvalid: "simulator_base_invalid"
+} as const;
+
+export type SimulatorMessage = (typeof SIMULATOR_MESSAGES)[keyof typeof SIMULATOR_MESSAGES];
