@@ -10,6 +10,8 @@
 #   sh scripts/ci-doctor.sh fixtures [run-id]  # 产物回填成 scripts/fixtures/ci-logs/ 六份样本
 #   sh scripts/ci-doctor.sh drill [key]        # 真红演练：注入漂移 → 推临时提交 → 核对 ::error 注解 → 自动回滚
 #       也支持 `drill --keys lint,governance` / `drill --keys all` 一次演练多份样本
+#   sh scripts/ci-doctor.sh nightly [run-id]   # 核对每周一的定时演练：schedule 运行是否绿、PAT 到期体检报了什么、
+#                                             # origin/main 净变更为零、无残留漂移/未关 issue（只读）
 #   sh scripts/ci-doctor.sh all [run-id]
 #
 # 省略 run-id 时取最近一次运行。产物与日志目录已被 .gitignore 忽略。
@@ -29,7 +31,7 @@ set -eu
 
 usage() {
 	cat <<'EOF'
-用法：sh scripts/ci-doctor.sh [status|logs|artifacts|fixtures|drill|all] [参数]
+用法：sh scripts/ci-doctor.sh [status|logs|artifacts|fixtures|drill|nightly|all] [参数]
 
   status     最近运行的结论、每个 job 的结论与失败步骤（默认子命令）
   logs       拉全量日志到 ci-logs/runs/<id>/，统计 ✅/❌ 与「N/N 项通过」小结
@@ -42,6 +44,9 @@ usage() {
                默认 ui；--keys 一次演练多份（⑯ 每份一行明细，注解只放首行 + 「共 N 行」）
                会往 main 推两次提交，所以必须显式 --yes
                --dry-run 只注入 + 核对本地期望，不提交、不推送
+  nightly    核对每周一定时演练（只读）：schedule 触发的那次运行绿没绿、运行时到期体检报了什么、
+             演练 + 回滚后 origin/main 是否净变更为零、有没有残留漂移或未关的失败 issue
+               nightly [run-id]   省略 run-id 时只看最近一次 schedule 运行；还没有就报 ⏳ 并退出 1
   all        status + logs + artifacts
 
 需要：gh CLI 已登录（gh auth login），且当前目录是仓库根。
@@ -169,6 +174,149 @@ cmd_fixtures() {
 	echo
 	# exec 让 node 的退出码直接成为本脚本的退出码（有跳过项时是 1）
 	exec node scripts/check-ci-summary.mjs --from-ci "$run_id"
+}
+
+# ── nightly：核对每周一定时演练（只读：不推提交、不改样本）────────────────
+# 这条子命令就是「下周一之后人工核对」的脚本化，一次说清四件事：
+#   ① `schedule` 触发的那次运行绿没绿（`workflow_dispatch` 的手工演练不算数）；
+#   ② 运行里「到期体检」那一步报了什么（PAT 还剩几天 / 根本没有到期时间）；
+#   ③ 演练 + 回滚这一对提交之后，`origin/main` 的树是否回到演练之前（净变更为零）；
+#   ④ 六份样本上有没有残留 `# drill: 注入漂移`、有没有挂着未关的失败 issue。
+# 没有 schedule 运行时不假装绿：退出码 1 + ⏳ 说明「还没到第一次定时触发」，
+# 因为「没数据」和「通过」是两件事（与 `--expect` 同一条原则）。
+NIGHTLY_WORKFLOW=drill-nightly.yml
+NIGHTLY_ISSUE_TITLE='drill-nightly 失败：真红注解链路需要人工看一眼'
+NIGHTLY_MARKER='^# drill: 注入漂移'
+
+nightly_problems=0
+nightly_bad() {
+	nightly_problems=$((nightly_problems + 1))
+	echo "❌ $1"
+}
+
+cmd_nightly() {
+	run_id=${1:-}
+	given=1
+	if [ -z "$run_id" ]; then
+		given=0
+		# 只认 schedule：手工 `workflow_dispatch` 演练成功说明不了「每周一还在跑」
+		run_id=$(gh run list --workflow "$NIGHTLY_WORKFLOW" --event schedule --limit 1 \
+			--json databaseId --jq '.[0].databaseId // empty')
+	fi
+
+	echo "── 定时演练 #${run_id:-（无）}"
+	if [ -z "$run_id" ]; then
+		echo "⏳ 还没有 \`schedule\` 触发的运行（每周一 03:00 UTC；今天还没到第一次）"
+		echo "   这次核对无从下结论——别把它当通过，也别关掉这个待办"
+		echo "   手工演练查别的运行：sh scripts/ci-doctor.sh nightly <run-id>"
+		exit 1
+	fi
+
+	# event 与 conclusion 一起取：手工运行即便绿了，event 也会是 workflow_dispatch
+	event=$(gh run view "$run_id" --json event --jq .event)
+	conclusion=$(gh run view "$run_id" --json conclusion --jq '.conclusion // .status')
+	gh run view "$run_id" --json workflowName,event,headSha,status,conclusion,url,createdAt \
+		--jq '"workflow: \(.workflowName)\nevent:    \(.event)\ncommit:   \(.headSha[0:7])\nstatus:   \(.status) \(if .conclusion then "/ " + .conclusion else "" end)\nurl:      \(.url)\nstarted:  \(.createdAt)"'
+
+	if [ "$event" != schedule ]; then
+		echo "⚠️  这次是 $event 触发，不是 schedule；定时链路仍未验证"
+	fi
+	if [ "$conclusion" != success ]; then
+		nightly_bad "运行 #$run_id 结论是 $conclusion"
+		failed=$(gh run view "$run_id" --json jobs \
+			--jq '[.jobs[].steps[] | select(.conclusion == "failure") | "  - \(.name)"] | .[]')
+		if [ -n "$failed" ]; then
+			printf '%s\n' "$failed"
+		fi
+		echo "   产物 drill-log / 步骤摘要里有明细：sh scripts/ci-doctor.sh logs $run_id"
+	fi
+
+	echo
+	echo "── 到期体检（PAT 还剩几天）"
+	# 日志里既有真输出，也有 GitHub 回显的脚本源码，回显行带颜色转义——但 `gh run view --log` 给的是
+	# caret 记法（字面 `^[[36;1m`）而不是 ESC 字节，所以两种都当回显整行剔掉，
+	# 否则脚本里那句「401 就该报错」的文字会被当成真的报了错
+	preflight=$(gh run view "$run_id" --log 2>/dev/null \
+		| grep -a 'Warn early when DRILL_TOKEN' \
+		| grep -av -e "$(printf '\033')" -e '\^\[\[' \
+		| grep -aoE 'DRILL_TOKEN (到期时间|没有到期时间|距离到期还有|还有|已失效|已过期)[^\r]*|无法体检 DRILL_TOKEN[^\r]*|解析不了 DRILL_TOKEN[^\r]*' \
+		| sed 's/[[:space:]]*$//' | sort -u || true)
+	if [ -n "$preflight" ]; then
+		printf '%s\n' "$preflight" | sed 's/^/  /'
+	else
+		nightly_bad "这次运行里没找到到期体检的输出（步骤缺失或被跳过）"
+	fi
+
+	echo
+	echo "── origin/main 收尾状态"
+	# 状态检查统一看一个 ref：默认 origin/main；DOCTOR_REF 只给自测用（能用本地 fabricate 的
+	# ref 把「残留漂移 / 没回滚 / 树不一致」这些分支真跑一遍，而不用往线上推垃圾提交）
+	ref=${DOCTOR_REF:-origin/main}
+	if [ "$ref" = origin/main ]; then
+		git fetch -q origin main
+	fi
+	echo "  tip: $(git log -1 --format='%h %s' "$ref")"
+	ref_short=$(git rev-parse --short=7 "$ref")
+
+	hit=''
+	# `-r` 不能省（少了它 ls-tree 只吐目录名）；这里与 drill-nightly 的兜底步骤看同一批文件
+	for f in $(git ls-tree -r --name-only "$ref" -- scripts/fixtures/ci-logs | grep '\.log$' || true); do
+		if git show "$ref:$f" | grep -q "$NIGHTLY_MARKER"; then
+			hit="$hit $f"
+		fi
+	done
+	if [ -n "$hit" ]; then
+		nightly_bad "$ref_short 上有残留漂移：$hit"
+	else
+		echo "  ✅ 六份样本没有残留 marker"
+	fi
+
+	# 净变更为零的硬证据：回滚提交的树 == 演练提交的父提交的树
+	rev=$(git log -1 --format=%H --grep='^revert(ci): 演练回滚' "$ref" || true)
+	if [ -z "$rev" ]; then
+		nightly_bad "$ref_short 上找不到演练的回滚提交（演练可能没回滚）"
+	elif ! drift=$(git rev-parse "$rev^" 2>/dev/null); then
+		nightly_bad "回滚提交 $(git log -1 --format=%h "$rev") 没有父提交"
+	else
+		pre=$(git rev-parse "$drift^" 2>/dev/null || true)
+		drift_subj=$(git log -1 --format=%s "$drift")
+		rev_subj=$(git log -1 --format=%s "$rev")
+		case "$drift_subj" in
+			'test(ci): 真红演练'*) ;;
+			*) nightly_bad "回滚提交的父提交不是演练提交：$drift_subj" ;;
+		esac
+		back_to=$(printf '%s' "$rev_subj" | sed -n 's/.*回到 \([0-9a-f]\{7,\}\).*/\1/p')
+		if [ -n "$pre" ] && [ "$(git rev-parse "$rev^{tree}")" = "$(git rev-parse "$pre^{tree}")" ]; then
+			echo "  ✅ 回滚 $(git log -1 --format=%h "$rev") 的树 == 演练前 $(git log -1 --format=%h "$pre") 的树（净变更为零）"
+		else
+			nightly_bad "回滚后的树与演练前不一致（演练留下了内容变更）"
+		fi
+		if [ -n "$back_to" ] && [ -n "$pre" ] \
+			&& [ "$back_to" != "$(git rev-parse --short=7 "$pre")" ]; then
+			nightly_bad "回滚提交写的「回到 $back_to」与演练前提交 $(git rev-parse --short=7 "$pre") 不符"
+		fi
+	fi
+
+	open=$(gh issue list --state open --search "$NIGHTLY_ISSUE_TITLE in:title" \
+		--json number,title --jq '.[] | "#\(.number) \(.title)"' || true)
+	if [ -n "$open" ]; then
+		nightly_bad "还挂着未关的失败 issue（演练失败过，人工还没接手）"
+		printf '%s\n' "$open" | sed 's/^/    /'
+	else
+		echo "  ✅ 没有未关的 drill-nightly 失败 issue"
+	fi
+
+	echo
+	if [ "$nightly_problems" -eq 0 ]; then
+		if [ "$given" = 1 ]; then
+			echo "✅ nightly 体检通过（运行 #$run_id 与 origin/main 收尾状态都正常）"
+		else
+			echo "✅ nightly 体检通过（定时运行 #$run_id green，origin/main 净变更为零，无残留漂移/未关 issue）"
+		fi
+		exit 0
+	fi
+	echo "❌ nightly 体检发现 $nightly_problems 个问题（逐条见上）"
+	exit 1
 }
 
 # ── drill：真红演练（唯一会推提交的子命令）──────────────────────────────
@@ -487,7 +635,7 @@ cmd_drill() {
 
 cmd=${1:-status}
 case "$cmd" in
-	status | logs | artifacts | fixtures | drill | all)
+	status | logs | artifacts | fixtures | drill | nightly | all)
 		if [ "$#" -gt 0 ]; then
 			shift
 		fi
@@ -506,6 +654,14 @@ esac
 # drill 不需要 run-id（它自己 push、自己找运行），也不该被 resolve_run 的「最近一次运行」污染
 if [ "$cmd" = drill ]; then
 	cmd_drill "$@"
+	exit $?
+fi
+
+# nightly 同理自己找运行（只认 schedule），别被 resolve_run 的「最近一次运行」带偏
+if [ "$cmd" = nightly ]; then
+	need_gh
+	echo "repo: $(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+	cmd_nightly "${1:-}"
 	exit $?
 fi
 

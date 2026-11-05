@@ -58,6 +58,13 @@
 //      且该 step 的 `run:` 块里不许出现 `${{ }}` —— 那样本地把它抠出来复现会 `Bad substitution`
 //      （实测踩过一次），插值一律走 env（`$GITHUB_REPOSITORY` 等）。
 //
+// 一个「定时演练核对」断言（下周一之后别靠手敲 gh 去核对）：
+//   ㉓ `sh scripts/ci-doctor.sh nightly [run-id]`：登记在 usage 与 dispatch 里；只认 `--event schedule`
+//      触发（手工 workflow_dispatch 绿了说明不了定时链路还在跑）；还没有 schedule 运行时报 ⏳ 并 exit 1
+//      （「没数据」不许当「通过」）；用 `^{tree}` 对比证明回滚后净变更为零（只看 commit message 会漏掉
+//      「回滚提交夹带了别的改动」）；残留 marker 扫描用 `git ls-tree -r`；且它必须只读——核对工具
+//      一旦会 git commit / git push，就会改动被核对的对象。
+//
 // 重采样（两条路，都不需要手抄日志）：
 //   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
@@ -687,9 +694,13 @@ try {
 } catch {}
 const drillAt = doctorSrc.indexOf("cmd_drill()");
 const drillBody = drillAt === -1 ? "" : doctorSrc.slice(drillAt);
+// dispatch 的 case 列表会随子命令增长（`status | logs | … | nightly | all`），所以按结构取成员，
+// 不钉字面量——新增一个子命令不该让「drill 已登记」这条断言变红
+const dispatchArms = [...doctorSrc.matchAll(/^\t([a-z]+(?: \| [a-z]+)*)\)$/gm)]
+	.flatMap((m) => m[1].split(" | "));
 const drillMiss = [
 	/^\s*drill\s+真红演练/m.test(doctorSrc) ? "" : "usage 里没有 drill 子命令的说明（sh scripts/ci-doctor.sh --help 应列出它）",
-	/status \| logs \| artifacts \| fixtures \| drill \| all\)/.test(doctorSrc) ? "" : "dispatch 的 case 列表没接纳 drill（子命令会落进「未知子命令」）",
+	dispatchArms.includes("drill") ? "" : "dispatch 的 case 列表没接纳 drill（子命令会落进「未知子命令」）",
 	/^\s*trap drill_cleanup EXIT$/m.test(doctorSrc) ? "" : "缺 trap drill_cleanup EXIT：中途失败会把漂移留在 main 上",
 	/--yes/.test(drillBody) && /必须显式同意/.test(drillBody) ? "" : "没有 --yes 闸门：不加确认就会往 main 推提交",
 	/^DRILL_BRANCH=main$/m.test(doctorSrc) ? "" : "DRILL_BRANCH 不是 main（ci.yml 只在 push main 时跑）",
@@ -773,6 +784,59 @@ wiring(
 	`${NIGHTLY} 的 DRILL_TOKEN 有效期体检（读 expiration 头 / ≤N 天只 warn / 401 或已过期才红 / 抖动不阻断 / 排在演练前 / run 块无 \${{ }}）`,
 	expiryMiss.length === 0,
 	expiryMiss.join("\n")
+);
+
+// ㉓ 定时演练的「核对」入口：`sh scripts/ci-doctor.sh nightly` 把「下周一之后人工核对」从五个手敲的
+// gh 调用变成一句命令。钉七件事——登记在 usage 与 dispatch 里；只认 `--event schedule`（手工
+// workflow_dispatch 绿了说明不了定时链路还在跑）；还没有 schedule 运行时报 ⏳ 并 exit 1（「没数据」
+// 不许当「通过」，同 `--expect` 的原则）；用 `^{tree}` 对比证明回滚后净变更为零（只看 commit message
+// 会漏掉「回滚提交里夹带了别的改动」）；残留 marker 扫描用 `ls-tree -r`（少 `-r` 只吐目录名，
+// 「没有残留漂移」会变成假话）；只读——它自己不能 git commit / git push，否则核对工具会改动被核对的对象。
+const auditAt = doctorSrc.indexOf("cmd_nightly()");
+// 结束边界取 drill 那一节的标题注释，不是 `cmd_drill()`：`drill_cleanup()` 定义在 cmd_drill 之前，
+// 按 `cmd_drill()` 切会把「git commit / git push」那些行算进 nightly 的只读检查里
+const auditEndAt = doctorSrc.indexOf("# ── drill：");
+const auditBody = auditAt === -1
+	? ""
+	: doctorSrc.slice(auditAt, auditEndAt === -1 ? undefined : auditEndAt);
+// 「还没有 schedule 运行」那条分支要从**带 ⏳ 的那个** if 块取：文件里还有一处同名判断是
+// 「解析 run-id」，它当然没有 exit 1
+const auditNoRunBlock = (() => {
+	for (let from = 0; ;) {
+		const at = auditBody.indexOf("if [ -z \"$run_id\" ]; then", from);
+		if (at === -1)
+			return "";
+		const end = auditBody.indexOf("\n\tfi\n", at);
+		const block = end === -1 ? "" : auditBody.slice(at, end);
+		if (block.includes("⏳"))
+			return block;
+		from = at + 1;
+	}
+})();
+const auditMiss = [
+	/^\s*nightly\s+核对每周一定时演练/m.test(doctorSrc) ? "" : "usage 里没有 nightly 子命令的说明",
+	dispatchArms.includes("nightly") ? "" : "dispatch 的 case 列表没接纳 nightly（子命令会落进「未知子命令」）",
+	auditBody === "" ? "找不到 cmd_nightly()：核对入口根本没实现" : "",
+	/--event schedule/.test(auditBody)
+		? ""
+		: "没有把运行范围限到 `--event schedule`：手工 workflow_dispatch 的绿也会被当成「定时链路正常」",
+	auditNoRunBlock !== "" && /exit 1/.test(auditNoRunBlock)
+		? ""
+		: "还没有 schedule 运行时的分支不是 exit 1：没数据会被显示成通过（与 `--expect` 同一条原则）",
+	/rev\^\{tree\}/.test(auditBody) && /pre\^\{tree\}/.test(auditBody)
+		? ""
+		: "没有用 `^{tree}` 对比回滚前后的树：只看 commit message 会漏掉「回滚提交夹带了别的改动」",
+	/ls-tree -r/.test(auditBody)
+		? ""
+		: "残留 marker 扫描没用 `git ls-tree -r`：少 `-r` 时只吐目录名，循环扫不到 .log，「没有残留漂移」是假话",
+	/\bgit\s+(?:push|commit|add)\b/.test(auditBody)
+		? "nightly 会往仓库写东西：核对工具不许改动被核对的对象（它必须是只读的）"
+		: ""
+].filter(Boolean);
+wiring(
+	`${DOCTOR} 的 nightly 核对入口（登记 / 只认 schedule / 没数据不假绿 / ^{tree} 证净变更为零 / ls-tree -r / 只读）`,
+	auditMiss.length === 0,
+	auditMiss.join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);
