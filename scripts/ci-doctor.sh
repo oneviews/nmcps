@@ -47,6 +47,7 @@ usage() {
   nightly    核对每周一定时演练（只读）：schedule 触发的那次运行绿没绿、运行时到期体检报了什么、
              演练 + 回滚后 origin/main 是否净变更为零、有没有残留漂移或未关的失败 issue
                nightly [run-id]   省略 run-id 时只看最近一次 schedule 运行；还没有就报 ⏳ 并退出 1
+                                 （同时自查定时是否被停用、默认分支上有没有 cron）
   all        status + logs + artifacts
 
 需要：gh CLI 已登录（gh auth login），且当前目录是仓库根。
@@ -206,8 +207,28 @@ cmd_nightly() {
 
 	echo "── 定时演练 #${run_id:-（无）}"
 	if [ -z "$run_id" ]; then
-		echo "⏳ 还没有 \`schedule\` 触发的运行（每周一 03:00 UTC；今天还没到第一次）"
+		echo "⏳ 还没有 \`schedule\` 触发的运行（cron 每周一 03:00 UTC）"
 		echo "   这次核对无从下结论——别把它当通过，也别关掉这个待办"
+		# 干等着是最坏的结果：把「为什么没触发」当场查掉，否则下次、下下次还是同一句 ⏳，
+		# 分不清到底是「没到时间」还是「定时任务已被停用 / 默认分支上没有 cron」
+		state=$(gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/actions/workflows/$NIGHTLY_WORKFLOW" \
+			--jq .state 2>/dev/null) || state=查不到
+		case $state in
+		active)
+			echo "   工作流状态：active（cron 确实在册，等触发即可）"
+			;;
+		disabled_inactivity | disabled_manually)
+			echo "   ❌ 工作流状态：$state——定时任务没在跑：gh workflow enable $NIGHTLY_WORKFLOW"
+			echo "      （仓库 60 天无活动会被 GitHub 自动停用；disabled_manually 是被人手动关的）"
+			;;
+		*)
+			echo "   ⚠️  工作流状态：$state（查不到时先确认 gh 权限，别直接判成「还没到时间」）"
+			;;
+		esac
+		nref=${DOCTOR_REF:-origin/main}
+		cron=$(git show "$nref:.github/workflows/$NIGHTLY_WORKFLOW" 2>/dev/null \
+			| grep -m1 -o "cron: '[^']*'") || cron=''
+		echo "   $nref 上的调度：${cron:-读不到——确认 .github/workflows/$NIGHTLY_WORKFLOW 已在默认分支上}"
 		echo "   手工演练查别的运行：sh scripts/ci-doctor.sh nightly <run-id>"
 		exit 1
 	fi

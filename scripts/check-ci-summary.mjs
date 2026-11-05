@@ -823,6 +823,11 @@ const auditMiss = [
 	auditNoRunBlock !== "" && /exit 1/.test(auditNoRunBlock)
 		? ""
 		: "还没有 schedule 运行时的分支不是 exit 1：没数据会被显示成通过（与 `--expect` 同一条原则）",
+	// 光报 ⏳ 分不清「没到时间」和「定时任务早被停了 / 默认分支上没有 cron」，那这只待办会一直挂着
+	// 没人能判。诊断可以只读：工作流 state 走 API，cron 从默认分支上的工作流文件里读。
+	/disabled_inactivity/.test(auditNoRunBlock) && /git show/.test(auditNoRunBlock)
+		? ""
+		: "⏳ 分支没自查「定时被停用 / 默认分支上没有 cron」：没触发时分不清是还没到时间，还是定时任务早就停了",
 	/rev\^\{tree\}/.test(auditBody) && /pre\^\{tree\}/.test(auditBody)
 		? ""
 		: "没有用 `^{tree}` 对比回滚前后的树：只看 commit message 会漏掉「回滚提交夹带了别的改动」",
@@ -834,7 +839,7 @@ const auditMiss = [
 		: ""
 ].filter(Boolean);
 wiring(
-	`${DOCTOR} 的 nightly 核对入口（登记 / 只认 schedule / 没数据不假绿 / ^{tree} 证净变更为零 / ls-tree -r / 只读）`,
+	`${DOCTOR} 的 nightly 核对入口（登记 / 只认 schedule / 没数据不假绿 / ⏳ 时自查定时是否被停用 / ^{tree} 证净变更为零 / ls-tree -r / 只读）`,
 	auditMiss.length === 0,
 	auditMiss.join("\n")
 );
