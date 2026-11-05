@@ -37,7 +37,7 @@ pnpm typecheck        # type check
 pnpm lint             # ESLint (including i18n key order)
 pnpm check:doc-system # doc-system guard (seven assertions: uniqueness / completeness / closure / acyclicity / tier validity / staleness / CN-EN parity)
 pnpm check:doc-system:selftest # guard self-test: plant four kinds of drift on a temp copy and assert the guard goes red (so an assertion cannot be silently neutered)
-pnpm check:ci-summary # step-summary self-test: twenty assertions pinning ci-summary.sh's `--expect` contract, the wiring of all seven call sites in ci.yml (regexes live only in scripts/ci-expectations.sh), a replay of the real-log fixtures in scripts/fixtures/ci-logs/ (with a sha256 manifest and a provenance check for artifact backfills), an `::error` annotation whenever any assertion reddens (so the Checks page names the failing assertion itself), and the wiring of `scripts/ci-doctor.sh drill` (usage / dispatch / trap rollback / `--yes` / main-only push)
+pnpm check:ci-summary # step-summary self-test: twenty assertions pinning ci-summary.sh's `--expect` contract, the wiring of all seven call sites in ci.yml (regexes live only in scripts/ci-expectations.sh), a replay of the real-log fixtures in scripts/fixtures/ci-logs/ (with a sha256 manifest and a provenance check for artifact backfills), an `::error` annotation whenever any assertion reddens (so the Checks page names the failing assertion itself), and the wiring of `scripts/ci-doctor.sh drill` (usage / dispatch / trap rollback / `--yes` / main-only push / `--keys` batching)
 pnpm check:i18n       # copy self-check (ten assertion groups: key sets / no CJK in en values / value shape / placeholders / system-page references / site-wide t() references / no CJK in templates)
 pnpm build:server     # build the BFF artifact first; check:bff consumes .output/server
 pnpm check:bff        # BFF gateway contract (allowlists / verbs / traversal / CORS / envelope / readiness probe / SSE, per NMCPS-ADR-0007 and NMCPS-ADR-0010)
@@ -70,10 +70,14 @@ When something is red, start from the Checks annotations: every failed assertion
 The annotation path has to prove itself periodically, otherwise "a drifted sample turns CI red" is just belief:
 
 ```bash
-sh scripts/ci-doctor.sh drill ui --dry-run   # inject + check the local expectation only, no commit, no push
-sh scripts/ci-doctor.sh drill ui --yes       # full drill: push, compare against the Checks annotation, auto-rollback
+sh scripts/ci-doctor.sh drill ui --dry-run            # inject + check the local expectation only, no commit, no push
+sh scripts/ci-doctor.sh drill ui --yes                # full drill: push, compare against the Checks annotation, auto-rollback
+sh scripts/ci-doctor.sh drill --keys all --dry-run    # drift all six samples, exercising the folded "N detail lines" message
+sh scripts/ci-doctor.sh drill --keys lint,governance --yes
 ```
 
 `drill` appends one drifted line to `scripts/fixtures/ci-logs/<key>.log` (body only, never the `# source:` line — so it trips ⑯, not ⑰), pushes a temporary commit, waits for that run to redden, compares that commit's failure annotation with the expectation generated locally on the spot, then rolls back and drives the rollback run back to green. The expectation is never hardcoded, so changing assertion wording does not invalidate the drill. `key` defaults to `ui`; `--yes` is mandatory (it pushes two commits to main); it requires a clean worktree and `HEAD == origin/main`.
+
+`--keys a,b,c` (or `--keys all`) drills several samples at once: ⑯ emits one detail line per drifted sample, while the annotation keeps only the **first** line plus `（共 N 行明细，见日志）`, so a batch drill also covers the folded-message path — a single-sample drill only ever has one detail line and cannot. The comparison is not "one matching annotation is enough": the whole expected annotation set is `diff`ed against the observed set, so a missing line, an extra line or a dropped fold all redden. It still produces exactly one annotation, so GitHub's 10-error-annotations-per-step cap is out of reach for sample drift — the script warns only when the observed count exceeds 10, rather than pretending the cap was verified.
 
 It is **not** a fifth refresh entry point: the sample was never broken — it is broken on purpose and repaired again. So the drill has exactly one legal end state: clean worktree, `HEAD == origin/main`, rollback run `success` with 0 failure annotations. If any of that fails, `drill` exits 1 itself (and a `trap` rolls back if it crashes mid-way).

@@ -680,10 +680,13 @@ const drillMiss = [
 	/--yes/.test(drillBody) && /必须显式同意/.test(drillBody) ? "" : "没有 --yes 闸门：不加确认就会往 main 推提交",
 	/^DRILL_BRANCH=main$/m.test(doctorSrc) ? "" : "DRILL_BRANCH 不是 main（ci.yml 只在 push main 时跑）",
 	/git push -[a-z-]*f\b|--force/.test(doctorSrc) ? "出现了 force push：演练永远不许强推，回滚要用一次正常提交" : "",
+	/--keys/.test(drillBody) ? "" : "没有 --keys 批量演练：一次只能验一份样本，⑯ 的「共 N 行明细」折行路径永远验不到",
+	/diff -q "\$tmp_exp"/.test(drillBody) ? "" : "注解比对退化成单条匹配：批量演练时「少一条 / 多一条 / 明细折行丢了」都不会被发现",
+	/git checkout "\$drill_pre" -- \$drill_files/.test(drillBody) ? "" : "回滚只还原一份样本：批量演练会把剩下的漂移留在 main 上",
 	/check-ci-summary\.mjs/.test(drillBody) && !/::error title=步骤摘要自测失败/.test(doctorSrc) ? "" : "期望注解不是本地现场生成（drill 应调 check-ci-summary.mjs，且不许硬编码注解文案）"
 ].filter(Boolean);
 wiring(
-	`${DOCTOR} 的 drill 接线（usage / dispatch / trap 回滚 / --yes / 只推 main / 期望文案现场生成）`,
+	`${DOCTOR} 的 drill 接线（usage / dispatch / trap 回滚 / --yes / 只推 main / --keys 批量 / 期望文案现场生成）`,
 	drillMiss.length === 0,
 	drillMiss.join("\n")
 );

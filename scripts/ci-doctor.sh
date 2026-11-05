@@ -9,6 +9,7 @@
 #   sh scripts/ci-doctor.sh artifacts [run-id] # 产物 → ci-logs/downloads/<id>/
 #   sh scripts/ci-doctor.sh fixtures [run-id]  # 产物回填成 scripts/fixtures/ci-logs/ 六份样本
 #   sh scripts/ci-doctor.sh drill [key]        # 真红演练：注入漂移 → 推临时提交 → 核对 ::error 注解 → 自动回滚
+#       也支持 `drill --keys lint,governance` / `drill --keys all` 一次演练多份样本
 #   sh scripts/ci-doctor.sh all [run-id]
 #
 # 省略 run-id 时取最近一次运行。产物与日志目录已被 .gitignore 忽略。
@@ -20,6 +21,10 @@
 # 「哪条断言红了、哪份样本漂了」，核对文案后自己回滚。期望文案由本地 `check-ci-summary.mjs`
 # 现场生成、不硬编码，所以改断言措辞不会让演练失效。它会往 main 推两次提交（演练 + 回滚），
 # 必须先加 --yes；`--dry-run` 只做注入与期望文案核对，不提交、不推送。
+# `--keys a,b,c` / `--keys all` 一次演练多份样本：⑯ 会给每份漂移样本一行明细，而注解只放
+# 首行 + 「共 N 行明细，见日志」，所以批量演练额外验证了「多明细折行」这条路径（单份演练永远
+# 只有一行明细，验不到）。注意它仍然只产出一条注解——GitHub 每步 10 条 error 注解的上限靠
+# 样本漂移撞不到，脚本只在实测条数 >10 时告警，不假装验过。
 set -eu
 
 usage() {
@@ -31,11 +36,12 @@ usage() {
   artifacts  下载全部产物到 ci-logs/downloads/<id>/，列出文件与大小
   fixtures   把产物回填成 scripts/fixtures/ci-logs/ 的六份样本（会改仓库里的样本与 sha256 清单；
              只取结论为 success 的步骤，等价于 node scripts/check-ci-summary.mjs --from-ci）
-  drill      真红演练：往样本注入一处漂移，推一次临时提交，等 CI 打出 ::error 注解并与本地
-             期望文案逐字核对，然后自动回滚、把回滚那次运行跑到绿
-               drill [key] [--yes] [--dry-run]
-               key 默认 ui；会往 main 推两次提交，所以必须显式 --yes
-               --dry-run 只注入 + 核对本地期望文案，不提交、不推送
+  drill      真红演练：往样本注入漂移，推一次临时提交，等 CI 打出 ::error 注解并与本地现场
+             生成的期望逐字核对，然后自动回滚、把回滚那次运行跑到绿
+               drill [key|--keys a,b,c|all] [--yes] [--dry-run]
+               默认 ui；--keys 一次演练多份（⑯ 每份一行明细，注解只放首行 + 「共 N 行」）
+               会往 main 推两次提交，所以必须显式 --yes
+               --dry-run 只注入 + 核对本地期望，不提交、不推送
   all        status + logs + artifacts
 
 需要：gh CLI 已登录（gh auth login），且当前目录是仓库根。
@@ -189,13 +195,18 @@ drill_cleanup() {
 	status=$?
 	if [ "${drill_committed:-0}" = 1 ] && [ "${drill_reverted:-0}" != 1 ]; then
 		echo "⚠️  演练提交还在 $DRILL_BRANCH 上，开始回滚：$(drill_short "${drill_sha:-}")" >&2
-		git checkout "$drill_pre" -- "$drill_file" 2>/dev/null || true
-		if git commit -q -m "revert(ci): 演练回滚 $drill_key.log（真红注解已验证，回到 $(drill_short "$drill_pre")）"; then
+		# shellcheck disable=SC2086  # drill_files 是刻意用空格分隔的列表
+		git checkout "$drill_pre" -- $drill_files 2>/dev/null || true
+		if git commit -q -m "revert(ci): 演练回滚 $drill_keylabel（真红注解已验证，回到 $(drill_short "$drill_pre")）"; then
 			drill_reverted=1
-			git push -q origin "$DRILL_BRANCH" || echo "❌ 回滚推送失败：请确认 $drill_file 已回到 $(drill_short "$drill_pre") 后手工推送" >&2
+			git push -q origin "$DRILL_BRANCH" || echo "❌ 回滚推送失败：请确认 $drill_files 已回到 $(drill_short "$drill_pre") 后手工推送" >&2
 		fi
 	elif [ "${drill_dirty:-0}" = 1 ]; then
-		git checkout -- "$drill_file" 2>/dev/null || true
+		# shellcheck disable=SC2086
+		git checkout -- $drill_files 2>/dev/null || true
+	fi
+	if [ -n "${tmp_exp:-}" ]; then
+		rm -f "$tmp_exp" "${tmp_obs:-}"
 	fi
 	exit "$status"
 }
@@ -232,27 +243,88 @@ drill_annotations() {
 
 
 cmd_drill() {
-	key=$DRILL_KEY_DEFAULT
+	keys=$DRILL_KEY_DEFAULT
 	yes=0
 	dry=0
-	for arg in "$@"; do
-		case "$arg" in
-			--yes | -y) yes=1 ;;
-			--dry-run) dry=1 ;;
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--yes | -y)
+				yes=1
+				shift
+				;;
+			--dry-run)
+				dry=1
+				shift
+				;;
+			--keys)
+				if [ "$#" -lt 2 ]; then
+					echo "❌ --keys 后面要跟 key 列表（lint,governance）或 all" >&2
+					exit 2
+				fi
+				keys=$2
+				shift 2
+				;;
+			--keys=*)
+				keys=${1#--keys=}
+				shift
+				;;
 			-*)
-				echo "❌ drill 不认识的参数：$arg（用法：drill [key] [--yes] [--dry-run]）" >&2
+				echo "❌ drill 不认识的参数：$1（用法：drill [key] [--keys a,b,c|all] [--yes] [--dry-run]）" >&2
 				exit 2
 				;;
-			*) key=$arg ;;
+			*)
+				keys=$1
+				shift
+				;;
 		esac
 	done
 
-	file="scripts/fixtures/ci-logs/$key.log"
-	if [ ! -f "$file" ]; then
-		echo "❌ 没有这份样本：$file" >&2
-		echo "   可用 key：$(ls scripts/fixtures/ci-logs/*.log | sed 's#.*/##; s#\.log##' | tr '\n' ' ')" >&2
+	available=$(cd scripts/fixtures/ci-logs 2>/dev/null && ls *.log 2>/dev/null | sed 's/\.log$//') || available=""
+	if [ -z "$available" ]; then
+		echo "❌ 找不到任何样本：scripts/fixtures/ci-logs/*.log" >&2
 		exit 2
 	fi
+	if [ "$keys" = all ]; then
+		keys=$(printf '%s' "$available" | paste -sd, -)
+	fi
+
+	# key 列表 → 文件列表。一次演练多份样本时，⑯ 会给每份一行明细，
+	# 而注解只放首行 + 「共 N 行明细，见日志」——批量演练正好把这条折行路径也验到。
+	drill_files=""
+	drill_keylabel=""
+	seen=" "
+	old_ifs=$IFS
+	IFS=,
+	for k in $keys; do
+		IFS=$old_ifs
+		if [ -z "$k" ]; then
+			IFS=,
+			continue
+		fi
+		case "$seen" in
+			*" $k "*)
+				IFS=,
+				continue
+				;;
+		esac
+		f="scripts/fixtures/ci-logs/$k.log"
+		if [ ! -f "$f" ]; then
+			echo "❌ 没有这份样本：$f" >&2
+			echo "   可用 key：$(printf '%s' "$available" | tr '\n' ' ')" >&2
+			exit 2
+		fi
+		seen="$seen$k "
+		drill_files="$drill_files $f"
+		drill_keylabel="$drill_keylabel${drill_keylabel:+,}$k"
+		IFS=,
+	done
+	IFS=$old_ifs
+	drill_files=${drill_files# }
+	if [ -z "$drill_files" ]; then
+		echo "❌ key 列表是空的：$keys" >&2
+		exit 2
+	fi
+	drill_count=$(printf '%s\n' $drill_files | wc -l | tr -d ' ')
 
 	need_gh
 
@@ -279,31 +351,40 @@ cmd_drill() {
 		exit 1
 	fi
 
-	drill_key=$key
-	drill_file=$file
 	drill_committed=0
 	drill_reverted=0
 	drill_dirty=0
+	tmp_exp=""
 	trap drill_cleanup EXIT
 
-	echo "── 真红演练：$file（基线 $(drill_short "$drill_pre")）"
+	echo "── 真红演练：$drill_keylabel（$drill_count 份样本，基线 $(drill_short "$drill_pre")）"
 	# 漂移只动正文：追加一行，不碰 `# source:`（改头部会同时踩 ⑰，就不是 ⑯ 单点了）
-	printf '# drill: 注入漂移 %s（随后自动回滚）\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$file"
+	stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	for f in $drill_files; do
+		printf '# drill: 注入漂移 %s（随后自动回滚）\n' "$stamp" >>"$f"
+		echo "  已注入漂移：$f 尾部多一行（字节变、出处不变 → ⑯ 该红）"
+	done
 	drill_dirty=1
-	echo "  已注入漂移：$file 尾部多一行（字节变、出处不变 → ⑯ 该红）"
 
-	expected=$(node scripts/check-ci-summary.mjs 2>&1 | grep -a '::error title=' | head -n 1 || true)
-	if [ -z "$expected" ]; then
+	tmp_exp=$(mktemp)
+	tmp_obs=$(mktemp)
+	local_errors=$(node scripts/check-ci-summary.mjs 2>&1 | grep -a '::error title=' || true)
+	if [ -z "$local_errors" ]; then
 		echo "❌ 本地跑不出期望注解：注入后 check-ci-summary 没红？先让本地自测自身绿了再演练" >&2
 		exit 1
 	fi
-	rest=${expected#::error title=}
-	expected_title=$(drill_unescape "${rest%%::*}")
-	expected_msg=$(drill_unescape "${rest#*::}")
-	expected_line="$expected_title | $expected_msg"
-	echo "  期望注解（本地现场生成）："
-	echo "    标题：$expected_title"
-	echo "    正文：$expected_msg"
+	printf '%s\n' "$local_errors" | while IFS= read -r line; do
+		rest=${line#::error title=}
+		printf '%s | %s\n' "$(drill_unescape "${rest%%::*}")" "$(drill_unescape "${rest#*::}")"
+	done >"$tmp_exp"
+	sort -o "$tmp_exp" "$tmp_exp"
+	expected_count=$(wc -l <"$tmp_exp" | tr -d ' ')
+	echo "  期望注解（本地现场生成，$expected_count 条）："
+	sed 's/^/    /' "$tmp_exp"
+	if [ "$expected_count" -gt 10 ]; then
+		echo "  ⚠️  本地红了 $expected_count 条断言：GitHub 每步只收 10 条 error 注解，超出的上不了 Checks 页" >&2
+	fi
+
 
 	if [ "$dry" = 1 ]; then
 		echo "  --dry-run：到此为止，不提交、不推送（工作区已回滚）"
@@ -314,10 +395,11 @@ cmd_drill() {
 		exit 2
 	fi
 
-	git add "$file"
+	# shellcheck disable=SC2086  # drill_files 是空格分隔的列表
+	git add $drill_files
 	git commit -q \
-		-m "test(ci): 真红演练：$key.log 注入漂移，验证 ::error 注解上到 Checks（自动回滚）" \
-		-m "期望注解：$expected"
+		-m "test(ci): 真红演练：$drill_keylabel 注入漂移，验证 ::error 注解上到 Checks（自动回滚）" \
+		-m "期望注解（$expected_count 条）：$(tr '\n' ';' <"$tmp_exp")"
 	drill_sha=$(git rev-parse HEAD)
 	drill_committed=1
 	echo
@@ -336,29 +418,35 @@ cmd_drill() {
 	else
 		echo "    （一条都没有）"
 	fi
-	observed_line=$(printf '%s\n' "$observed" | grep -aF "$expected_title | " | head -n 1 || true)
+	# 标题为空的那条是 Runner 的兜底（Process completed with exit code 1.），不算断言的注解
+	: >"$tmp_obs"
+	if [ -n "$observed" ]; then
+		printf '%s\n' "$observed" | grep -av '^ | ' >"$tmp_obs" || true
+	fi
+	sort -o "$tmp_obs" "$tmp_obs"
+	observed_count=$(wc -l <"$tmp_obs" | tr -d ' ')
 
 	drill_fail=0
 	if [ "$drill_conclusion" != failure ]; then
 		echo "❌ 演练运行没变红（$drill_conclusion）：样本漂了却没让 ⑯ 红，演练无效" >&2
 		drill_fail=1
 	fi
-	if [ -z "$observed_line" ]; then
-		echo "❌ 没有一条 failure 注解的标题以期望标题开头：$expected_title" >&2
-		drill_fail=1
-	elif [ "$observed_line" != "$expected_line" ]; then
-		echo "❌ 注解标题对上了，正文不一致：" >&2
-		echo "   期望：$expected_msg" >&2
-		echo "   实测：${observed_line#* | }" >&2
-		drill_fail=1
+	if [ "$observed_count" -gt 10 ]; then
+		echo "⚠️  实测 $observed_count 条注解：超过 GitHub 每步 10 条上限，Checks 页上会被截断" >&2
+	fi
+	if diff -q "$tmp_exp" "$tmp_obs" >/dev/null 2>&1; then
+		echo "  ✅ 注解与本地期望逐字一致（$expected_count 条，标题 + 正文）"
 	else
-		echo "  ✅ 注解与本地期望逐字一致（标题 + 正文）"
+		echo "❌ 注解集合与本地期望不一致：期望 $expected_count 条 / 实测 $observed_count 条" >&2
+		diff -u "$tmp_exp" "$tmp_obs" 2>/dev/null | tail -n +3 | sed 's/^/   /' >&2 || true
+		drill_fail=1
 	fi
 
 	echo
 	echo "── 回滚"
-	git checkout "$drill_pre" -- "$file"
-	git commit -q -m "revert(ci): 演练回滚 $key.log（真红注解已验证，回到 $(drill_short "$drill_pre")）"
+	# shellcheck disable=SC2086
+	git checkout "$drill_pre" -- $drill_files
+	git commit -q -m "revert(ci): 演练回滚 $drill_keylabel（真红注解已验证，回到 $(drill_short "$drill_pre")）"
 	revert_sha=$(git rev-parse HEAD)
 	drill_reverted=1
 	git push -q origin "$DRILL_BRANCH"
@@ -381,11 +469,13 @@ cmd_drill() {
 
 	echo
 	echo "── 演练结论"
-	printf '  样本        %s\n' "$file"
+	printf '  样本        %s（%s 份）\n' "$drill_keylabel" "$drill_count"
 	printf '  基线提交    %s\n' "$(drill_short "$drill_pre")"
 	printf '  演练提交    %s（run %s → %s）\n' "$(drill_short "$drill_sha")" "$drill_run" "$drill_conclusion"
-	printf '  期望注解    %s\n' "$expected_line"
-	printf '  实测注解    %s\n' "${observed_line:-（无）}"
+	printf '  期望注解    %s 条：\n' "$expected_count"
+	sed 's/^/                /' "$tmp_exp"
+	printf '  实测注解    %s 条：\n' "$observed_count"
+	sed 's/^/                /' "$tmp_obs"
 	printf '  回滚提交    %s（run %s → %s，failure 注解 %s 条）\n' "$(drill_short "$revert_sha")" "$revert_run" "$revert_conclusion" "$leftover"
 	if [ "$drill_fail" != 0 ]; then
 		echo "  ❌ 演练失败：注解链路哪里断了，看上面的对比" >&2
