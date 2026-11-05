@@ -33,6 +33,7 @@ export const DOC_PATHS = {
 	"NMCPS-ADR-0016": "layers/content/collections/cn/records/adr/adr-0016.md",
 	"NMCPS-ADR-0017": "layers/content/collections/cn/records/adr/adr-0017.md",
 	"NMCPS-ADR-0018": "layers/content/collections/cn/records/adr/adr-0018.md",
+	"NMCPS-ADR-0019": "layers/content/collections/cn/records/adr/adr-0019.md",
 	"NMCPS-ARCH-001": "layers/content/collections/cn/architecture/1.architecture/transport-architecture.md",
 	"NMCPS-ARCH-002": "layers/content/collections/cn/architecture/1.architecture/datasource-architecture.md",
 	"NMCPS-ARCH-003": "layers/content/collections/cn/architecture/1.architecture/iam-architecture.md",
