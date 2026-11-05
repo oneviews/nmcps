@@ -16,9 +16,9 @@
 #   lint        → `$ eslint .`（eslint 成功时不打印 N/N 小结，只能断言「命令真的跑了」）
 #   typecheck   → `$ vue-tsc -b --pretty`（同上）
 #   i18n        → `✅ 文案自查 10/10 通过`
-#   governance  → `结果：967 通过 / 0 失败 / 0 告警`（check:doc-system 的小结）
-#   bff         → `106/106 项通过`
-#   ui          → `116/116 项通过`
+#   governance  → `结果：1009 通过 / 0 失败 / 0 告警`（check:doc-system 的小结）
+#   bff         → `127/127 项通过`
+#   ui          → `130/130 项通过`
 set -eu
 
 KEYS='lint typecheck i18n governance bff ui'

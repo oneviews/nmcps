@@ -15,7 +15,7 @@ authority: normative
 scope:
   - domain.topology
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -174,10 +174,12 @@ tags:
 | A2 | 拓扑页渲染出 `TopologyCanvas` | 选择器命中 `[data-testid="topology-canvas"]`，SVG 内 `circle`/`path` 数量 > 0 |
 | A3 | 选中节点后详情栏出现该节点指标 | 点击节点 → 右栏出现 `TrendChart`，且请求 `/api/metric/datapoint` 带该节点 `mgmt_ip` |
 | A4 | 空拓扑渲染空态而非空白画布 | 假上游返回 `nodes: []` → 出现空态文案，`topology-canvas` 不存在 |
-| A5 | 8888 掉线降级 | 关闭假上游 → 出现错误态 `UAlert` + 重试按钮，页面不白屏 |
+| A5 | 8888 掉线降级 | 关闭假上游 → 点工具栏「刷新拓扑」→ 出现错误态 `UAlert` + 重试按钮，页面不白屏；上游恢复后点「重试」回到拓扑。**不整页 reload**：掉线时重载会让会话探测一起失败，被守卫送回登录页，断言的就不是本页的错误态了 |
 | A6 | 仿真未配置时只读 | 不设 `NUXT_SIMULATOR_BASE_URL` → 拓扑正常渲染，仿真动作按钮全部 `disabled` |
-| A7 | 写端点被拒 | `allowWrite=false` 时点击（或直接请求）`/api/sim/api/network/links/{id}/down` 返回 405 |
+| A7 | 写端点被拒 | 两层门槛，顺序固定（路径白名单 → 通道是否启用 → 写权限）：通道未配置先短路成 503 `simulator_not_configured`；通道已配置而 `allowWrite` 仍为默认 false 时返回 405 `simulator_write_disabled`，且该请求不触达上游 |
 | A8 | 不做全站失效 | A6 / A7 场景下 `/ready` 仍 200 且 `upstream.configured === true` |
+
+> **落地状态（2026-11-05）**：A1 / A2 / A4 / A5 / A6 / A7 / A8 已由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `130/130` 全绿。A7 的精确面放在「仿真通道已配置」的对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失，同时断言「已配置但未开写」的 405 且假仿真平台侧零写命中）—— 只测「未配置」等于没测过通道接通。**A3 仍未落地**（选中节点 → `TrendChart` + `/api/metric/datapoint`），随指标页 P1 补齐后再进断言表；本页目前只有结构视图与仿真标记叠加，LLDP 邻接分区、设备/链路台账侧栏、告警角标同样属 P1。
 
 ---
 
@@ -187,3 +189,4 @@ tags:
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化拓扑监控领域基准（定位、功能范围、数据实体、边界、演进）。 |
 | 2026-11-05 | 0.2.0 | 按 `NMCPS-ADR-0019` 落实码前义务 1：补三页的 2.0 落点、数据源（8888 七个端点 + 8001 只读/写白名单 + 本地引擎空集）、图形形态（`TopologyCanvas` / `TrendChart` / `SparkStat`）、八种空态与降级态、8 条验收断言；`dependsOn` 增加 `NMCPS-ARCH-006`（`NMCPS-ADR-0019` 只作正文引用，Tier 2 normative 不 `dependsOn` Tier 5 记录层）。 |
+| 2026-11-05 | 0.3.0 | **`monitor` 页落码**（`layers/topology/app/pages/topology/monitor.vue`）：结构来自 `GET /api/topology/graph`，仿真运行态来自 8001 `runtime-inventory` / `stats`（按管理 IP 对齐后叠加虚线外环标记）；取数内核 `useTopologyMonitor()` 30s 轮询 + 页面不可见暂停，主上游失败走页面级错误、仿真通道失败只降级仿真区块。图形落 `app/components/Graph/{TopologyCanvas,SparkStat}.vue` + `app/utils/graph/{topologyNormalize,topologyLayout,topologyStatusStyle,simulatorOverlay}.ts`（纯函数）+ `app/composables/useGraphInteraction.ts`（拖拽 / 缩放，无 rAF）。§九 补落地状态：A1/A2/A4~A8 已进 `check:ui`，A3 与 LLDP / 台账 / 告警角标留 P1。 |

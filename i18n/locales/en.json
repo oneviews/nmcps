@@ -172,7 +172,67 @@
 		},
 		"topology-monitor": {
 			"description": "Display network connection topology.",
-			"title": "Topology Monitor"
+			"title": "Topology Monitor",
+			"refresh": "Refresh topology",
+			"canvasLabel": "Network topology graph",
+			"cropped": "Trimmed {nodes} nodes / {links} links",
+			"stats": {
+				"nodes": "Nodes",
+				"links": "Links",
+				"combos": "Groups",
+				"simulated": "Simulated nodes"
+			},
+			"empty": {
+				"title": "No topology data for this tenant",
+				"body": "The upstream /topology/graph returned an empty node set: this is not a load failure, and there are no links to draw. Retry later."
+			},
+			"error": {
+				"title": "Failed to load topology",
+				"retry": "Retry"
+			},
+			"degraded": {
+				"disabledTitle": "Simulation control is not enabled",
+				"disabledBody": "NUXT_SIMULATOR_BASE_URL is not configured: the topology stays read-only, and simulation markers plus the LLDP section are unavailable.",
+				"unreachableTitle": "Simulator unreachable",
+				"unreachableBody": "The read-only sections keep rendering; simulation markers and the LLDP section are unavailable for now ({reason}). The readiness probe is unaffected."
+			},
+			"simControls": {
+				"linkDown": "Link down",
+				"nodeRestart": "Restart node",
+				"disabled": "Simulation control is not enabled (simulator not configured)",
+				"unreachable": "Simulator unreachable, retry later",
+				"loading": "Probing the simulator channel…",
+				"readOnly": "Read-only: the simulation write entry lands with P1-B"
+			},
+			"detail": {
+				"title": "Node detail",
+				"empty": "Select a node on the canvas to see its detail",
+				"ip": "Management IP",
+				"tier": "Tier",
+				"category": "Category",
+				"simulated": "Simulated",
+				"notSimulated": "This node is not part of the simulator runtime",
+				"simUnavailable": "Simulator channel unavailable, cannot tell whether it is simulated",
+				"simName": "Simulator name",
+				"simStatus": "Simulator status"
+			},
+			"legend": {
+				"title": "Legend",
+				"simulatedHint": "A dashed outer ring marks a node coming from the simulator runtime (8001)."
+			},
+			"status": {
+				"online": "Online",
+				"warning": "Warning",
+				"critical": "Critical",
+				"offline": "Offline",
+				"unknown": "Unknown",
+				"degraded": "Degraded",
+				"congested": "Congested",
+				"switching": "Flapping"
+			},
+			"zoomIn": "Zoom in",
+			"zoomOut": "Zoom out",
+			"zoomReset": "Reset view"
 		},
 		"topology-device-metrics": {
 			"description": "Real-time device telemetry: CPU / memory / traffic",

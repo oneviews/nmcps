@@ -7,7 +7,7 @@
 // 该实例必须自己配好 `NUXT_BFF_UPSTREAM_BASE`，否则登录与「上游就绪」用例必然失败。
 // 环境变量：CHECK_UI_BASE_URL、CHECK_UI_ACCOUNT、CHECK_UI_PASSWORD、CHECK_UI_SCREENSHOT（截图输出路径）。
 import { chromium } from "playwright";
-import { closeUpstream, freePort, HOST, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { closeUpstream, freePort, HOST, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 const ACCOUNT = process.env.CHECK_UI_ACCOUNT ?? "alice";
 const PASSWORD = process.env.CHECK_UI_PASSWORD ?? "p@ssw0rd";
@@ -1568,7 +1568,184 @@ if (upstreamPort) {
 	await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
 }
 
-// 11. Tauri 宿主模拟（NMCPS-ARCH-005 §7）：真实桌面壳（`pnpm tauri:dev`）需要图形环境，无头 CI 跑不起来，
+// 11. 拓扑监控（NMCPS-DESIGN-001 §九 A1~A8）：页面接两条通道 —— 8888 `/api/topology/graph`
+// 与 8001 `/api/sim/api/network/runtime-inventory`。本段锁四件事：画得出来、空拓扑走空态、
+// 主上游掉线只降级不白屏、仿真通道未配置时页面照常只读且 `/ready` 不变红。
+// A4 / A5 依赖假上游的 `__control/topology-*` 与 `__control/down`，外部实例模式无法构造，故只在自建模式跑。
+{
+	await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+	await page.waitForTimeout(600);
+
+	const topoPath = new URL(page.url()).pathname;
+	const topoText = await page.evaluate(() => document.body.textContent ?? "");
+	log(
+		"A1 /topology/monitor 可达且标题来自 i18n",
+		topoPath === "/topology/monitor" && topoText.includes("拓扑监测"),
+		`${topoPath} / ${topoText.includes("拓扑监测") ? "标题已渲染" : "未见标题"}`
+	);
+
+	const shapes = await page.evaluate(() => {
+		const svg = document.querySelector("[data-testid='topology-canvas']");
+		return svg
+			? { circles: svg.querySelectorAll("circle").length, paths: svg.querySelectorAll("path").length }
+			: null;
+	});
+	log(
+		"A2 拓扑渲染出 canvas（节点 circle + 链路 path > 0）",
+		!!shapes && shapes.circles > 0 && shapes.paths > 0,
+		shapes ? `circles=${shapes.circles} paths=${shapes.paths}` : "未找到 [data-testid='topology-canvas']"
+	);
+
+	// A6：自建实例没有 `NUXT_SIMULATOR_BASE_URL` → 拓扑照常渲染，仿真动作整体 disabled 且有降级说明
+	const simProbe = await page.evaluate(() => ({
+		canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+		actions: Array.from(document.querySelectorAll("[data-testid='sim-action']")).map((el) => el.hasAttribute("disabled")),
+		degraded: !!document.querySelector("[data-testid='sim-degraded']"),
+		text: document.body.textContent ?? ""
+	}));
+	log("A6 仿真未配置时拓扑照常渲染", simProbe.canvas, simProbe.canvas ? "canvas 存在" : "canvas 缺失");
+	log(
+		"A6 仿真未配置时动作按钮全部 disabled",
+		simProbe.actions.length === 2 && simProbe.actions.every(Boolean),
+		`buttons=${simProbe.actions.length} disabled=${simProbe.actions.filter(Boolean).length}`
+	);
+	log(
+		"仿真未配置时给出「未启用」降级说明",
+		simProbe.degraded && simProbe.text.includes("仿真控制未启用"),
+		simProbe.degraded ? "已提示" : "无降级条"
+	);
+
+	// A7：写端点在 `allowWrite=false`（默认）时被拒，且不触达上游。自建实例连仿真平台都没配，
+	// 通道在 `baseUrl` 这一步就短路成 503 `simulator_not_configured`（处理顺序：路径白名单 → 通道
+	// 是否启用 → 写权限），所以这里只能断言「默认配置下写不出去」；精确的 405 断言放在 11.1 的
+	// 「通道已配置」实例里，两者合起来才是完整的写入口语义。
+	const writeResponse = await page.request.post(`${BASE_URL}/api/sim/api/network/links/l1/down`, { data: {} }).catch(() => null);
+	const writeJson = writeResponse ? await writeResponse.json().catch(() => null) : null;
+	const writeBlocked = (writeResponse?.status() === 405 && writeJson?.message === "simulator_write_disabled")
+		|| (writeResponse?.status() === 503 && writeJson?.message === "simulator_not_configured");
+	log(
+		"A7 默认配置下写端点被拒（405 写关闭 / 503 通道未启用）",
+		writeBlocked,
+		writeResponse ? `${writeResponse.status()} ${writeJson?.message ?? ""}` : "请求失败"
+	);
+
+	// A8：仿真未配置 / 写被拒都不许把就绪探针拉红
+	const readyResponse = await page.request.get(`${BASE_URL}/ready`).catch(() => null);
+	const readyJson = readyResponse ? await readyResponse.json().catch(() => null) : null;
+	log(
+		"A8 仿真通道不可用不影响 /ready",
+		readyResponse?.status() === 200 && readyJson?.upstream?.configured === true,
+		readyResponse ? `${readyResponse.status()} configured=${readyJson?.upstream?.configured}` : "无响应"
+	);
+
+	if (upstreamPort) {
+		// A4：上游回空节点集 → 空态而不是空白画布
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(400);
+		const emptyProbe = await page.evaluate(() => ({
+			empty: !!document.querySelector("[data-testid='topology-empty']"),
+			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+			text: document.body.textContent ?? ""
+		}));
+		log(
+			"A4 空拓扑渲染空态而非空白画布",
+			emptyProbe.empty && !emptyProbe.canvas && emptyProbe.text.includes("暂无拓扑数据"),
+			`empty=${emptyProbe.empty} canvas=${emptyProbe.canvas}`
+		);
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-full`);
+
+		// A5：8888 掉线 → 页面级错误态 + 重试按钮，页面不白屏；恢复后重试能回到拓扑。
+		// 这里**不整页 reload**：掉线时重载会让会话探测也失败、被守卫送回登录页，
+		// 断言的就不是拓扑页的错误态了。改为点工具栏「刷新拓扑」走同一条取数路径。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/down`);
+		await page.getByRole("button", { name: "刷新拓扑" }).click();
+		await page.waitForTimeout(1500);
+		const downProbe = await page.evaluate(() => ({
+			error: !!document.querySelector("[data-testid='topology-error']"),
+			text: document.body.textContent ?? ""
+		}));
+		log(
+			"A5 主上游掉线出错误态 + 重试（不白屏）",
+			downProbe.error && downProbe.text.includes("加载拓扑失败") && downProbe.text.includes("重试"),
+			`error=${downProbe.error}`
+		);
+
+		await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
+		await page.getByRole("button", { name: "重试" }).first().click();
+		await page.waitForTimeout(1500);
+		const recovered = await page.evaluate(() => !!document.querySelector("[data-testid='topology-canvas']"));
+		log("A5 上游恢复后点重试可回到拓扑", recovered, recovered ? "已恢复" : "仍无 canvas");
+	}
+}
+
+// 11.1 仿真通道**已配置**的对照面（只有自建模式能拉起假仿真平台）：另起一个带
+// `NUXT_SIMULATOR_BASE_URL` 的 BFF，断言「仿真中」标记真的落到对齐的节点上（虚线外环 2 个）、
+// 未配置时的降级条消失。这条是 A6 的反向证明 —— 只测「未配置」等于没测过通道接通。
+if (upstreamPort) {
+	const simPort = await freePort();
+	const simulatorServer = await startSimulator(simPort);
+	const simBffPort = await freePort();
+	const simBffBase = `http://${HOST}:${simBffPort}`;
+	const simBff = await startBff(simBffPort, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		NUXT_SIMULATOR_BASE_URL: `http://${HOST}:${simPort}`
+	});
+
+	try {
+		const simContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const simPage = await simContext.newPage();
+		await simPage.goto(`${simBffBase}/auth/login`, { waitUntil: "networkidle" });
+		await simPage.locator("input[autocomplete='username']").fill(ACCOUNT);
+		await simPage.locator("input[type='password']").fill(PASSWORD);
+		await simPage.locator("button[type='submit']").first().click();
+		await simPage.waitForURL((url) => url.pathname !== "/auth/login", { timeout: 20_000 }).catch(() => {});
+		await simPage.goto(`${simBffBase}/topology/monitor`, { waitUntil: "networkidle" });
+		await simPage.waitForTimeout(800);
+
+		const probe = await simPage.evaluate(() => ({
+			degraded: !!document.querySelector("[data-testid='sim-degraded']"),
+			markers: document.querySelectorAll("[data-testid='topology-canvas'] circle[stroke-dasharray]").length,
+			text: document.body.textContent ?? ""
+		}));
+		log(
+			"仿真通道已配置时按管理 IP 对齐并叠加「仿真中」标记",
+			!probe.degraded && probe.markers === 2,
+			`markers=${probe.markers} degraded=${probe.degraded}`
+		);
+		log(
+			"仿真通道已配置时不再显示降级条",
+			!probe.text.includes("仿真控制未启用"),
+			probe.text.includes("仿真控制未启用") ? "仍提示未启用" : "无降级提示"
+		);
+
+		// A7 的精确面：通道已配置、`NUXT_SIMULATOR_ALLOW_WRITE` 仍是默认 false → 必须 405
+		// `simulator_write_disabled`，且这个被拒的写请求**不**出现在假仿真平台的请求日志里。
+		const writeHitsBefore = simulatorServer.log.length;
+		const writeOff = await simPage.request.post(`${simBffBase}/api/sim/api/network/links/l1/down`, { data: {} }).catch(() => null);
+		const writeOffJson = writeOff ? await writeOff.json().catch(() => null) : null;
+		log(
+			"仿真通道已配置时写端点仍 405 simulator_write_disabled",
+			writeOff?.status() === 405 && writeOffJson?.message === "simulator_write_disabled",
+			writeOff ? `${writeOff.status()} ${writeOffJson?.message ?? ""}` : "请求失败"
+		);
+		// 只数写请求：页面每 30s 仍会轮询只读端点，用「非 GET」判断才不会误报。
+		const writesReachedUpstream = simulatorServer.log
+			.slice(writeHitsBefore)
+			.filter((entry) => entry.method !== "GET")
+			.length;
+		log(
+			"被 405 拦下的写请求不触达仿真平台",
+			writesReachedUpstream === 0,
+			`写请求命中共 ${writesReachedUpstream} 次`
+		);
+		await simContext.close();
+	} finally {
+		await stopBff(simBff);
+		await closeUpstream(simulatorServer);
+	}
+}
+
 // 但 `isTauri()` 只读 `globalThis.isTauri`；注入这一位 + 一个最小 IPC 桩，就能走到与桌面壳同一份运行时分支：
 // 侧栏应出现「平台能力」分组，分组下正好 5 个探针入口。桌面模式下 BFF 不回写 cookie（令牌走
 // `tauri-plugin-store`），所以这里另起一个带 `NUXT_PUBLIC_BFF_BASE` 的实例，并把桩 store 落 sessionStorage，

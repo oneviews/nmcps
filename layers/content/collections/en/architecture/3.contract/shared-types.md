@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.shared-types
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -88,8 +88,9 @@ shared/
 | `AuthUser` / `AuthTokens` / `AuthLoginPayload` / `AuthLoginResult` / `AuthRefreshResult` / `AuthSessionState` | `shared/types/auth.ts` | `/api/v1/auth` contract: field names stay upstream camelCase (`accountCode` / `accountLevel` / `sessionId`…) with **no snake_case conversion**; the BFF only normalises the error envelope's `msg` into `message` and passes business fields through verbatim; missing semantics (e.g. login has no `displayName`) are `null`, never a look-alike field |
 
 | `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` / `SimulatorNetworkStats` / `SimulatorLldpSummary` / `SimulatorLldpNeighbor` / `SimulatorSessionList` / `SimulatorSessionStatus` / `SimulatorMetricsSummary` / `SimulatorMetricsCurrent` | `shared/types/simulator.ts` | 8001 simulator entity contract, fields stay upstream `snake_case`; see §6 of this contract |
+| `TopologyGraph` / `TopologyGraphNode` / `TopologyGraphLink` / `TopologyCombo` / `TopologyGraphQuery` | `shared/types/topology.ts` | 8888 `GET /topology/graph` contract: a node `id` is its management IP, `status` uses the numeric `1/2/0` convention and link `bandwidth` is measured as `0`; see §7 of this contract |
 
-> As S2 domain baselines land, `metric` / `topology` contract types will migrate into `shared/types/`; this contract registers them as they evolve.
+> As S2 domain baselines land, `metric` contract types will migrate into `shared/types/`; this contract registers them as they evolve (`topology` landed on 2026-11-05).
 
 ---
 
@@ -184,10 +185,31 @@ export interface SimulatorRuntimeLink {
 
 ---
 
-## 7. Changelog
+## 7. 8888 Topology Graph Contract (`shared/types/topology.ts`)
+
+The topology structure on `/topology/monitor` comes from the primary upstream `GET /api/v1/topology/graph` (BFF `/api/topology/graph`). Field shapes come from the 1.0 read-only consumer of that **same** endpoint (2026-10-14: 36 nodes / 47–48 links / 3 combos, see `normalizeTopologyInput()` in `_reference/nmcps-v1/shared/connector/topologyAdapt.ts`); it is a different channel from the 8001 runtime inventory (§6).
+
+| Object | Measured shape | Implementation notes |
+| :--- | :--- | :--- |
+| Envelope | Either flat or wrapped in one `data` level; after the BFF gateway wraps it in `ApiResponse`, `data` is the graph object | Pages only read `data` and never unwrap the envelope themselves |
+| Node | `id` (**management IP**) / `name` \| `hostname` \| `label` / `ip` / `category` / `type` / `status` / `tier` / `icon` / `brand` / `color` / `sysDescr` | `id` is an IP, so the display name falls back `name → hostname → label → id`; `tier` was only ever 2 / 4 |
+| `status` | Numeric convention `1=online / 2=warning / 0=offline`, but strings also appear | Normalisation lives in `app/utils/graph/topologyNormalize.ts`; the type layer never guesses |
+| Link | `source` / `target` / `bandwidth` / `linkType` / `status` / `bandwidth_util_pct` / `sourcePort` / `targetPort` | Both key names `edges` / `links` have appeared; `bandwidth` is measured as **0 everywhere** (no real value) ⇒ pages must not render 0 as bandwidth |
+| Combo | `combos[]` (3 measured), fields not surveyed one by one | Counted by `id` only; it does not feed the layout |
+
+Three hard rules:
+
+1. **No renaming, no default filling**: normalisation (status → union, `tier` default, display-name fallback) happens only in pure functions such as `app/utils/graph/topologyNormalize.ts`; the type layer keeps the wire format.
+2. **`0` is not "absent"**: `bandwidth: 0` means "not measured", not "zero bandwidth"; this family follows the §4 null semantics, so missing means `null`.
+3. **Unsurveyed fields are not declared**: further `combos` fields and the `sysDescr` encoding get added after measurement — always change this document before the type (§4 forward compatibility).
+
+---
+
+## 8. Changelog
 
 | Date | Version | Change |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: shared types contract (naming, organization, reuse constraints, existing types). |
 | 2026-10-31 | 0.2.0 | Registered `shared/types/api.ts` and `shared/types/auth.ts`: verbatim upstream fields, `msg` → `message` normalisation, missing means `null`. |
 | 2026-11-05 | 0.3.0 | Added "§6 Simulator entity contract": registered the `shared/types/simulator.ts` type list (`SimulatorHealth` / `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` / `SimulatorNetworkStats` / `SimulatorLldpSummary` / `SimulatorLldpNeighbor` / `SimulatorSessionList` / `SimulatorSessionStatus` / `SimulatorMetricsSummary` / `SimulatorMetricsCurrent`), fixed the family's five exceptions (snake_case pass-through, unit-bearing fields stay strings, explicit `\| null`, `SimulatorOpaqueObject` for unsurveyed sub-objects, enums separate from the wire format with an `unknown` fallback), and recorded the measured key shapes. Lands ADR-0019 §7 obligation 3. |
+| 2026-11-05 | 0.4.0 | Added "§7 8888 topology graph contract" and landed `shared/types/topology.ts` (`TopologyGraph` / `TopologyGraphNode` / `TopologyGraphLink` / `TopologyCombo` / `TopologyGraphQuery` plus three status unions). §5 now registers the family, and `shared/types/simulator.ts` was created with the §6.3 measured shapes — the earlier registration described a file that did not exist yet, so this release pays that docs-first debt down. Three rules went into the prose: a node `id` is its management IP (alignment with the 8001 inventory goes through `ip_address`), `bandwidth: 0` means "not measured" rather than zero bandwidth, and further `combos` fields are added only after measurement. |

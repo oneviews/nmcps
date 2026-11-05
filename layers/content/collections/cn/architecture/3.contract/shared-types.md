@@ -1,8 +1,8 @@
 ---
 docId: NMCPS-CONTRACT-001
 title: "共享类型契约"
-description: "共享类型契约（contract.shared-types）的 Tier 3 契约基准：跨模块共享类型的命名规范、目录组织、复用规则与禁 any / null 语义硬约束，登记 `/api/v1/auth` 契约类型（`shared/types/auth.ts`）与仿真平台实体类型（`shared/types/simulator.ts`）。本文是 contract.shared-types 域的唯一权威。"
-excerpt: "跨模块共享类型的命名规范、目录组织、复用规则与仿真平台实体契约基准。"
+description: "共享类型契约（contract.shared-types）的 Tier 3 契约基准：跨模块共享类型的命名规范、目录组织、复用规则与禁 any / null 语义硬约束，登记 `/api/v1/auth` 契约类型（`shared/types/auth.ts`）、仿真平台实体类型（`shared/types/simulator.ts`）与 8888 拓扑图契约（`shared/types/topology.ts`）。本文是 contract.shared-types 域的唯一权威。"
+excerpt: "跨模块共享类型的命名规范、目录组织、复用规则与仿真平台 / 拓扑图契约基准。"
 keywords:
   - "contract"
   - "shared-types"
@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.shared-types
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -88,8 +88,9 @@ shared/
 | `ApiResponse` / `ApiStatus` / `ApiError` | `shared/types/api.ts` / `shared/utils/apiGuard.ts` | 统一响应信封与类型守卫 |
 | `AuthUser` / `AuthTokens` / `AuthLoginPayload` / `AuthLoginResult` / `AuthRefreshResult` / `AuthSessionState` | `shared/types/auth.ts` | `/api/v1/auth` 契约：字段名沿用上游 camelCase（`accountCode` / `accountLevel` / `sessionId`…），**不做蛇形转换**；BFF 只把错误信封的 `msg` 归一为 `message`，业务字段一律透传保真；缺失语义（如登录返回不含 `displayName`）一律填 `null`，不用近义字段顶替 |
 | `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` / `SimulatorNetworkStats` / `SimulatorLldpSummary` / `SimulatorLldpNeighbor` / `SimulatorSessionList` / `SimulatorSessionStatus` / `SimulatorMetricsSummary` / `SimulatorMetricsCurrent` | `shared/types/simulator.ts` | 8001 仿真平台实体契约，字段沿用上游 `snake_case`，口径见本契约 §六 |
+| `TopologyGraph` / `TopologyGraphNode` / `TopologyGraphLink` / `TopologyCombo` / `TopologyGraphQuery` | `shared/types/topology.ts` | 8888 `GET /topology/graph` 契约：节点 `id` 是管理 IP、`status` 数值口径 `1/2/0`、链路 `bandwidth` 实测全为 `0`，口径见本契约 §七 |
 
-> 随着 S2 领域基准落地，`metric` / `topology` 等契约类型将迁入 `shared/types/`，本契约随演进同步登记。
+> 随着 S2 领域基准落地，`metric` 等契约类型将迁入 `shared/types/`，本契约随演进同步登记（`topology` 已于 2026-11-05 落盘）。
 
 ---
 
@@ -184,10 +185,31 @@ export interface SimulatorRuntimeLink {
 
 ---
 
-## 七、变更记录
+## 七、8888 拓扑图契约（`shared/types/topology.ts`）
+
+`/topology/monitor` 的拓扑结构来自主上游 `GET /api/v1/topology/graph`（BFF `/api/topology/graph`）。字段口径取自 1.0 对**同一端点**的只读实测消费（2026-10-14：36 节点 / 47~48 链路 / 3 combos，见 `_reference/nmcps-v1/shared/connector/topologyAdapt.ts` 的 `normalizeTopologyInput()`），与 8001 运行态台账（§六）是两条通道。
+
+| 对象 | 实测形状 | 落码要点 |
+| :--- | :--- | :--- |
+| 信封 | 可能平铺，也可能包一层 `data`；BFF 网关统一包成 `ApiResponse` 后 `data` 即图对象 | 页面只认 `data`，不再自行解信封 |
+| 节点 | `id`（**管理 IP**）/ `name` \| `hostname` \| `label` / `ip` / `category` / `type` / `status` / `tier` / `icon` / `brand` / `color` / `sysDescr` | `id` 是 IP，展示名要按 `name → hostname → label → id` 兜底；`tier` 实测只有 2 / 4 |
+| `status` | 数值口径 `1=在线 / 2=告警 / 0=离线`，也会直接给字符串 | 归一在 `app/utils/graph/topologyNormalize.ts`，类型层不猜 |
+| 链路 | `source` / `target` / `bandwidth` / `linkType` / `status` / `bandwidth_util_pct` / `sourcePort` / `targetPort` | 两种键名 `edges` / `links` 都出现过；`bandwidth` 实测**全为 0**（真值缺失）⇒ 页面不得把 0 当带宽展示 |
+| 组合 | `combos[]`（实测 3 个），字段未逐项取证 | 只按 `id` 计数，不参与布局 |
+
+三条硬约束：
+
+1. **不改字段名、不补默认值**：归一（状态 → 联合类型、`tier` 缺省、展示名兜底）只发生在 `app/utils/graph/topologyNormalize.ts` 这类纯函数里，类型层保留线格式。
+2. **`0` 不是缺省**：`bandwidth: 0` 表示上游没测到，不是「零带宽」；本族沿用 §四 的 null 语义，缺失一律 `null`。
+3. **契约未取证的部分不设字段**：`combos` 的其余字段、`sysDescr` 的编码都在取证后追加，必须先改本文再改类型（§四 向前兼容）。
+
+---
+
+## 八、变更记录
 
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化共享类型契约（命名规范、目录组织、复用硬约束、现有类型清单）。 |
 | 2026-10-31 | 0.2.0 | 登记 `shared/types/api.ts` 与 `shared/types/auth.ts`：明确上游字段透传保真、`msg` → `message` 归一、缺失即 `null`。 |
 | 2026-11-05 | 0.3.0 | 增「§六 仿真平台实体契约」：登记 `shared/types/simulator.ts` 的类型清单（`SimulatorHealth` / `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` / `SimulatorNetworkStats` / `SimulatorLldpSummary` / `SimulatorLldpNeighbor` / `SimulatorSessionList` / `SimulatorSessionStatus` / `SimulatorMetricsSummary` / `SimulatorMetricsCurrent`），固化本族五条例外口径（snake_case 透传、带单位字段保持 string、可空显式 `\| null`、未取证子对象用 `SimulatorOpaqueObject`、枚举与线格式分离 + `unknown` 兜底），并按 2026-11-05 实测登记关键字段形状。按 ADR-0019 §七 义务 3 落地。 |
+| 2026-11-05 | 0.4.0 | 增「§七 8888 拓扑图契约」并落盘 `shared/types/topology.ts`（`TopologyGraph` / `TopologyGraphNode` / `TopologyGraphLink` / `TopologyCombo` / `TopologyGraphQuery` + 三个状态联合）。§五 清单同步登记、`shared/types/simulator.ts` 按 §6.3 实测形状补齐（此前只在文档里登记、文件尚未存在——文档先行的欠账在本次落码时还清）。三条硬约束写进正文：`id` 是管理 IP（对齐 8001 靠 `ip_address`）、`bandwidth: 0` 是「没测到」不是零带宽、`combos` 其余字段取证后再追加。 |

@@ -172,7 +172,67 @@
 		},
 		"topology-monitor": {
 			"description": "显示网络连接拓扑关系。",
-			"title": "拓扑监测"
+			"title": "拓扑监测",
+			"refresh": "刷新拓扑",
+			"canvasLabel": "网络拓扑图",
+			"cropped": "已裁剪 {nodes} 个节点 / {links} 条链路",
+			"stats": {
+				"nodes": "节点",
+				"links": "链路",
+				"combos": "组合",
+				"simulated": "仿真中节点"
+			},
+			"empty": {
+				"title": "当前租户下暂无拓扑数据",
+				"body": "上游 /topology/graph 返回了空节点集：这不是加载失败，也没有可画的链路。可稍后重试。"
+			},
+			"error": {
+				"title": "加载拓扑失败",
+				"retry": "重试"
+			},
+			"degraded": {
+				"disabledTitle": "仿真控制未启用",
+				"disabledBody": "未配置 NUXT_SIMULATOR_BASE_URL：拓扑照常只读展示，仿真标记与 LLDP 分区不可用。",
+				"unreachableTitle": "仿真平台不可达",
+				"unreachableBody": "只读区块照常展示；仿真标记与 LLDP 分区暂不可用（{reason}）。就绪探针不受影响。"
+			},
+			"simControls": {
+				"linkDown": "链路 down",
+				"nodeRestart": "节点重启",
+				"disabled": "仿真控制未启用（未配置仿真平台）",
+				"unreachable": "仿真平台不可达，稍后重试",
+				"loading": "正在探测仿真通道…",
+				"readOnly": "只读态：仿真写入入口随 P1-B 落地"
+			},
+			"detail": {
+				"title": "节点详情",
+				"empty": "点击画布上的节点查看详情",
+				"ip": "管理 IP",
+				"tier": "层级",
+				"category": "类别",
+				"simulated": "仿真中",
+				"notSimulated": "该节点不在仿真运行态里",
+				"simUnavailable": "仿真通道不可用，无法判断是否在仿真中",
+				"simName": "仿真名称",
+				"simStatus": "仿真状态"
+			},
+			"legend": {
+				"title": "图例",
+				"simulatedHint": "虚线外环表示该节点来自仿真运行态（8001）。"
+			},
+			"status": {
+				"online": "在线",
+				"warning": "告警",
+				"critical": "严重",
+				"offline": "离线",
+				"unknown": "未知",
+				"degraded": "降级",
+				"congested": "拥塞",
+				"switching": "抖动"
+			},
+			"zoomIn": "放大",
+			"zoomOut": "缩小",
+			"zoomReset": "重置视图"
 		},
 		"topology-device-metrics": {
 			"description": "设备 CPU/内存/流量等实时遥测指标",

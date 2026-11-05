@@ -14,7 +14,7 @@ authority: normative
 scope:
   - domain.topology
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -173,10 +173,12 @@ Asserted one by one when `check:ui` lands (unimplemented items are filled in wit
 | A2 | the topology page renders `TopologyCanvas` | `[data-testid="topology-canvas"]` matches and the SVG holds more than zero `circle`/`path` elements |
 | A3 | selecting a node shows that node's metrics | clicking a node renders a `TrendChart` in the right pane and the `/api/metric/datapoint` request carries that node's `mgmt_ip` |
 | A4 | an empty topology renders the empty state, not a blank canvas | the fake upstream returns `nodes: []` → the empty copy appears and `topology-canvas` is absent |
-| A5 | 8888 outage degrades | closing the fake upstream → an error `UAlert` with retry appears and the page does not go blank |
+| A5 | 8888 outage degrades | closing the fake upstream, then clicking the toolbar's "refresh topology" → an error `UAlert` with a retry button appears and the page does not go blank; once the upstream is back, "retry" returns to the topology. **No full page reload**: reloading while the upstream is down fails the session probe too, so the guard bounces to the login page and the assertion would test the wrong page |
 | A6 | read-only when the simulator is unconfigured | without `NUXT_SIMULATOR_BASE_URL` the topology renders normally and every simulation action button is `disabled` |
-| A7 | write endpoints rejected | with `allowWrite=false`, hitting `/api/sim/api/network/links/{id}/down` returns 405 |
+| A7 | write endpoints rejected | two gates in a fixed order (path whitelist → channel enabled → write permission): an unconfigured channel short-circuits to 503 `simulator_not_configured`; a configured channel with `allowWrite` still at its default `false` answers 405 `simulator_write_disabled`, and that request never reaches the upstream |
 | A8 | no site-wide outage | in the A6 / A7 scenarios `/ready` still returns 200 with `upstream.configured === true` |
+
+> **Status (2026-11-05)**: A1 / A2 / A4 / A5 / A6 / A7 / A8 are asserted by `pnpm check:ui` (section 11 of `scripts/check-ui.mjs`; A4 / A5 need the fake upstream's `__control/topology-empty` and `__control/down`, so they only run in self-hosted mode), and a self-hosted run measures `130/130` green. A7's precise half lives in the companion case, which boots a second BFF with `NUXT_SIMULATOR_BASE_URL` and proves the IP-aligned "simulated" markers are really drawn, the degraded banner disappears, and a write with the channel configured but writes still off answers 405 with zero write hits on the fake simulator — testing only "not configured" would never exercise the channel itself. **A3 is still open** (select a node → `TrendChart` + `/api/metric/datapoint`) and lands with the metrics pages; today the page only offers the structural view plus the simulation overlay, and the LLDP neighbourhood section, the device/link ledger pane and the alarm badges are likewise P1.
 
 ---
 
@@ -186,4 +188,5 @@ Asserted one by one when `check:ui` lands (unimplemented items are filled in wit
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: topology monitoring domain baseline. |
 | 2026-11-05 | 0.2.0 | Obligation 1 of `NMCPS-ADR-0019` applied: added the 2.0 locations of the three pages, the data sources (seven 8888 endpoints + the 8001 read/write whitelist + the empty local-engine set), the graphic shapes (`TopologyCanvas` / `TrendChart` / `SparkStat`), eight empty and degraded states, eight acceptance assertions; `dependsOn` gained `NMCPS-ARCH-006` (`NMCPS-ADR-0019` is cited in prose only — a Tier 2 normative doc does not `dependsOn` a Tier 5 record). |
+| 2026-11-05 | 0.3.0 | **The `monitor` page landed** (`layers/topology/app/pages/topology/monitor.vue`): structure from `GET /api/topology/graph`, simulator runtime from the 8001 `runtime-inventory` / `stats` (IP-aligned, drawn as a dashed outer ring); the `useTopologyMonitor()` data kernel polls every 30 s, pauses while the page is hidden, and splits failures — a primary-upstream failure is a page-level error, a simulator failure degrades only the simulation section. Graphics land in `app/components/Graph/{TopologyCanvas,SparkStat}.vue` plus `app/utils/graph/{topologyNormalize,topologyLayout,topologyStatusStyle,simulatorOverlay}.ts` (pure functions) and `app/composables/useGraphInteraction.ts` (drag / zoom, no rAF). §9 records the status: A1/A2/A4–A8 are in `check:ui`, A3 plus LLDP / ledger / alarm badges stay with P1. |
 
