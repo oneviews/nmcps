@@ -51,6 +51,64 @@ jobs:
           fi
           echo "token 就位（长度 ${#DRILL_TOKEN}）"
 
+      # PAT 会到期：到期那天演练红在 checkout/push，离「为啥」还差好几步，而且那一刻离上次绿
+      # 只有 7 天，人容易以为是代码出了问题。这里提前量用 GitHub 在响应头里回的到期时间
+      # （`github-authentication-token-expiration`，fine-grained PAT / 有期限的 token 才有）：
+      #   · 剩 ≤14 天 → `::warning`（不红，本周演练照跑，但 Checks 页会点名）
+      #   · 已过期 / 401 → 直接红（演练本来也会失败，早说清楚省一轮排查）
+      #   · 没有这个头（永不过期）或 API 抖动 → 只打日志，不阻断演练
+      - name: Warn early when DRILL_TOKEN is about to expire
+        env:
+          DRILL_TOKEN: ${{ secrets.DRILL_TOKEN }}
+          WARN_DAYS: 14
+        run: |
+          set -uo pipefail
+          if [ -z "${DRILL_TOKEN:-}" ]; then
+            echo '没有 token，跳过体检（上一步已报错）'
+            exit 0
+          fi
+          hdr=$(mktemp)
+          code=$(curl -sS -o /dev/null -D "$hdr" -w '%{http_code}' \
+            -H "Authorization: Bearer $DRILL_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/user 2>/dev/null || echo 000)
+          exp=$(tr -d '\r' < "$hdr" | awk -F': ' 'tolower($1)=="github-authentication-token-expiration"{print $2}')
+          rm -f "$hdr"
+
+          if [ "$code" = '401' ]; then
+            echo "::error title=drill-nightly DRILL_TOKEN 已失效::GitHub 返回 401（过期、被吊销或拼错）；去 Settings → Secrets and variables → Actions 换掉它"
+            exit 1
+          fi
+          if [ "$code" != '200' ]; then
+            echo "::warning title=drill-nightly 无法体检 DRILL_TOKEN 有效期::GitHub API 返回 $code（网络/限流），跳过体检；演练照跑"
+            exit 0
+          fi
+          if [ -z "${exp:-}" ]; then
+            echo 'DRILL_TOKEN 没有到期时间（响应头里没有 github-authentication-token-expiration）：不会自动过期，跳过预警'
+            exit 0
+          fi
+          # 头里的格式是 `2026-11-05 12:00:00 UTC`；GNU date 能直接吃，吃不下就当你没设期限
+          if ! exp_s=$(date -u -d "$exp" +%s 2>/dev/null); then
+            echo "::warning title=drill-nightly 解析不了 DRILL_TOKEN 的到期时间::响应头是 $exp，跳过预警"
+            exit 0
+          fi
+          left=$(( (exp_s - $(date -u +%s)) / 86400 ))
+          echo "DRILL_TOKEN 到期时间 $exp（还剩 $left 天）"
+          if [ "$left" -le 0 ]; then
+            echo "::error title=drill-nightly DRILL_TOKEN 已过期::到期时间 $exp，演练一定推不上去；去 Settings → Secrets and variables → Actions 换一个新 PAT"
+            exit 1
+          fi
+          if [ "$left" -le "${WARN_DAYS:-14}" ]; then
+            echo "::warning title=drill-nightly DRILL_TOKEN 还有 $left 天到期::到期时间 $exp；本周演练照跑，但请在那之前换掉 settings/secrets/actions 里的 DRILL_TOKEN（否则下周一整周的演练会红在权限上）"
+            {
+              echo "### ⚠️ DRILL_TOKEN 还有 $left 天到期"
+              echo
+              echo "到期时间：$exp。换一个新的 fine-grained PAT（Contents: Read and write）后，用 \`gh secret set DRILL_TOKEN --repo $GITHUB_REPOSITORY\` 覆盖即可。"
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
+          fi
+          echo "DRILL_TOKEN 距离到期还有 $left 天（阈值 $WARN_DAYS 天），不用管"
+
       - name: Prepare git identity
         run: |
           git config user.name 'drill-nightly'

@@ -51,6 +51,13 @@
 //      ci.yml，演练只能假绿）、有 `concurrency`（两次演练同时抢 main 的 HEAD）、有「只剥
 //      `# drill: 注入漂移` marker 行」的残留兜底、失败时开 issue（否则红了没人知道）。
 //
+// 一个到期预警断言（PAT 到期那天别让人以为是代码坏了）：
+//   ㉒ `drill-nightly.yml` 里 `DRILL_TOKEN` 的有效期体检：读 GitHub 回的
+//      `github-authentication-token-expiration` 响应头；剩 ≤14 天只 `::warning`（本周演练照跑，
+//      Checks 页点名）、401 / 已过期才红、API 抖动与「永不过期」都不许阻断演练；体检排在演练之前；
+//      且该 step 的 `run:` 块里不许出现 `${{ }}` —— 那样本地把它抠出来复现会 `Bad substitution`
+//      （实测踩过一次），插值一律走 env（`$GITHUB_REPOSITORY` 等）。
+//
 // 重采样（两条路，都不需要手抄日志）：
 //   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
@@ -722,6 +729,50 @@ wiring(
 	`${NIGHTLY} 的接线（cron / 手动可重跑 / --keys all / 用 PAT 推 / concurrency / 残留漂移兜底 / 失败开 issue）`,
 	nightlyMiss.length === 0,
 	nightlyMiss.join("\n")
+);
+
+// ㉒ PAT 到期预警：`DRILL_TOKEN` 到期那天，演练会红在 checkout/push —— 那一刻离上次绿只有 7 天，
+// 人第一反应会是「代码坏了」。所以工作流自己先体检：读 GitHub 在响应头里回的到期时间，
+// 剩 ≤14 天只 warn（本周演练照跑），401/已过期才红，API 抖动或永不过期的 token 不许阻断演练。
+// 另外钉住「run 块里不许出现 `${{ }}`」：里面有 `${{` 时本地把它抠出来跑会 `Bad substitution`
+// （实测过一次），而这段正需要能脱离 Runner 复现——值一律走 env（`$GITHUB_REPOSITORY` 等）。
+const expiryName = "Warn early when DRILL_TOKEN is about to expire";
+const expiryAt = nightlySrc.indexOf(expiryName);
+const drillStepAt = nightlySrc.indexOf("name: Drill all six samples");
+const expiryBlock = expiryAt === -1 ? "" : nightlySrc.slice(expiryAt, drillStepAt === -1 ? nightlySrc.length : drillStepAt);
+// 只钉 `run:` 块：`env:` 里的 `${{ secrets.DRILL_TOKEN }}` 是正常写法，插值出现在 shell 里才有问题
+const expiryRunAt = expiryBlock.indexOf("run: |");
+const expiryRun = expiryRunAt === -1 ? "" : expiryBlock.slice(expiryRunAt);
+const warnDays = Number((nightlySrc.match(/WARN_DAYS:\s*(\d+)/) ?? [])[1] ?? NaN);
+const expiryMiss = [
+	expiryAt === -1 ? "没有 DRILL_TOKEN 有效期体检步骤：token 到期只会红在 push，看不出是权限问题" : "",
+	drillStepAt !== -1 && expiryAt !== -1 && expiryAt > drillStepAt
+		? "体检排在演练之后：等它说话时提交已经推上去了"
+		: "",
+	/github-authentication-token-expiration/.test(expiryBlock)
+		? ""
+		: "没读 `github-authentication-token-expiration` 响应头：拿不到到期时间，预警就无从谈起",
+	/\[\s*"\$code"\s*=\s*'401'\s*\]/.test(expiryRun) && /::error title=drill-nightly DRILL_TOKEN 已失效/.test(expiryRun)
+		? ""
+		: "401（token 失效/被吊销/拼错）没有单独的硬红分支：那不划算，演练反正会挂，早点说清楚能省一轮排查",
+	/\[\s*"\$left"\s*-le\s*0\s*\]/.test(expiryRun) && /::error title=drill-nightly DRILL_TOKEN 已过期/.test(expiryRun)
+		? ""
+		: "已过期的分支没有硬红（只靠 401 兜不住：GitHub 对「已过期但格式合法」的 token 有时仍回 200）",
+	Number.isFinite(warnDays) && warnDays >= 1 && warnDays <= 30
+		? ""
+		: `WARN_DAYS 阈值不像是提前量（读到 ${warnDays}）：要么没做成 env，要么大到等于没有预警`,
+	/if \[ "\$left" -le "\$\{WARN_DAYS:-\d+\}" \]; then/.test(expiryRun) && /::warning title=drill-nightly DRILL_TOKEN 还有/.test(expiryRun)
+		? ""
+		: "剩几天到期没有单独的 `::warning` 通道（或阈值没做成 env、或被短路成永不触发）：提前量若改成红，会把一次本来能跑完的演练提前判死",
+	/if \[ "\$code" != '200' \]; then/.test(expiryRun) && /::warning title=drill-nightly 无法体检/.test(expiryRun)
+		? ""
+		: "API 抖动/无到期头时没有「不阻断」分支：一次网络抖动就会红掉整周演练",
+	/\$\{\{/.test(expiryRun) ? `体检步骤的 run 块里出现了 \${{ }}：本地抠出来跑会 Bad substitution，改成 env（如 $GITHUB_REPOSITORY 这类变量）` : ""
+].filter(Boolean);
+wiring(
+	`${NIGHTLY} 的 DRILL_TOKEN 有效期体检（读 expiration 头 / ≤N 天只 warn / 401 或已过期才红 / 抖动不阻断 / 排在演练前 / run 块无 \${{ }}）`,
+	expiryMiss.length === 0,
+	expiryMiss.join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);

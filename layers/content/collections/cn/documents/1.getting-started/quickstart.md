@@ -82,7 +82,11 @@ sh scripts/ci-doctor.sh drill --keys lint,governance --yes
 
 **定时演练**：`.github/workflows/drill-nightly.yml` 每周一 03:00 UTC 自动跑一次 `drill --keys all --yes`（也支持 `workflow_dispatch` 手动重跑，排障不必等下周），失败时开 issue（同标题只留一个开着的，后续失败改成追加评论）。
 
-它依赖仓库 secret `DRILL_TOKEN`（PAT，`contents: write`），原因很硬：用 `GITHUB_TOKEN` 推的提交**不会再触发 `ci.yml`**，演练只会「等不到运行」并判自己无效——那是假绿。所以缺这个 secret 时工作流**直接红**并打出 `::error` 说明要配什么，绝不静默跳过。自动化还多一层兜底：正常路径由 drill 自己的 `trap` 回滚；万一 runner 在演练中途被杀，最后一道 `always()` 步骤会检查 `origin/main` 上有没有 `# drill: 注入漂移` marker 行，有就只剥这几行再补一个回滚提交（除了 marker 行一个字节都不碰，所以不会掩盖真实漂移）。
+它依赖仓库 secret `DRILL_TOKEN`（PAT，`contents: write`），原因很硬：用 `GITHUB_TOKEN` 推的提交**不会再触发 `ci.yml`**，演练只会「等不到运行」并判自己无效——那是假绿。所以缺这个 secret 时工作流**直接红**并打出 `::error` 说明要配什么，绝不静默跳过。
+
+PAT 会过期，所以它在演练前先做一次体检（名字叫 `Warn early when DRILL_TOKEN is about to expire`）：用 token 打一次 `GET /user`，读 GitHub 在响应头里回的 `github-authentication-token-expiration`。剩 ≤`WARN_DAYS`（默认 14）天时只打 `::warning` 并把到期日写进步骤摘要——本周演练照跑，别让一次本来能跑完的演练被提前判死；**401 或已过期**才红，因为那时演练注定推不上去，早说清楚省一轮排查；API 抖动（非 200）或 token 本来就没有到期时间，只记一行日志、不阻断演练。到期后换一个新的 fine-grained PAT（`Contents: Read and write`）再 `gh secret set DRILL_TOKEN --repo <owner>/<repo>` 覆盖即可。这九项由断言 ㉒ 钉住。
+
+自动化还多一层兜底：正常路径由 drill 自己的 `trap` 回滚；万一 runner 在演练中途被杀，最后一道 `always()` 步骤会检查 `origin/main` 上有没有 `# drill: 注入漂移` marker 行，有就只剥这几行再补一个回滚提交（除了 marker 行一个字节都不碰，所以不会掩盖真实漂移）。
 
 人工闸门没有取消：日常仍是 `--yes` 手动演练，nightly 只是「保证每周至少跑一次」的补网；脚本自己的 `--yes`、`HEAD == origin/main`、干净工作区三道前置条件一条没放宽。
 
