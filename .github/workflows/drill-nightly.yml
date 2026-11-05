@@ -131,7 +131,11 @@ jobs:
             echo
             echo '最近日志：'
             echo '```'
-            tail -n 60 drill-logs/drill.log 2>/dev/null || echo '(没有日志)'
+            if [ -f drill-logs/drill.log ]; then
+              tail -n 60 drill-logs/drill.log
+            else
+              echo '（这次失败发生在演练开始之前，所以没有 drill 日志——看失败那一步的注解：前置闸门缺 DRILL_TOKEN 就是这种形态）'
+            fi
             echo '```'
           } > "$body"
           existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
