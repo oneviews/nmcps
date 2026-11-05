@@ -1,8 +1,8 @@
 ---
 docId: NMCPS-CONTRACT-001
 title: "共享类型契约"
-description: "共享类型契约（contract.shared-types）的 Tier 3 契约基准：跨模块共享类型的命名规范、目录组织、复用规则与禁 any / null 语义硬约束，并登记 `/api/v1/auth` 契约类型（`shared/types/auth.ts`）。本文是 contract.shared-types 域的唯一权威。"
-excerpt: "跨模块共享类型的命名规范、目录组织与复用规则的契约基准。"
+description: "共享类型契约（contract.shared-types）的 Tier 3 契约基准：跨模块共享类型的命名规范、目录组织、复用规则与禁 any / null 语义硬约束，登记 `/api/v1/auth` 契约类型（`shared/types/auth.ts`）与仿真平台实体类型（`shared/types/simulator.ts`）。本文是 contract.shared-types 域的唯一权威。"
+excerpt: "跨模块共享类型的命名规范、目录组织、复用规则与仿真平台实体契约基准。"
 keywords:
   - "contract"
   - "shared-types"
@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.shared-types
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -21,7 +21,7 @@ dependsOn:
   - NMCPS-GOV-003
   - NMCPS-ARCH-002
 createdAt: "2026-10-25"
-updatedAt: "2026-10-31"
+updatedAt: "2026-11-05"
 icon: "carbon:data-class"
 tags:
   - "契约"
@@ -87,14 +87,107 @@ shared/
 | `LayoutMode` / `UserPreferences` | `layers/user/app/composables/useUserPreferences.ts` | 布局偏好类型 |
 | `ApiResponse` / `ApiStatus` / `ApiError` | `shared/types/api.ts` / `shared/utils/apiGuard.ts` | 统一响应信封与类型守卫 |
 | `AuthUser` / `AuthTokens` / `AuthLoginPayload` / `AuthLoginResult` / `AuthRefreshResult` / `AuthSessionState` | `shared/types/auth.ts` | `/api/v1/auth` 契约：字段名沿用上游 camelCase（`accountCode` / `accountLevel` / `sessionId`…），**不做蛇形转换**；BFF 只把错误信封的 `msg` 归一为 `message`，业务字段一律透传保真；缺失语义（如登录返回不含 `displayName`）一律填 `null`，不用近义字段顶替 |
+| `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` / `SimulatorNetworkStats` / `SimulatorLldpSummary` / `SimulatorLldpNeighbor` / `SimulatorSessionList` / `SimulatorSessionStatus` / `SimulatorMetricsSummary` / `SimulatorMetricsCurrent` | `shared/types/simulator.ts` | 8001 仿真平台实体契约，字段沿用上游 `snake_case`，口径见本契约 §六 |
 
 > 随着 S2 领域基准落地，`metric` / `topology` 等契约类型将迁入 `shared/types/`，本契约随演进同步登记。
 
 ---
 
-## 六、变更记录
+## 六、仿真平台实体契约（`shared/types/simulator.ts`）
+
+8001 仿真平台的实体类型统一落在 `shared/types/simulator.ts`，是 BFF `server/api/sim/**` 出站结果、`NMCPS-DESIGN-*` 页面消费与 `check:bff` 假上游共用的**唯一**类型来源。字段形状取自 2026-11-05 实测响应与 `openapi.json`（113 条路径 / 40 个 schema）。
+
+### 6.1 命名与字段口径（本族例外，需显式登记）
+
+| 规则 | 说明 |
+| :--- | :--- |
+| **沿用上游 `snake_case`** | 与 `MetricCatalogItem`（`NMCPS-CONTRACT-002`）同口径：上游字段一律原样透传，不做驼峰转换；只有 BFF 自造字段（错误信封的 `message`）例外 |
+| **带单位字段保持 `string`** | `bandwidth: "4000Mbps"`、`delay: "2ms"`、`loss: "0%"`；数值化由页面纯函数（`parseBandwidthMbps` / `parseDelayMs` / `parseLossPct`）完成，**类型层不解析** |
+| **可空显式 `\| null`** | 实测为 `null` 的字段（`mac_address` / `weaknet_config` / `protocol_config` / `radio` / `real_stats` / `tc` / `scenario`）一律 `\| null`，禁止用可选 `?:` 掩盖「上游明确给了 null」 |
+| **未取证子对象不透明** | 未逐字段取证的子对象统一 `SimulatorOpaqueObject = Record<string, unknown>`，禁止 `any` |
+| **枚举与线格式分离** | 线格式字段保留 `string`（上游会加取值），另定义联合类型 + 守卫（`SimulatorNodeType` / `SimulatorLinkType` / `SimulatorSessionState`）供页面收窄；守卫必须带 `unknown` 兜底分支 |
+
+### 6.2 实体类型清单
+
+| 类型 | 上游端点 | 说明 |
+| :--- | :--- | :--- |
+| `SimulatorHealth` | `GET /api/health` | `status` / `app` / `engine_available[]` / `regulatory`（实测 `US`） |
+| `SimulatorRuntimeInventory` | `GET /api/network/runtime-inventory` | **运行态唯一入口**：`running` / `scenario` / `overrides` / `nodes[]` / `links[]` |
+| `SimulatorRuntimeNode` | 同上 `nodes[]` | 与 8888 节点对齐的键：`id` / `name` / `ip_address`；渲染用 `x` / `y`；状态用 `status` |
+| `SimulatorRuntimeLink` | 同上 `links[]` | `source` / `target` + 两端接口；`type` 区分 `wired` / `wireless`；`bandwidth` / `delay` / `loss` 为带单位字符串 |
+| `SimulatorNetworkStats` | `GET /api/network/stats` | `nodes_by_type` / `links_by_type` 为**动态键**的 `Record<string, number>`（实测 `router` 3 / `switch` 6 / `ap` 18 / `station` 9） |
+| `SimulatorLldpSummary` / `SimulatorLldpNeighbor` | `GET /api/lldp/summary`、`/api/lldp/neighbors/{node_id}` | `mib_oids` 为 `Record<string, string>`；`discovered_at` 为上游本地时间字符串（**不带时区**，禁止直接 `new Date()` 当 UTC 用） |
+| `SimulatorSessionList` / `SimulatorSession` / `SimulatorSessionStatus` | `GET /api/simulation/sessions`、`/api/simulation/sessions/{sim_id}/status` | 列表信封 `{ count, items[] }`；`status.build_timing.phases[]` 为启动阶段进度（`msg` / `pct` / `d_s`） |
+| `SimulatorMetricsSummary` | `GET /api/metrics/summary/{sim_id}` | `sample_count` / `tick_count` / `avg_utilization_pct` / `avg_rtt_ms` / `avg_loss_pct` |
+| `SimulatorMetricsCurrent` / `SimulatorMetricsSample` | `GET /api/metrics/current/{sim_id}` | 逐链路采样：`utilization_pct` / `rtt_ms` / `loss_pct` / `jitter_us` / `*_age_s` / `jitter_valid`；`at` 为上游本地时间字符串 |
+
+### 6.3 关键字段（实测形状，供落码对照）
+
+```ts
+export type SimulatorOpaqueObject = Record<string, unknown>
+
+export interface SimulatorRuntimeInventory {
+  running: boolean
+  scenario: string | null
+  overrides: {
+    exists: boolean
+    updated_at: string | null
+    node_count: number
+    link_count: number
+    topology_count: number
+  }
+  nodes: SimulatorRuntimeNode[]
+  links: SimulatorRuntimeLink[]
+}
+
+export interface SimulatorRuntimeNode {
+  id: string
+  name: string
+  type: string                     // router | switch | ap | station | …
+  status: string                   // online | offline | …
+  x: number | null
+  y: number | null
+  interfaces: SimulatorOpaqueObject[]
+  ip_address: string | null
+  mac_address: string | null
+  device_type: string
+  role: string | null
+  ports: Array<{ name: string, ip: string }>
+  weaknet_config: SimulatorOpaqueObject | null
+  protocol_config: SimulatorOpaqueObject | null
+  radio: SimulatorOpaqueObject | null
+}
+
+export interface SimulatorRuntimeLink {
+  id: string
+  source: string
+  target: string
+  source_interface: string | null
+  target_interface: string | null
+  type: string                     // wired | wireless
+  status: string                   // up | down
+  bandwidth: string | null         // "4000Mbps"（保持字符串）
+  delay: string | null             // "2ms"
+  loss: string | null              // "0%"
+  real_stats: SimulatorOpaqueObject | null
+  weaknet_config: SimulatorOpaqueObject | null
+  protocol_config: SimulatorOpaqueObject | null
+  tc: SimulatorOpaqueObject | null
+}
+```
+
+### 6.4 与 BFF 出站的关系
+
+1. **类型是出站结果的归一形状**：`server/utils/bff/simulator.ts` 只把上游 JSON 包进 `ApiResponse` 信封（`data` 为上述实体），不改字段名、不改量纲、不补默认值。
+2. **未配通道时无实体**：`baseUrl` 为空 → `503 simulator_not_configured`，页面拿到的是错误信封而非「空实体」，两者在 UI 上必须区分（空态 vs 未接入态）。
+3. **写端点无返回契约**：`POST` / `PATCH` / `DELETE` 只保证 `ApiResponse` 信封；页面只按成功与否 + 随后的 `runtime-inventory` 刷新来渲染，不依赖写端点返回体。
+
+---
+
+## 七、变更记录
 
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化共享类型契约（命名规范、目录组织、复用硬约束、现有类型清单）。 |
 | 2026-10-31 | 0.2.0 | 登记 `shared/types/api.ts` 与 `shared/types/auth.ts`：明确上游字段透传保真、`msg` → `message` 归一、缺失即 `null`。 |
+| 2026-11-05 | 0.3.0 | 增「§六 仿真平台实体契约」：登记 `shared/types/simulator.ts` 的类型清单（`SimulatorHealth` / `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` / `SimulatorNetworkStats` / `SimulatorLldpSummary` / `SimulatorLldpNeighbor` / `SimulatorSessionList` / `SimulatorSessionStatus` / `SimulatorMetricsSummary` / `SimulatorMetricsCurrent`），固化本族五条例外口径（snake_case 透传、带单位字段保持 string、可空显式 `\| null`、未取证子对象用 `SimulatorOpaqueObject`、枚举与线格式分离 + `unknown` 兜底），并按 2026-11-05 实测登记关键字段形状。按 ADR-0019 §七 义务 3 落地。 |

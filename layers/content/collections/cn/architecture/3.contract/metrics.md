@@ -1,8 +1,8 @@
 ---
 docId: NMCPS-CONTRACT-002
 title: "指标契约"
-description: "指标契约（contract.metrics）的 Tier 3 契约基准：监控指标的类型（counter/gauge/duration…）、可查询性三分类（numeric/text/collector）、指标目录条目与数据点结构。本文是 contract.metrics 域的唯一权威。"
-excerpt: "监控指标的类型、可查询性三分类、目录条目与数据点结构的契约基准。"
+description: "指标契约（contract.metrics）的 Tier 3 契约基准：监控指标的类型（counter/gauge/duration…）、可查询性三分类（numeric/text/collector）、指标目录条目与数据点结构，以及 `/metric/datapoint` 的 VM matrix → 前端序列取数口径。本文是 contract.metrics 域的唯一权威。"
+excerpt: "监控指标类型、可查询性三分类、目录条目、数据点结构与 datapoint 取数口径的契约基准。"
 keywords:
   - "contract"
   - "metrics"
@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.1.0
+version: 0.2.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -22,7 +22,7 @@ dependsOn:
   - NMCPS-ARCH-002
   - NMCPS-DESIGN-001
 createdAt: "2026-10-25"
-updatedAt: "2026-10-25"
+updatedAt: "2026-11-05"
 icon: "carbon:chart-line"
 tags:
   - "契约"
@@ -110,8 +110,87 @@ export interface MetricDatapoint {
 
 ---
 
-## 六、变更记录
+## 六、`/metric/datapoint` 取数口径（VM matrix → 前端序列）
+
+本节的契约**唯一事实源**是网关 `openapi.json`（2026-11-05 复核，127 条路径）中的 `GET /api/v1/metric/datapoint` 与 `metric_ListDatapointResp` / `metric_Datapoint` 两个 schema。展示侧消费见 `NMCPS-DESIGN-001`，通道与缓存见 `NMCPS-ARCH-002`。
+
+### 6.1 请求参数
+
+| 参数 | 类型 | 口径 |
+| :--- | :--- | :--- |
+| `mode` | `'realtime' \| 'range'` | 必填语义：决定响应里出现 `value` 还是 `values`；前端**一次请求只用一种**，不在同一面板混用 |
+| `mgmt_ip` / `metric_code` | string | 单设备单指标走这两个；交给 8888 的永远是**设备管理 IP**，不是节点 id |
+| `ips` / `codes` | string（逗号分隔） | 批量取数；批量时响应回显 `mgmt_ip` / `metric_code` 为 `null`（**禁空串**），前端不得靠回显判断单点/批量，只认自己的请求参数 |
+| `from` / `to` | string | 请求侧按 ISO 字符串发；响应回显是**解析后的整数 Unix 秒**——两侧类型不同，禁止把响应的 `from` 直接当请求 `from` 复用 |
+| `step` | integer（秒） | 聚合步长；省略则由上游决定，前端只额外做**显示级**降采样（§6.6），不改存储口径 |
+| `rate` | boolean | 见 §6.5 |
+
+### 6.2 响应信封
+
+```ts
+export interface MetricDatapointResponse {
+  code: number                     // 0 = 成功；非 0 为上游业务错误码
+  message: string                  // 上游原文，逐字展示，不本地化、不改写
+  data: {
+    mode: 'realtime' | 'range'
+    mgmt_ip: string | null         // 批量 ⇒ null（禁空串）
+    metric_code: string | null
+    rate: boolean
+    from?: number                  // 仅 range：整数 Unix 秒
+    to?: number                    // 仅 range：整数 Unix 秒
+    step?: number                  // 仅 range：步长秒
+    results: MetricDatapoint[]
+  }
+}
+```
+
+`MetricDatapoint` 见 §五：标签键是 `metric`（不是 `labels`），点对恒为 `[unix秒, 字符串值]`。
+
+### 6.3 点对解包（硬约束）
+
+1. **值恒为字符串**：采样值 `"1234.5"` 必须解包后 `Number()`；禁止把字符串直接送进比较、排序或图表比例尺（`"9" > "10"`）。
+2. **非法点丢弃**：`Number.isFinite(Number(v))` 为 `false`（`""` / `"NaN"` / `null`）时丢弃该点并计入一次「丢弃计数」，**不得补 0**、不得插值。
+3. **时间单位**：点对首元素是 **Unix 秒**，转毫秒由展示层统一乘 1000；禁止再按本地时区解析字符串。
+
+### 6.4 realtime 与 range 互斥
+
+- `mode=realtime` ⇒ 读 `value`（单点）；`mode=range` ⇒ 读 `values`（序列）。两者**不并存**，前端按 `mode` 只读其一，另一个缺失是正常的。
+- `results = []` 是**合法空**（该时段确实无数据）：渲染「该时段无数据」空态，绝不画一条 0 值直线。
+
+### 6.5 `rate` 的判定
+
+`rate=true` 只对 `MetricType === 'counter'` 有意义（§二），且由用户在图表上显式勾选「速率」。`gauge` / `duration` / `string` / `event` 恒传 `false`。类型判定只依据目录条目（§四），**禁止从 `metric_code` 命名猜测**。
+
+### 6.6 序列规范化管线（顺序固定、每步纯函数）
+
+`解包 → 丢弃非法点 → 按 ts 升序 → 同 ts 去重（保留最后一条）→ 单位与小数位取目录条目 → 像素级降采样 → 渲染`
+
+- 每一步是 `app/utils/chart/*` 的无状态纯函数，输入输出都是点数组，可单测。
+- 降采样只在点数 > 2 × 画布像素列宽时触发，按列保留 **min/max**（保住毛刺），不取平均。
+- 单位与小数位只影响**显示**：`unit` / `metric_type` 来自目录条目，缺失则如实显示原值不加单位。
+
+### 6.7 失败语义
+
+| 场景 | 契约 |
+| :--- | :--- |
+| `code !== 0` | 视为失败：`UAlert` 展示上游 `message` 原文 + 重试按钮；不静默降级为「无数据」 |
+| 网络/超时 | 保留上一次成功数据并标记 stale（时间戳可见），不把面板清空成空态 |
+| 401 / `40101` | 走会话刷新流程（`NMCPS-CONTRACT-001` 的 auth 契约），面板不单独处理登录 |
+| 目录条目标 `has_series: false` | 该指标不进入折线面板（选它只显示最新单点值），避免「选了文本指标看到一条直线」 |
+
+### 6.8 断言（供 `check:ui` 后续覆盖）
+
+| # | 断言 |
+| :--- | :--- |
+| S1 | `results: []` 渲染空态文案，且 DOM 中没有 0 值折线 |
+| S2 | 值全为字符串时，播放的数值序列与 `Number()` 后一致（排序、最大值） |
+| S3 | `code !== 0` 时出现 `UAlert` 且文案等于上游 `message` 原文 |
+
+---
+
+## 七、变更记录
 
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化指标契约（指标类型、可查询性三分类、目录条目、数据点结构）。 |
+| 2026-11-05 | 0.2.0 | 增「§六 `/metric/datapoint` 取数口径」：登记请求参数（含 `ips` / `codes` 批量与 `from` / `to` 两侧类型差异）、响应信封（`code` / `message` / `data`，批量回显 `null`）、点对解包硬约束（字符串值必须数值化、非法点丢弃不补 0）、realtime/range 互斥、`rate` 判定、规范化管线（解包→升序→去重→格式化→像素降采样）、失败语义与三条断言。按 ADR-0019 §七 义务 3 落地。 |
