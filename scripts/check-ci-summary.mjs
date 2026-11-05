@@ -40,6 +40,10 @@
 //      `Process completed with exit code 1.`，「哪份样本、哪个哈希漂了」得展开日志才找得到
 //      （实测 2026-11-04 的真红演练 run 41937577101 就是这个形态）。
 //
+// 一个演练断言（唯一会自动推提交的那条路不能接歪）：
+//   ⑳ `scripts/ci-doctor.sh drill` 的接线：usage 与 dispatch 都登记、有 trap 兜底回滚、
+//      没有 --yes 不推、只推 main 且永不 force push、期望注解由本地现场生成（不硬编码文案）。
+//
 // 重采样（两条路，都不需要手抄日志）：
 //   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
@@ -656,6 +660,32 @@ wiring(
 		`annotationOf 产出: ${annotationSample}`,
 		printsAnnotation ? "" : "wiring(): 没找到 console.log(annotationOf(...))，注解不会出现在日志里"
 	].filter(Boolean).join("\n")
+);
+
+// ⑳ 真红演练的接线：`sh scripts/ci-doctor.sh drill` 是唯一会自动往 main 推提交的路径 ——
+// 接错要么往主干留垃圾，要么把「注解真的上到了 Checks 页」这件事降级成无人验证。静态钉六件事：
+// 子命令在 usage 与 dispatch 里都登记、有 trap 兜底回滚、没有 --yes 不推、只推 DRILL_BRANCH=main
+// 且永不 force push、期望注解由本地 check-ci-summary.mjs 现场生成（不硬编码文案，改措辞不会让演练失效）。
+const DOCTOR = "scripts/ci-doctor.sh";
+let doctorSrc = "";
+try {
+	doctorSrc = readFileSync(join(ROOT, DOCTOR), "utf8");
+} catch {}
+const drillAt = doctorSrc.indexOf("cmd_drill()");
+const drillBody = drillAt === -1 ? "" : doctorSrc.slice(drillAt);
+const drillMiss = [
+	/^\s*drill\s+真红演练/m.test(doctorSrc) ? "" : "usage 里没有 drill 子命令的说明（sh scripts/ci-doctor.sh --help 应列出它）",
+	/status \| logs \| artifacts \| fixtures \| drill \| all\)/.test(doctorSrc) ? "" : "dispatch 的 case 列表没接纳 drill（子命令会落进「未知子命令」）",
+	/^\s*trap drill_cleanup EXIT$/m.test(doctorSrc) ? "" : "缺 trap drill_cleanup EXIT：中途失败会把漂移留在 main 上",
+	/--yes/.test(drillBody) && /必须显式同意/.test(drillBody) ? "" : "没有 --yes 闸门：不加确认就会往 main 推提交",
+	/^DRILL_BRANCH=main$/m.test(doctorSrc) ? "" : "DRILL_BRANCH 不是 main（ci.yml 只在 push main 时跑）",
+	/git push -[a-z-]*f\b|--force/.test(doctorSrc) ? "出现了 force push：演练永远不许强推，回滚要用一次正常提交" : "",
+	/check-ci-summary\.mjs/.test(drillBody) && !/::error title=步骤摘要自测失败/.test(doctorSrc) ? "" : "期望注解不是本地现场生成（drill 应调 check-ci-summary.mjs，且不许硬编码注解文案）"
+].filter(Boolean);
+wiring(
+	`${DOCTOR} 的 drill 接线（usage / dispatch / trap 回滚 / --yes / 只推 main / 期望文案现场生成）`,
+	drillMiss.length === 0,
+	drillMiss.join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);

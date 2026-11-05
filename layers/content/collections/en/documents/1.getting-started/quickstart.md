@@ -37,7 +37,7 @@ pnpm typecheck        # type check
 pnpm lint             # ESLint (including i18n key order)
 pnpm check:doc-system # doc-system guard (seven assertions: uniqueness / completeness / closure / acyclicity / tier validity / staleness / CN-EN parity)
 pnpm check:doc-system:selftest # guard self-test: plant four kinds of drift on a temp copy and assert the guard goes red (so an assertion cannot be silently neutered)
-pnpm check:ci-summary # step-summary self-test: nineteen assertions pinning ci-summary.sh's `--expect` contract, the wiring of all seven call sites in ci.yml (regexes live only in scripts/ci-expectations.sh), a replay of the real-log fixtures in scripts/fixtures/ci-logs/ (with a sha256 manifest and a provenance check for artifact backfills), and an `::error` annotation whenever any assertion reddens (so the Checks page names the failing assertion itself)
+pnpm check:ci-summary # step-summary self-test: twenty assertions pinning ci-summary.sh's `--expect` contract, the wiring of all seven call sites in ci.yml (regexes live only in scripts/ci-expectations.sh), a replay of the real-log fixtures in scripts/fixtures/ci-logs/ (with a sha256 manifest and a provenance check for artifact backfills), an `::error` annotation whenever any assertion reddens (so the Checks page names the failing assertion itself), and the wiring of `scripts/ci-doctor.sh drill` (usage / dispatch / trap rollback / `--yes` / main-only push)
 pnpm check:i18n       # copy self-check (ten assertion groups: key sets / no CJK in en values / value shape / placeholders / system-page references / site-wide t() references / no CJK in templates)
 pnpm build:server     # build the BFF artifact first; check:bff consumes .output/server
 pnpm check:bff        # BFF gateway contract (allowlists / verbs / traversal / CORS / envelope / readiness probe / SSE, per NMCPS-ADR-0007 and NMCPS-ADR-0010)
@@ -54,7 +54,7 @@ pnpm check:ui         # page checks (Playwright; needs a running server, default
 
 ## The Four Ways to Refresh a CI Sample
 
-The six samples under `scripts/fixtures/ci-logs/` are the **tail of each step's real log**, so a wording change means a refresh. There are four entry points; only the first two are normal routes. The third column is what you **must do afterwards**, the fourth is the assertion that reddens when you don't (numbering follows the header comment of `scripts/check-ci-summary.mjs`, ⑫–⑲).
+The six samples under `scripts/fixtures/ci-logs/` are the **tail of each step's real log**, so a wording change means a refresh. There are four entry points; only the first two are normal routes. The third column is what you **must do afterwards**, the fourth is the assertion that reddens when you don't (numbering follows the header comment of `scripts/check-ci-summary.mjs`, ⑫–⑳).
 
 | Entry point | When it is allowed | What you must do afterwards | Who catches it |
 | --- | --- | --- | --- |
@@ -64,3 +64,16 @@ The six samples under `scripts/fixtures/ci-logs/` are the **tail of each step's 
 | Hand-copying `gh run view` output | Never (the only way to fake a sample's provenance) | — | ⑭ every sample carries a `# source:` line, ⑯ a hand edit without a re-seal reddens, ⑰ a header-only edit contradicts the manifest's source |
 
 When something is red, start from the Checks annotations: every failed assertion prints one `::error title=step-summary self-test failed (item N): <name>::<first detail line>（共 N 行明细，见日志）` line, so the annotation locates the problem and the log keeps the full detail (the `❌` block).
+
+### Drilling the Red Annotation
+
+The annotation path has to prove itself periodically, otherwise "a drifted sample turns CI red" is just belief:
+
+```bash
+sh scripts/ci-doctor.sh drill ui --dry-run   # inject + check the local expectation only, no commit, no push
+sh scripts/ci-doctor.sh drill ui --yes       # full drill: push, compare against the Checks annotation, auto-rollback
+```
+
+`drill` appends one drifted line to `scripts/fixtures/ci-logs/<key>.log` (body only, never the `# source:` line — so it trips ⑯, not ⑰), pushes a temporary commit, waits for that run to redden, compares that commit's failure annotation with the expectation generated locally on the spot, then rolls back and drives the rollback run back to green. The expectation is never hardcoded, so changing assertion wording does not invalidate the drill. `key` defaults to `ui`; `--yes` is mandatory (it pushes two commits to main); it requires a clean worktree and `HEAD == origin/main`.
+
+It is **not** a fifth refresh entry point: the sample was never broken — it is broken on purpose and repaired again. So the drill has exactly one legal end state: clean worktree, `HEAD == origin/main`, rollback run `success` with 0 failure annotations. If any of that fails, `drill` exits 1 itself (and a `trap` rolls back if it crashes mid-way).

@@ -37,7 +37,7 @@ pnpm typecheck        # 类型检查
 pnpm lint             # ESLint（含 i18n 键序）
 pnpm check:doc-system # 文档体系守卫（七组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警 / 中英对齐）
 pnpm check:doc-system:selftest # 守卫自测：在临时副本上制造四种漂移，断言守卫必须变红（防断言被改哑）
-pnpm check:ci-summary # 步骤摘要自测：十九项断言，钉住 ci-summary.sh 的 --expect 语义、ci.yml 七个调用点的接线（正则唯一来源 scripts/ci-expectations.sh），回放真实日志样本 scripts/fixtures/ci-logs/（含 sha256 清单与产物回填的出处核对），并保证任何一条断言变红时都打出 `::error` 注解（Checks 页直接写明哪条红了）
+pnpm check:ci-summary # 步骤摘要自测：二十项断言，钉住 ci-summary.sh 的 --expect 语义、ci.yml 七个调用点的接线（正则唯一来源 scripts/ci-expectations.sh），回放真实日志样本 scripts/fixtures/ci-logs/（含 sha256 清单与产物回填的出处核对），任何一条断言变红时都打出 `::error` 注解（Checks 页直接写明哪条红了），以及 `scripts/ci-doctor.sh drill` 的接线（usage / dispatch / trap 回滚 / `--yes` / 只推 main）
 pnpm check:i18n       # 文案自查（十组断言：键集合对齐 / en 无中文 / 值形状 / 占位符一致 / 系统管理页引用闭合 / 全站 t() 引用闭合 / 模板无硬编码中文）
 pnpm build:server     # 先构建 BFF 产物，check:bff 消费 .output/server
 pnpm check:bff        # BFF 网关契约（白名单 / 动词 / 路径穿越 / CORS / 信封 / 就绪探针 / SSE，依据 NMCPS-ADR-0007、NMCPS-ADR-0010）
@@ -54,7 +54,7 @@ pnpm check:ui         # 页面自查（Playwright，需先起服务；默认指�
 
 ## CI 样本重采的四个入口
 
-`scripts/fixtures/ci-logs/` 里的六份样本是各步骤**真实日志的尾部**，措辞一变就要重采。重采有四种入口，只有前两种是正常路径；表里第三列是每个入口**之后必须做的事**，第四列是没做到时**哪条断言会红**（编号对应 `scripts/check-ci-summary.mjs` 头部注释的 ⑫～⑲）。
+`scripts/fixtures/ci-logs/` 里的六份样本是各步骤**真实日志的尾部**，措辞一变就要重采。重采有四种入口，只有前两种是正常路径；表里第三列是每个入口**之后必须做的事**，第四列是没做到时**哪条断言会红**（编号对应 `scripts/check-ci-summary.mjs` 头部注释的 ⑫～⑳）。
 
 | 入口 | 何时允许 | 之后必须做什么 | 谁抓它 |
 | --- | --- | --- | --- |
@@ -64,3 +64,16 @@ pnpm check:ui         # 页面自查（Playwright，需先起服务；默认指�
 | 手抄 `gh run view` 输出 | 永不（唯一能伪造样本来源的做法） | — | ⑭ 每份样本必须带 `# source:` 出处行、⑯ 手改不重封必红、⑰ 只改头部也会与清单两处 source 打架 |
 
 红了先看 Checks 页的注解：每条失败的断言都会打一行 `::error title=步骤摘要自测失败（第 N 条）：<断言名>::<明细首行>（共 N 行明细，见日志）`，注解给定位、日志给完整明细（`❌` 块）。
+
+### 演练真红注解
+
+注解链路要定期自证一次，否则「样本漂了会红」只是信仰：
+
+```bash
+sh scripts/ci-doctor.sh drill ui --dry-run   # 只注入 + 核对本地期望文案，不提交不推送
+sh scripts/ci-doctor.sh drill ui --yes       # 完整演练：推临时提交 → 核对 Checks 注解 → 自动回滚
+```
+
+`drill` 往 `scripts/fixtures/ci-logs/<key>.log` 尾部注入一行漂移（只动正文，不碰 `# source:`，所以踩的是 ⑯ 而不是 ⑰），推一个临时提交，等那次运行变红，把该提交的 failure 注解与**本地现场生成**的期望文案逐字比对，然后回滚并把回滚那次运行跑到绿。期望文案不硬编码，改断言措辞不用改演练。`key` 默认 `ui`；`--yes` 必填（它会往 main 推两次提交）；前置条件是工作区干净且 `HEAD == origin/main`。
+
+它**不是**第五条重采入口：样本本来没坏，是故意弄坏再修回来。所以演练收尾只有一种合法状态——工作区干净、`HEAD == origin/main`、回滚那次运行 `success` 且 0 条 failure 注解；任一条不成立，`drill` 自己会以退出码 1 结束（中途崩了也有 `trap` 兜底回滚）。
