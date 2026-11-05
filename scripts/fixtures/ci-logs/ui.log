@@ -9,4 +9,3 @@
 ✅ Tauri 宿主侧栏出现「平台能力」分组 — 已显示
 ✅ 「平台能力」分组含 5 个探针入口 — /os /file /store /notifications /webview
 116/116 项通过
-# drill: 注入漂移 2026-11-05T07:40:11Z（随后自动回滚）
