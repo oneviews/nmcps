@@ -37,7 +37,7 @@ pnpm typecheck        # 类型检查
 pnpm lint             # ESLint（含 i18n 键序）
 pnpm check:doc-system # 文档体系守卫（七组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警 / 中英对齐）
 pnpm check:doc-system:selftest # 守卫自测：在临时副本上制造四种漂移，断言守卫必须变红（防断言被改哑）
-pnpm check:ci-summary # 步骤摘要自测：二十一项断言，钉住 ci-summary.sh 的 --expect 语义、ci.yml 七个调用点的接线（正则唯一来源 scripts/ci-expectations.sh），回放真实日志样本 scripts/fixtures/ci-logs/（含 sha256 清单与产物回填的出处核对），任何一条断言变红时都打出 `::error` 注解（Checks 页直接写明哪条红了），`scripts/ci-doctor.sh drill` 的接线（usage / dispatch / trap 回滚 / `--yes` / 只推 main / `--keys` 批量），以及 `.github/workflows/drill-nightly.yml` 的定时演练接线（cron / 用 PAT 推 / concurrency / 残留漂移兜底 / 失败开 issue）
+pnpm check:ci-summary # 步骤摘要自测：二十三项断言，钉住 ci-summary.sh 的 --expect 语义、ci.yml 七个调用点的接线（正则唯一来源 scripts/ci-expectations.sh），回放真实日志样本 scripts/fixtures/ci-logs/（含 sha256 清单与产物回填的出处核对），任何一条断言变红时都打出 `::error` 注解（Checks 页直接写明哪条红了），`scripts/ci-doctor.sh drill` 的接线（usage / dispatch / trap 回滚 / `--yes` / 只推 main / `--keys` 批量），`.github/workflows/drill-nightly.yml` 的定时演练接线（cron / 用 PAT 推 / concurrency / 残留漂移兜底 / 失败开 issue）与其 `DRILL_TOKEN` 到期体检，以及 `scripts/ci-doctor.sh nightly` 那个只读核对入口（只认 schedule / 没数据不假绿 / `^{tree}` 证净变更为零 / 不许写仓库）
 pnpm check:i18n       # 文案自查（十组断言：键集合对齐 / en 无中文 / 值形状 / 占位符一致 / 系统管理页引用闭合 / 全站 t() 引用闭合 / 模板无硬编码中文）
 pnpm build:server     # 先构建 BFF 产物，check:bff 消费 .output/server
 pnpm check:bff        # BFF 网关契约（白名单 / 动词 / 路径穿越 / CORS / 信封 / 就绪探针 / SSE，依据 NMCPS-ADR-0007、NMCPS-ADR-0010）
@@ -89,5 +89,7 @@ PAT 会过期，所以它在演练前先做一次体检（名字叫 `Warn early 
 自动化还多一层兜底：正常路径由 drill 自己的 `trap` 回滚；万一 runner 在演练中途被杀，最后一道 `always()` 步骤会检查 `origin/main` 上有没有 `# drill: 注入漂移` marker 行，有就只剥这几行再补一个回滚提交（除了 marker 行一个字节都不碰，所以不会掩盖真实漂移）。
 
 人工闸门没有取消：日常仍是 `--yes` 手动演练，nightly 只是「保证每周至少跑一次」的补网；脚本自己的 `--yes`、`HEAD == origin/main`、干净工作区三道前置条件一条没放宽。
+
+周一之后核对不用手敲一串 `gh`：`sh scripts/ci-doctor.sh nightly [run-id]` 是这条定时链路的只读体检——只认 `schedule` 触发的那次运行（手工 `workflow_dispatch` 绿了说明不了定时链路还在跑），还没有 schedule 运行时它报 ⏳ 并**退出 1**（「没数据」不许当「通过」，与 `--expect` 同一条原则），顺手把运行里体检出来的到期日打出来，再用 `git rev-parse <回滚>^{tree}` 与演练前那棵树对比证明**净变更为零**（只看 commit message 会漏掉「回滚提交里夹带了别的改动」），最后扫六份样本的残留 marker、查有没有挂着的失败 issue。它自己绝不 commit / push：核对工具一旦会写仓库，就会改动被核对的对象。这七项由断言 ㉓ 钉住。
 
 它**不是**第五条重采入口：样本本来没坏，是故意弄坏再修回来。所以演练收尾只有一种合法状态——工作区干净、`HEAD == origin/main`、回滚那次运行 `success` 且 0 条 failure 注解；任一条不成立，`drill` 自己会以退出码 1 结束（中途崩了也有 `trap` 兜底回滚）。
