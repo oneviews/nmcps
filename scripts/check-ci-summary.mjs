@@ -492,8 +492,10 @@ function wiring(name, ok, detail) {
 		console.log(`  ❌ ${name}`);
 		if (detail)
 			console.log(`     ${detail}`);
-		// 注解放在明细之后：Checks 页读注解，日志读完整的 ❌ 明细，两处说的是同一件事
-		console.log(annotationOf(`步骤摘要自测失败（${fail}/${pass + fail}）：${name}`, detail));
+		// 注解放在明细之后：Checks 页读注解，日志读完整的 ❌ 明细，两处说的是同一件事。
+		// 标题只写「第 N 条」不写「n/N」：分母是「已评估的断言数」，会被误读成「共 N 项」
+		// （真红演练实测出过这个歧义：⑯ 是第 17 条，却显示成 1/17）
+		console.log(annotationOf(`步骤摘要自测失败（第 ${pass + fail} 条）：${name}`, detail));
 	}
 	return ok;
 }
@@ -638,12 +640,12 @@ wiring(
 // 标题里的 `,` `:` 未转义（注解头被截断，标题后半截跑到正文里）、正文被**过度**转义
 // （`%3A` 会原样显示给用户）、以及 wiring() 干脆不打印注解（改造时把 console.log 删掉，
 // 前面几条再对也没人看见）。
-const annotationSample = annotationOf("步骤摘要自测失败（1/19）：⑯ a, b: c", "ui: 清单 aaa… ≠ 实际 bbb…\n治理: 第二行");
+const annotationSample = annotationOf("步骤摘要自测失败（第 17 条）：⑯ a, b: c", "ui: 清单 aaa… ≠ 实际 bbb…\n治理: 第二行");
 const wiringSource = readFileSync(fileURLToPath(import.meta.url), "utf8");
 const printsAnnotation = /console\.log\(annotationOf\(/.test(wiringSource);
 wiring(
 	"断言失败打出可注解的 ::error（单行、标题转义、正文不过度转义、wiring() 真的打印）",
-	annotationSample.startsWith("::error title=步骤摘要自测失败（1/19）：⑯ a%2C b%3A c::")
+	annotationSample.startsWith("::error title=步骤摘要自测失败（第 17 条）：⑯ a%2C b%3A c::")
 	&& annotationSample.endsWith("ui: 清单 aaa… ≠ 实际 bbb…（共 2 行明细，见日志）")
 	&& !annotationSample.includes("\n")
 	&& printsAnnotation,
