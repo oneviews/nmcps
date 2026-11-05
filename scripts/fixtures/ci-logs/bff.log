@@ -9,3 +9,4 @@
 ✅ 旧代策略域资源（role / permission / abac / access）→ 404 bff_resource_not_allowed — 404/bff_resource_not_allowed 404/bff_resource_not_allowed 404/bff_resource_not_allowed 404/bff_resource_not_allowed
 ✅ system / transmission 命名空间在白名单内（非 resource_not_allowed） — upstream_not_found / upstream_not_found
 106/106 项通过
+# drill: 注入漂移 2026-11-05T07:40:11Z（随后自动回滚）
