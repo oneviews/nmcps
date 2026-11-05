@@ -37,7 +37,7 @@ pnpm typecheck        # 类型检查
 pnpm lint             # ESLint（含 i18n 键序）
 pnpm check:doc-system # 文档体系守卫（七组断言：唯一性 / 完整性 / 引用闭合 / 无环 / 层级合法 / 老化告警 / 中英对齐）
 pnpm check:doc-system:selftest # 守卫自测：在临时副本上制造四种漂移，断言守卫必须变红（防断言被改哑）
-pnpm check:ci-summary # 步骤摘要自测：二十项断言，钉住 ci-summary.sh 的 --expect 语义、ci.yml 七个调用点的接线（正则唯一来源 scripts/ci-expectations.sh），回放真实日志样本 scripts/fixtures/ci-logs/（含 sha256 清单与产物回填的出处核对），任何一条断言变红时都打出 `::error` 注解（Checks 页直接写明哪条红了），以及 `scripts/ci-doctor.sh drill` 的接线（usage / dispatch / trap 回滚 / `--yes` / 只推 main / `--keys` 批量）
+pnpm check:ci-summary # 步骤摘要自测：二十一项断言，钉住 ci-summary.sh 的 --expect 语义、ci.yml 七个调用点的接线（正则唯一来源 scripts/ci-expectations.sh），回放真实日志样本 scripts/fixtures/ci-logs/（含 sha256 清单与产物回填的出处核对），任何一条断言变红时都打出 `::error` 注解（Checks 页直接写明哪条红了），`scripts/ci-doctor.sh drill` 的接线（usage / dispatch / trap 回滚 / `--yes` / 只推 main / `--keys` 批量），以及 `.github/workflows/drill-nightly.yml` 的定时演练接线（cron / 用 PAT 推 / concurrency / 残留漂移兜底 / 失败开 issue）
 pnpm check:i18n       # 文案自查（十组断言：键集合对齐 / en 无中文 / 值形状 / 占位符一致 / 系统管理页引用闭合 / 全站 t() 引用闭合 / 模板无硬编码中文）
 pnpm build:server     # 先构建 BFF 产物，check:bff 消费 .output/server
 pnpm check:bff        # BFF 网关契约（白名单 / 动词 / 路径穿越 / CORS / 信封 / 就绪探针 / SSE，依据 NMCPS-ADR-0007、NMCPS-ADR-0010）
@@ -79,5 +79,11 @@ sh scripts/ci-doctor.sh drill --keys lint,governance --yes
 `drill` 往 `scripts/fixtures/ci-logs/<key>.log` 尾部注入一行漂移（只动正文，不碰 `# source:`，所以踩的是 ⑯ 而不是 ⑰），推一个临时提交，等那次运行变红，把该提交的 failure 注解与**本地现场生成**的期望文案逐字比对，然后回滚并把回滚那次运行跑到绿。期望文案不硬编码，改断言措辞不用改演练。`key` 默认 `ui`；`--yes` 必填（它会往 main 推两次提交）；前置条件是工作区干净且 `HEAD == origin/main`。
 
 `--keys a,b,c`（或 `--keys all`）一次演练多份：⑯ 给每份漂移样本一行明细，而注解只放**首行** + `（共 N 行明细，见日志）`，所以批量演练顺带验了「多明细折行」——单份演练永远只有一行明细，验不到这条路径。比对不是「找到一条像的就算过」，而是把本地期望的**整个注解集合**与实测集合 `diff`，少一条、多一条、折行丢了都会红。它仍然只产出一条注解：GitHub 每步 10 条 error 注解的上限靠样本漂移撞不到，脚本只在实测条数 >10 时告警——不假装验过上限。
+
+**定时演练**：`.github/workflows/drill-nightly.yml` 每周一 03:00 UTC 自动跑一次 `drill --keys all --yes`（也支持 `workflow_dispatch` 手动重跑，排障不必等下周），失败时开 issue（同标题只留一个开着的，后续失败改成追加评论）。
+
+它依赖仓库 secret `DRILL_TOKEN`（PAT，`contents: write`），原因很硬：用 `GITHUB_TOKEN` 推的提交**不会再触发 `ci.yml`**，演练只会「等不到运行」并判自己无效——那是假绿。所以缺这个 secret 时工作流**直接红**并打出 `::error` 说明要配什么，绝不静默跳过。自动化还多一层兜底：正常路径由 drill 自己的 `trap` 回滚；万一 runner 在演练中途被杀，最后一道 `always()` 步骤会检查 `origin/main` 上有没有 `# drill: 注入漂移` marker 行，有就只剥这几行再补一个回滚提交（除了 marker 行一个字节都不碰，所以不会掩盖真实漂移）。
+
+人工闸门没有取消：日常仍是 `--yes` 手动演练，nightly 只是「保证每周至少跑一次」的补网；脚本自己的 `--yes`、`HEAD == origin/main`、干净工作区三道前置条件一条没放宽。
 
 它**不是**第五条重采入口：样本本来没坏，是故意弄坏再修回来。所以演练收尾只有一种合法状态——工作区干净、`HEAD == origin/main`、回滚那次运行 `success` 且 0 条 failure 注解；任一条不成立，`drill` 自己会以退出码 1 结束（中途崩了也有 `trap` 兜底回滚）。

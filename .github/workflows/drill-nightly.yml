@@ -1,0 +1,143 @@
+name: drill-nightly
+
+# 每周一次的真红演练（人工 `drill` 的定时化）：只有它能把「Checks 注解 + 共 N 行明细折行」这条
+# 路径长期盯住 —— 本地自测只能验契约，验不到注解是否真的落到了 Checks 页。
+#
+# 为什么必须用 PAT（`secrets.DRILL_TOKEN`）：drill 靠 push 触发 ci.yml，而用 `GITHUB_TOKEN` 推的
+# 提交不会再触发 workflow —— 那样演练永远等不到运行，只能判「无效」，等于假绿。
+#
+# 安全边界两层：
+#   ① drill 自己的 `trap drill_cleanup EXIT` 负责正常失败路径的回滚；
+#   ② 本文件倒数第二道 `always()` 兜底负责「runner 被杀在半路」的残留 —— 只剥掉 marker 行
+#      （`# drill: 注入漂移 …`），不碰任何其它字节，所以不会掩盖真实漂移。
+# 失败一律开 issue（同标题只留一个开着的，后续失败改成追加评论）。
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: drill-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: read
+
+jobs:
+  drill:
+    name: drill all samples
+    runs-on: ubuntu-latest
+    # drill 自己对单次运行最多等 30 分钟（DRILL_TRIES 90 × 20s），演练 + 回滚两轮就是 60 分钟，
+    # 再加 checkout/依赖的时间——压到 60 会把一次合法演练连 job 一起杀掉，那时连兜底步骤都跑不到
+    timeout-minutes: 90
+    steps:
+      # token 缺失时回落到 GITHUB_TOKEN，只为让下面那道闸门能打印清楚的报错，而不是死在 checkout
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.DRILL_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # 跑不起来就红：定时检查不能因为没有凭据而显示成绿（与 `--expect` 同一条原则）
+      - name: Require a push-capable token
+        env:
+          DRILL_TOKEN: ${{ secrets.DRILL_TOKEN }}
+        run: |
+          if [ -z "${DRILL_TOKEN:-}" ]; then
+            echo "::error title=drill-nightly 缺 secrets.DRILL_TOKEN::演练要往 main 推两次提交，并靠这次 push 触发 ci.yml；用 GITHUB_TOKEN 推的提交不会触发 workflow，所以必须配一个 contents:write 的 PAT"
+            exit 1
+          fi
+          echo "token 就位（长度 ${#DRILL_TOKEN}）"
+
+      - name: Prepare git identity
+        run: |
+          git config user.name 'drill-nightly'
+          git config user.email 'drill-nightly@users.noreply.github.com'
+
+      - name: Drill all six samples
+        env:
+          GH_TOKEN: ${{ secrets.DRILL_TOKEN }}
+        run: |
+          set +e
+          mkdir -p drill-logs
+          sh scripts/ci-doctor.sh drill --keys all --yes 2>&1 | tee drill-logs/drill.log
+          status=${PIPESTATUS[0]}
+          echo "drill exit=$status"
+          exit $status
+
+      # 兜底：只处理「runner 在演练中途退出」留下的残留漂移，正常路径根本不会走到这里
+      - name: Self-heal a leftover drift on main
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.DRILL_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo '没有 token，跳过兜底（上一步已报错）'
+            exit 0
+          fi
+          git fetch -q origin main
+          hit=''
+          # `-r` 不能省：少了它 ls-tree 只吐出目录名（scripts/fixtures/ci-logs），
+          # 循环根本走不到任何 .log，兜底会「什么都没找到」而假装修好了
+          for f in $(git ls-tree -r --name-only origin/main -- scripts/fixtures/ci-logs | grep '\.log$' || true); do
+            if git show "origin/main:$f" | grep -q '^# drill: 注入漂移'; then
+              hit="$hit $f"
+            fi
+          done
+          if [ -z "$hit" ]; then
+            echo 'origin/main 上没有残留漂移'
+            exit 0
+          fi
+          echo "❌ origin/main 上有残留漂移：$hit"
+          git checkout -q -B drill-heal origin/main
+          for f in $hit; do
+            sed -i '/^# drill: 注入漂移/d' "$f"
+            git add -- "$f"
+          done
+          # 只 add 被剥的那几个文件：兜底提交必须只含 marker 行，不能顺手带上工作区里别的东西
+          # （`*.log*` 虽在 .gitignore 里，但兜底不该依赖忽略规则来保证这一点）
+          git commit -q -m "revert(ci): drill-nightly 兜底回滚残留漂移（runner 在演练中途退出，只剥掉 marker 行）"
+          git push -q origin drill-heal:main
+          echo "::error title=drill-nightly 兜底回滚已触发::origin/main 残留了漂移（drill 没走完），已补一个只剥 marker 行的回滚提交；看这次运行的日志"
+          exit 1
+
+      - name: Upload the drill log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: drill-log
+          path: drill-logs/drill.log
+          if-no-files-found: ignore
+
+      - name: Open an issue when the drill fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='drill-nightly 失败：真红注解链路需要人工看一眼'
+          body=$(mktemp)
+          {
+            echo '定时演练（每周一 03:00 UTC）失败了。'
+            echo
+            echo "- 运行：$RUN_URL"
+            echo '- 日志：这次运行的产物 `drill-log`（`drill-logs/drill.log`）'
+            echo
+            echo '排查顺序：① 「注解与本地期望不一致」→ Checks 注解链路变了；② 「演练运行没变红」→ ⑯ 不再对样本漂移变红；③ 「回滚后没回到绿」→ 先看 `origin/main` 有没有残留漂移（本工作流最后一道兜底会自动剥掉 marker 行）。'
+            echo '人工复现：`sh scripts/ci-doctor.sh drill --keys all --dry-run`（不推提交，只看本地期望），确认后 `--yes` 跑一次完整演练。'
+            echo
+            echo '最近日志：'
+            echo '```'
+            tail -n 60 drill-logs/drill.log 2>/dev/null || echo '(没有日志)'
+            echo '```'
+          } > "$body"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body"
+            echo "已追加评论到 issue #$existing"
+          else
+            gh issue create --title "$title" --body-file "$body"
+          fi

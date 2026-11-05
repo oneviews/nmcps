@@ -44,6 +44,13 @@
 //   ⑳ `scripts/ci-doctor.sh drill` 的接线：usage 与 dispatch 都登记、有 trap 兜底回滚、
 //      没有 --yes 不推、只推 main 且永不 force push、期望注解由本地现场生成（不硬编码文案）。
 //
+// 一个定时断言（演练不能只靠人记得跑）：
+//   ㉑ `.github/workflows/drill-nightly.yml` 的接线：有 cron 调度与 `workflow_dispatch`（排障能手动
+//      重跑）、跑的是 `drill --keys all --yes`（一次漂满全部样本，⑯ 的「共 N 行明细」折行路径才被
+//      覆盖）、用 PAT（`secrets.DRILL_TOKEN`）而不是 `GITHUB_TOKEN` 推（后者推的提交不会再触发
+//      ci.yml，演练只能假绿）、有 `concurrency`（两次演练同时抢 main 的 HEAD）、有「只剥
+//      `# drill: 注入漂移` marker 行」的残留兜底、失败时开 issue（否则红了没人知道）。
+//
 // 重采样（两条路，都不需要手抄日志）：
 //   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
@@ -689,6 +696,32 @@ wiring(
 	`${DOCTOR} 的 drill 接线（usage / dispatch / trap 回滚 / --yes / 只推 main / --keys 批量 / 期望文案现场生成）`,
 	drillMiss.length === 0,
 	drillMiss.join("\n")
+);
+
+// ㉑ 定时演练：人工 drill 能覆盖「注解真的落到 Checks 页」，但只有人记得跑时才跑。定时化以后最怕
+// 的不是红，是**假绿**——用 GITHUB_TOKEN 推的提交不会再触发 ci.yml，演练会「等不到运行」而判无效，
+// 所以 PAT 是硬要求；另外两次演练同时往 main 推会互相抢 HEAD，兜底还得能在 runner 被杀时只剥 marker 行。
+const NIGHTLY = ".github/workflows/drill-nightly.yml";
+let nightlySrc = "";
+try {
+	nightlySrc = readFileSync(join(ROOT, NIGHTLY), "utf8");
+} catch {}
+const nightlyMiss = [
+	/cron:\s*['"]?[0-9*/, -]+['"]?/.test(nightlySrc) ? "" : "没有 cron 调度：定时演练根本没被排上",
+	/workflow_dispatch/.test(nightlySrc) ? "" : "没有 workflow_dispatch：出问题只能等下周才能手动重跑",
+	/drill --keys all --yes/.test(nightlySrc) ? "" : "不是 `drill --keys all --yes`：一次漂不满全部样本，⑯ 的「共 N 行明细」折行路径覆盖不到",
+	/GH_TOKEN:\s*\$\{\{\s*secrets\.DRILL_TOKEN\s*\}\}/.test(nightlySrc) ? "" : "演练没用 PAT（secrets.DRILL_TOKEN）：GITHUB_TOKEN 推的提交不会触发 ci.yml，演练只能假绿",
+	/^concurrency:/m.test(nightlySrc) ? "" : "没有 concurrency：两次演练会同时往 main 推提交，抢 HEAD",
+	/sed -i [^\n]*\^# drill: 注入漂移/.test(nightlySrc) && /ls-tree -r/.test(nightlySrc)
+		? ""
+		: "没有残留漂移兜底：runner 在演练中途退出会把漂移留在 main 上（兜底要 `git ls-tree -r` 展开全部 .log，只剥 `# drill: 注入漂移` marker 行；少 `-r` 时只会吐出目录名，循环扫不到文件，「没有残留漂移」变成假话）",
+	/gh issue create/.test(nightlySrc) && /if: failure\(\)/.test(nightlySrc) ? "" : "失败时不开 issue：定时检查红了没人知道",
+	/git push -[a-z-]*f\b|--force/.test(nightlySrc) ? "出现 force push：兜底回滚也要走一次正常提交" : ""
+].filter(Boolean);
+wiring(
+	`${NIGHTLY} 的接线（cron / 手动可重跑 / --keys all / 用 PAT 推 / concurrency / 残留漂移兜底 / 失败开 issue）`,
+	nightlyMiss.length === 0,
+	nightlyMiss.join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);
