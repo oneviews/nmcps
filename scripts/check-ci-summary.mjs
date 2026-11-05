@@ -34,6 +34,12 @@
 // 一个回填断言（样本来源不能随手编）：
 //   ⑱ `--from-ci` 表里的步骤名与产物名都在 ci.yml 里存在（改名即红，回填不会写出假出处）
 //
+// 一个注解断言（红的地方要能在 Checks 页上自己说话）：
+//   ⑲ 断言失败必须打出 `::error title=步骤摘要自测失败 …::…`：标题里的 `,` `:` 转义、正文折成单行
+//      （`%0A`），且 `wiring()` 里真的打印它。没有这条时，Runner 上只看到通用的一句
+//      `Process completed with exit code 1.`，「哪份样本、哪个哈希漂了」得展开日志才找得到
+//      （实测 2026-11-04 的真红演练 run 41937577101 就是这个形态）。
+//
 // 重采样（两条路，都不需要手抄日志）：
 //   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
@@ -67,6 +73,22 @@ const fixtureKeysOnDisk = () =>
 		.sort();
 const sha256 = (p) => createHash("sha256").update(readFileSync(join(ROOT, p))).digest("hex");
 const sourceOf = (p) => (readFileSync(join(ROOT, p), "utf8").match(/^# source: (.*)$/m) ?? ["", ""])[1];
+
+/**
+ * GitHub 注解行：`::error title=<标题>::<正文>`。
+ * 转义按 GitHub 的两套规矩来，别混：**标题（属性）**要转 `%` `\r` `\n` `:` `,`，
+ * **正文（消息）**只转 `%` `\r` `\n`。正文里的 `:` 若也转成 `%3A`，Runner 不解码，
+ * 注解里就会原样显示 `%3A`——比不转还糟。注解只认单行，多行明细只放首行加一句「共 N 行」，
+ * 完整明细留给上面的 `❌` 块（注解会被 GitHub 截断，日志不会）。
+ */
+function annotationOf(title, detail) {
+	const prop = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").replace(/:/g, "%3A").replace(/,/g, "%2C");
+	const msg = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+	const lines = (detail ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+	const head = lines[0] ?? "（无明细）";
+	const more = lines.length > 1 ? `（共 ${lines.length} 行明细，见日志）` : "";
+	return `::error title=${prop(title)}::${msg(head + more)}`;
+}
 
 /** 从一段真实日志里取要写进样本的那几行（与 ci.yml 里 `tee` 出来的文件同源） */
 function pickTail(text, { tail, keepBanner = false, keep }) {
@@ -470,6 +492,8 @@ function wiring(name, ok, detail) {
 		console.log(`  ❌ ${name}`);
 		if (detail)
 			console.log(`     ${detail}`);
+		// 注解放在明细之后：Checks 页读注解，日志读完整的 ❌ 明细，两处说的是同一件事
+		console.log(annotationOf(`步骤摘要自测失败（${fail}/${pass + fail}）：${name}`, detail));
 	}
 	return ok;
 }
@@ -607,6 +631,26 @@ wiring(
 	sourceDrift
 		.map((k) => `${k}: 清单「${manifest[k]?.source ?? "(无)"}」≠ 样本「${sourceOf(fixturePath(k))}」`)
 		.join("\n")
+);
+
+// ⑲ 注解契约：红的地方必须能在 Checks 页上自己说话。
+// 断言的是四件会真的坏掉的事：多行明细（GitHub 只认单行，未折行时注解直接失效）、
+// 标题里的 `,` `:` 未转义（注解头被截断，标题后半截跑到正文里）、正文被**过度**转义
+// （`%3A` 会原样显示给用户）、以及 wiring() 干脆不打印注解（改造时把 console.log 删掉，
+// 前面几条再对也没人看见）。
+const annotationSample = annotationOf("步骤摘要自测失败（1/19）：⑯ a, b: c", "ui: 清单 aaa… ≠ 实际 bbb…\n治理: 第二行");
+const wiringSource = readFileSync(fileURLToPath(import.meta.url), "utf8");
+const printsAnnotation = /console\.log\(annotationOf\(/.test(wiringSource);
+wiring(
+	"断言失败打出可注解的 ::error（单行、标题转义、正文不过度转义、wiring() 真的打印）",
+	annotationSample.startsWith("::error title=步骤摘要自测失败（1/19）：⑯ a%2C b%3A c::")
+	&& annotationSample.endsWith("ui: 清单 aaa… ≠ 实际 bbb…（共 2 行明细，见日志）")
+	&& !annotationSample.includes("\n")
+	&& printsAnnotation,
+	[
+		`annotationOf 产出: ${annotationSample}`,
+		printsAnnotation ? "" : "wiring(): 没找到 console.log(annotationOf(...))，注解不会出现在日志里"
+	].filter(Boolean).join("\n")
 );
 
 console.log(`\n步骤摘要自测 ${pass}/${pass + fail} 通过`);
