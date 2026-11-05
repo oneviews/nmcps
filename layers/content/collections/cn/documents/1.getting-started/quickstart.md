@@ -3,7 +3,7 @@ title: "快速开始"
 description: "内容中心开发环境的快速启动指南：环境准备、安装依赖、启动开发服务器与运行校验命令。"
 excerpt: "环境准备、安装依赖、启动 dev server 与运行校验。"
 createdAt: "2026-10-25"
-updatedAt: "2026-10-30"
+updatedAt: "2026-11-05"
 icon: "carbon:book"
 ---
 
@@ -48,6 +48,19 @@ pnpm check:ui         # 页面自查（Playwright，需先起服务；默认指�
 
 > `check:ui` 可用 `CHECK_UI_BASE_URL` 覆盖被测地址（CI 指向本地构建产物 `http://127.0.0.1:3000`），用 `CHECK_UI_SCREENSHOT` 覆盖截图路径。CI 定义在 `.github/workflows/ci.yml`，三组断言与本地命令一致。
 
-> CI 排查用 `sh scripts/ci-doctor.sh`：默认概览最近一次运行与各 job 结论，`logs [run-id]` 拉全量日志并统计 ✅/❌，`artifacts [run-id]` 把产物下到 `ci-logs/downloads/`，`fixtures [run-id]` 顺手把这批产物回填成六份样本（内部转调 `--from-ci`，只取结论为 success 的步骤）。需本机已 `gh auth login`。步骤摘要由 `scripts/ci-summary.sh` 写入：它先用 `--expect` 声明本步骤必须出现的结论行，抽不到就打 `::error` 并以退出码 1 结束（`ci.yml` 里 `|| status=1`），因此「校验跑通了但摘要抽不到结论」会变红而不是静默降级。六条正则只在 `scripts/ci-expectations.sh` 定义一次，`ci.yml` 只写 key（`--expect "$(sh scripts/ci-expectations.sh <key>)"`），`pnpm check:ci-summary` 会反向断言七个调用点都带 `--expect` 且以 `|| status=1` 收尾，再用 `grep -aE` 把每条正则回放到 `scripts/fixtures/ci-logs/<key>.log`（各步骤真实日志尾部，头部写明出处）；措辞一变就红。样本另有 `scripts/fixtures/ci-logs/.manifest.json` 记录每份的 sha256 与声称出处，手改样本而没重新封存会立刻红（⑮～⑰）。样本重采：`node scripts/check-ci-summary.mjs --write-fixtures` 本地重跑四步（自动重封清单），`node scripts/check-ci-summary.mjs --from-ci [run-id]` 直接从那次运行的产物回填全部六份（bff / ui 只能走这条，别再手抄 `gh run view`）——出处里的步骤名与 job 名取自这次运行，⑱ 静态核对它们都还在 `ci.yml` 里；任何一条断言变红时脚本还会打一行 `::error title=步骤摘要自测失败 …::…`（正文折成单行、标题里的 `,` `:` 转义），于是 Checks 页的注解本身就写明哪条断言红了、哪份样本漂了，不必展开日志。重采自带两道自检：某步 `exit≠0` 时跳过该 key、绝不把失败输出固化成样本（`--from-ci` 同理，它读该次运行里每个步骤的结论，非 `success` 的一律跳过），且新样本写回后立刻用表里的正则回放一遍——任一不过都以退出码 1 结束。`--seal` 是应急入口而非第三条重采路径：它只重封清单、能给盘上任意字节盖章，所以正常情况不该用它。现在它必须带 `--reason "…"`——样本与清单不一致又没给理由时直接拒绝封存（清单原样保留、⑯ 继续红），给了理由就先逐条打印「本次封存改动」（字节变了 / 出处变了 旧→新 / 新封存 / 已移除），再排出一段可直接复制的 commit message 草稿（标题 `chore(ci): 手工重封 <keys> 样本 — <理由>`，正文自动附上改动清单）；样本与清单本来就一致时不需要理由，脚本会直说「没有要提交的东西」。
+> CI 排查用 `sh scripts/ci-doctor.sh`：默认概览最近一次运行与各 job 结论，`logs [run-id]` 拉全量日志并统计 ✅/❌，`artifacts [run-id]` 把产物下到 `ci-logs/downloads/`，`fixtures [run-id]` 顺手把这批产物回填成六份样本（内部转调 `--from-ci`，只取结论为 success 的步骤）。需本机已 `gh auth login`。步骤摘要由 `scripts/ci-summary.sh` 写入：它先用 `--expect` 声明本步骤必须出现的结论行，抽不到就打 `::error` 并以退出码 1 结束（`ci.yml` 里 `|| status=1`），因此「校验跑通了但摘要抽不到结论」会变红而不是静默降级。六条正则只在 `scripts/ci-expectations.sh` 定义一次，`ci.yml` 只写 key（`--expect "$(sh scripts/ci-expectations.sh <key>)"`）；`pnpm check:ci-summary` 反向断言七个调用点都带 `--expect` 且以 `|| status=1` 收尾，再把每条正则用 `grep -aE` 回放到 `scripts/fixtures/ci-logs/<key>.log`，并核对 `.manifest.json` 里的 `sha256` 与出处（⑮～⑰）。样本怎么重采、哪些入口算应急，见下一节的表。
 
 > 新增内容集合目录后需重启 dev server，让 `@nuxt/content` 监视器识别新目录。
+
+## CI 样本重采的四个入口
+
+`scripts/fixtures/ci-logs/` 里的六份样本是各步骤**真实日志的尾部**，措辞一变就要重采。重采有四种入口，只有前两种是正常路径；表里第三列是每个入口**之后必须做的事**，第四列是没做到时**哪条断言会红**（编号对应 `scripts/check-ci-summary.mjs` 头部注释的 ⑫～⑲）。
+
+| 入口 | 何时允许 | 之后必须做什么 | 谁抓它 |
+| --- | --- | --- | --- |
+| `node scripts/check-ci-summary.mjs --write-fixtures` | 改的是本机能跑的四步（lint / typecheck / i18n / governance）小结措辞，或首次补样本 | 只写 `exit=0` 的步骤（失败输出绝不固化成样本）；新样本写回即用表里的正则回放；顺手封存清单，不需要再跑 `--seal` | ⑫⑮ 清单与样本双向一致、⑬ 正则回放、⑯ `sha256` |
+| `node scripts/check-ci-summary.mjs --from-ci [run-id]`（`sh scripts/ci-doctor.sh fixtures [run-id]` 是同一入口） | bff / ui 只能走这条（本地起不来它们的被测环境）；想把最近一次绿运行的六份一起同步 | 只取该次运行里 `conclusion=success` 的步骤，非 `success` 直接跳过并 `exit 1`；出处写成 `CI run <id> 步骤 "<step>"（job: <job>）产物 <artifact>/<file> 尾部`；写回后回放正则 | 结论过滤本身、⑯⑰ 字节与出处互证、⑱ 步骤名 / 产物名必须还在 `ci.yml` 里 |
+| `node scripts/check-ci-summary.mjs --seal --reason "…"` | **应急**：清单损坏或产物过期，上两条机器路线都用不了 | 理由必填（不给就拒绝封存、清单一个字节不写）；先看它打出的「本次封存改动」，再粘贴它排好的 commit message 草稿——写明改了哪一份、为什么走不了机器路线 | 强制 `--reason`；被拒绝期间 ⑯ 一直红 |
+| 手抄 `gh run view` 输出 | 永不（唯一能伪造样本来源的做法） | — | ⑭ 每份样本必须带 `# source:` 出处行、⑯ 手改不重封必红、⑰ 只改头部也会与清单两处 source 打架 |
+
+红了先看 Checks 页的注解：每条失败的断言都会打一行 `::error title=步骤摘要自测失败（第 N 条）：<断言名>::<明细首行>（共 N 行明细，见日志）`，注解给定位、日志给完整明细（`❌` 块）。

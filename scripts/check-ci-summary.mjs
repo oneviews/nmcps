@@ -50,6 +50,9 @@
 // 不该用它；真用了必须给 --reason，否则直接拒绝（盘上清单原样保留，⑯ 继续红）。理由是给人看的：
 // 它会被排成现成的 commit message 草稿（标题带理由、正文带改动清单），不进清单结构。它先打印
 // 「本次封存改动了什么」逐条明细（字节变了 / 出处变了 / 新封 / 移除），没有任何变化就说没有。
+// 四种入口（含 `ci-doctor fixtures`）的「何时允许 / 之后必须做什么 / 被哪条断言抓」只在
+// quickstart 的表里维护一份：layers/content/collections/cn/documents/1.getting-started/quickstart.md
+// §「CI 样本重采的四个入口」（en 同章节镜像）。改这里的行为就同步那张表，别在注释里另写一套。
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

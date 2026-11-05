@@ -13,6 +13,8 @@
 # 省略 run-id 时取最近一次运行。产物与日志目录已被 .gitignore 忽略。
 # fixtures 是唯一会写仓库子目录的子命令：它转调 node scripts/check-ci-summary.mjs --from-ci，
 # 只回填该次运行里结论为 success 的步骤（失败步骤的日志同样在产物里，绝不当样本）。
+# 四种重采入口（本地 / CI / doctor / 应急 --seal）何时允许、之后要做什么、被哪条断言抓，
+# 见 quickstart 的「CI 样本重采的四个入口」表；这里只做转发，不另立规则。
 set -eu
 
 usage() {
