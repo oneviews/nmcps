@@ -322,7 +322,7 @@
 			"gapTitle": "该链路 source 端没有端口索引",
 			"gapBody": "source 端 {source} 未给出 if_index，/metric/datapoint 只能按设备取：下图是该设备级的指标，不是该端口的时序（不猜索引）。",
 			"portTitle": "这条折线来自 source 端的该端口",
-			"portBody": "折线 = source 端设备上 ifIndex={index} 的接口序列（同端口跨采集任务取均值，不与其他端口混画）；链路级 link_id 时序仍等上游。",
+			"portBody": "端口级指标取 source 端设备上 ifIndex={index} 的接口序列（同端口跨采集任务取均值，不与其他端口混画）；所选指标本身是设备级时，图下会另行标注。链路级 link_id 时序仍等上游。",
 			"columns": {
 				"linkId": "链路标识",
 				"endpoints": "两端设备",

@@ -322,7 +322,7 @@
 			"gapTitle": "The link's source endpoint has no port index",
 			"gapBody": "The source endpoint {source} carries no if_index, and /metric/datapoint can only query per device: the chart below is device-level, not that port's series (the index is never guessed).",
 			"portTitle": "This trend belongs to the source endpoint's port",
-			"portBody": "The line is the interface series with ifIndex={index} on the source device (same port averaged across scrape jobs, never mixed with other ports); a link-level link_id series still waits for the upstream.",
+			"portBody": "Port-level metrics chart the interface series with ifIndex={index} on the source device (same port averaged across scrape jobs, never mixed with other ports); when the picked metric is itself device-level, a note under the chart says so. A link-level link_id series still waits for the upstream.",
 			"columns": {
 				"linkId": "Link ID",
 				"endpoints": "Endpoints",
