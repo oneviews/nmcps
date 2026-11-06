@@ -1,5 +1,5 @@
 # key: ui
-# source: CI run 42146620406 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-06 回填）
+# source: CI run 42187640549 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-06 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ A9 选中仿真节点后写按钮可点 — buttons=2 disabled=0
 ✅ A9 点按钮先弹二次确认（写明动作与目标） — 弹窗文案：确认下发仿真动作？将向 核心路由器-1（仿真 id n1）下发「重启节点」这一步不可撤销动作直接作用在正在运行的仿真上，BFF 不保留副本，也不会自动回滚。取消确认下发
@@ -8,4 +8,4 @@
 ✅ A9 成功后给出成功提示并关掉弹窗 — 已提示「重启已下发」
 ✅ Tauri 宿主侧栏出现「平台能力」分组 — 已显示
 ✅ 「平台能力」分组含 5 个探针入口 — /os /file /store /notifications /webview
-142/142 项通过
+151/151 项通过

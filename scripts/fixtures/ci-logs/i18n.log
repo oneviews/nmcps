@@ -1,11 +1,11 @@
 # key: i18n
-# source: CI run 42146620406 步骤 "Text (i18n) guard"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-06 回填）
+# source: CI run 42187640549 步骤 "Text (i18n) guard"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-06 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
-✅ cn / en 键集合一致 — 810 个键
-✅ cn.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 810 个值
-✅ en.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 810 个值
+✅ cn / en 键集合一致 — 869 个键
+✅ cn.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 869 个值
+✅ en.json 的值形状合规（非空 / 无首尾空白 / 无双空格 / 无转义引号残留） — 869 个值
 ✅ cn / en 占位符一致 — 全部一致
 ✅ layers/system/app 引用的 333 个完整键 / 5 个动态前缀两份都在 — 333 / 5
-✅ app, layers 下 96 个 .vue 的 <template> 无硬编码中文 — 全部走 i18n
-✅ 11 个域的 149 个文件里 t() 字面量 552 个完整键 / 10 个动态前缀两份都在 — 552 / 10
+✅ app, layers 下 97 个 .vue 的 <template> 无硬编码中文 — 全部走 i18n
+✅ 11 个域的 154 个文件里 t() 字面量 611 个完整键 / 10 个动态前缀两份都在 — 611 / 10
 ✅ 文案自查 10/10 通过
