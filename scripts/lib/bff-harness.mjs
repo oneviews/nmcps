@@ -12,6 +12,13 @@ import { setTimeout as delay } from "node:timers/promises";
 export const SERVER_ENTRY = ".output/server/index.mjs";
 export const HOST = "127.0.0.1";
 
+/**
+ * `__control/metric-error` 打开时 `/metric/datapoint` 回的失败原话（HTTP 200 + `code !== 0`）。
+ * 刻意写成「一句带标点、带英文缩写」的上游口吻：页面对它必须**逐字**展示（`NMCPS-CONTRACT-002` §6.7
+ * 的失败语义 —— 原文是数据，不翻译、不替换成 `api_request_failed`）。自查拿这个常量做字面比对。
+ */
+export const METRIC_UPSTREAM_FAILURE = "指标库查询超时（tsdb: query timeout after 30s）";
+
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 
@@ -297,7 +304,7 @@ export async function startUpstream(port) {
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
 	 */
-	const control = { down: false, topologyEmpty: false };
+	const control = { down: false, topologyEmpty: false, metricError: false };
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -326,7 +333,20 @@ export async function startUpstream(port) {
 			return send(200, { down: false });
 		}
 		if (url.pathname === "/__control/state")
-			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty });
+			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, metricError: control.metricError });
+		/**
+		 * 指标取数失败开关：`/metric/datapoint` 回 HTTP 200 + `code !== 0` + 一句上游原话。
+		 * 这不是网络错误（`__control/down` 是），而是「上游回了信封但业务失败」——
+		 * 页面必须逐字展示原话并给重试，且**不能**把它渲染成「该时间窗内无采集数据」（§6.7 / A13）。
+		 */
+		if (url.pathname === "/__control/metric-error") {
+			control.metricError = true;
+			return send(200, { metricError: true });
+		}
+		if (url.pathname === "/__control/metric-ok") {
+			control.metricError = false;
+			return send(200, { metricError: false });
+		}
 		if (url.pathname === "/__control/topology-empty") {
 			control.topologyEmpty = true;
 			return send(200, { topologyEmpty: true });
@@ -507,6 +527,10 @@ export async function startUpstream(port) {
 		// 这里给 `if_in_octets` 造 2 个端口 × 2 个 job（同组的第二个 job 只回合法点，于是「丢弃计数」
 		// 仍是 3，不会被双 job 翻倍），另一端口的值刻意不同 —— 混画就一定能看出来。
 		if (/^\/(?:api\/v1\/)?metric\/datapoint$/.test(url.pathname) && req.method === "GET") {
+			// 业务失败（不是网络失败）：信封 `code !== 0`，BFF 归一到 `status: "error"` + 原话 `message`
+			if (control.metricError)
+				return send(200, { code: 10500, msg: METRIC_UPSTREAM_FAILURE });
+
 			const now = Math.floor(Date.now() / 1000);
 			const values = [
 				[now - 600, "12.5"],

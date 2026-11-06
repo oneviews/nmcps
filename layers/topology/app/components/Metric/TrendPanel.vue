@@ -65,8 +65,13 @@
 
 		<template v-else>
 			<USkeleton v-if="loading" class="h-24 w-full rounded-md" />
+			<!--
+				纯失败态（没有可保留的旧序列）不画图：否则图里会同时出现「该时间窗内无采集数据」和
+				下面的「取数失败」两条互相矛盾的说明（§6.7：失败就是失败，不降级成空态）。
+				上游抖动但手上还有上次成功的数据时（`stale`）照旧画，另有一行 stale 提示。
+			-->
 			<div
-				v-else
+				v-else-if="!error || points.length > 0"
 				data-testid="metric-trend"
 				:data-series-if-index="seriesIfIndex"
 				:data-series-count="String(seriesCount)"

@@ -7,7 +7,7 @@
 // 该实例必须自己配好 `NUXT_BFF_UPSTREAM_BASE`，否则登录与「上游就绪」用例必然失败。
 // 环境变量：CHECK_UI_BASE_URL、CHECK_UI_ACCOUNT、CHECK_UI_PASSWORD、CHECK_UI_SCREENSHOT（截图输出路径）。
 import { chromium } from "playwright";
-import { closeUpstream, freePort, HOST, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 const ACCOUNT = process.env.CHECK_UI_ACCOUNT ?? "alice";
 const PASSWORD = process.env.CHECK_UI_PASSWORD ?? "p@ssw0rd";
@@ -1861,6 +1861,49 @@ if (upstreamPort) {
 			"A12 source 端缺 mgmt_ip 时只说明原因、不发取数请求",
 			noIpProbe.notice && !noIpProbe.chart && noIpRequests === 0,
 			`notice=${noIpProbe.notice} chart=${noIpProbe.chart} datapoint=${noIpRequests}`
+		);
+
+		// A13：上游**回了信封但业务失败**（HTTP 200 + `code !== 0`，§6.7）—— 页面必须逐字给出上游原话
+		// 并给重试，且不能把失败画成「该时间窗内无采集数据」（空态是「没数据」，失败是「取不到」，两回事）。
+		// 这里用 `__control/metric-error` 而不是 `__control/down`：后者断的是网络错误下的 stale 分支。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/metric-error`);
+		// 整页重开而不是在原地切链路：切链路会复用同一个面板实例，上一台设备留下的点会走到 stale 分支，
+		// 断言的就不是「纯失败态」了。
+		await page.goto(`${BASE_URL}/topology/link-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_200);
+
+		const failProbe = await page.evaluate(() => {
+			const box = document.querySelector("[data-testid='metric-trend-error']");
+			return {
+				box: !!box,
+				text: box?.textContent ?? "",
+				chart: !!document.querySelector("[data-testid='metric-trend']"),
+				page: document.body.textContent ?? ""
+			};
+		});
+		log(
+			"A13 上游 code !== 0 时逐字展示原话 + 重试（不降级成空态）",
+			failProbe.box
+			&& failProbe.text.includes(METRIC_UPSTREAM_FAILURE)
+			&& failProbe.text.includes("重试")
+			&& !failProbe.chart
+			&& !failProbe.page.includes("该时间窗内无采集数据"),
+			`box=${failProbe.box} chart=${failProbe.chart} 原话=${failProbe.text.includes(METRIC_UPSTREAM_FAILURE)}`
+		);
+
+		// A13 的反向：上游恢复后点「重试」必须真的拿到数据 —— 否则「重试」只是个摆设
+		await fetch(`http://${HOST}:${upstreamPort}/__control/metric-ok`);
+		await page.locator("[data-testid='metric-trend-error']").getByRole("button", { name: "重试" }).click();
+		await page.waitForTimeout(1_500);
+		const retryProbe = await page.evaluate(() => ({
+			box: !!document.querySelector("[data-testid='metric-trend-error']"),
+			chart: !!document.querySelector("[data-testid='trend-chart']"),
+			seriesIfIndex: document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-if-index") ?? ""
+		}));
+		log(
+			"A13 上游恢复后点重试能拿到数据（错误态消失）",
+			!retryProbe.box && retryProbe.chart && retryProbe.seriesIfIndex === "101",
+			`box=${retryProbe.box} chart=${retryProbe.chart} ifIndex=${retryProbe.seriesIfIndex || "无"}`
 		);
 
 		page.off("request", recordMetric);
