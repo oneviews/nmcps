@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -189,7 +189,7 @@ export interface MetricDatapointResponse {
 
 ## 7. `/metric/name` Metric Name List (single device)
 
-`/metric/datapoint`'s `metric_code` may only come from the list, never from guessing at the name. This layer uses the list as-is and **does not** do the three-way classification (that needs the catalog join plus the dictionary and belongs to the metrics pages' P1; the gap is registered in `NMCPS-DESIGN-001` §6.5).
+`/metric/datapoint`'s `metric_code` may only come from the list, never from guessing at the name. The list only answers "which names does this device expose"; **name → type** is decided in §8 (catalog join plus three-way classification), and the picker offers only the entries §8 calls `numeric`.
 
 ```ts
 export interface MetricNameData {
@@ -219,10 +219,63 @@ export interface RawMetricEntry {
 
 ---
 
-## 8. Changelog
+## 8. `/metric/definition` Catalog Join and Three-Way Classification
+
+The §3 taxonomy becomes an **executable decision order** here: `/metric/name` supplies the names, `/metric/definition` supplies the type evidence, and only their join may claim "this one can be drawn as a polyline".
+
+### 8.1 Request
+
+| Parameter | Contract |
+| :--- | :--- |
+| `page` / `page_size` | backend defaults 1 / 20; the frontend takes `page_size=200` in one shot, enough for a single tenant's catalog |
+| `metric_group` / `keyword` | **not sent** by this layer: the catalog is the input to a full join, and filtering by group would turn "not found in the filtered page" into a false "text metric" verdict |
+| Caching | the catalog is device-independent and fetched once per app session (module-level cache); failures are not cached, the next visit retries |
+
+### 8.2 Entry parsing (must tolerate shape drift)
+
+`metric_listDefinition` only declares the `metric_BaseResp` envelope in the openapi, **the entry fields are not final**, so parsing follows "use it if you can read it":
+
+| Target | Order |
+| :--- | :--- |
+| Code | `code` → `metric_code` → `name` (empty strings dropped) |
+| Type | `metric_type`; values outside `METRIC_TYPES` are dropped (treated as no evidence) |
+| Series presence | `has_series`; only a boolean is trusted |
+| Display fields | `cn_name` / `en_name` / `unit` / `category` / `description`, empty string when missing |
+
+### 8.3 Decision order (fixed, not reorderable)
+
+| # | Evidence | Verdict |
+| :---: | :--- | :--- |
+| 1 | the name is `up` / `scrape_*` | `collector` |
+| 2 | catalog `metric_type ∈ {string, event}`, or `has_series === false` | `text` |
+| 3 | everything else (including names the catalog does not carry) | `numeric` |
+
+`selectable = kind === 'numeric'` and the picker lists **only** `selectable` entries (§3: text is visible but not selectable). The name rule always comes first: collector self-monitoring may not even exist in the catalog, so it must not wait for the join.
+
+### 8.4 `meta_source` and degradation
+
+| Value | Meaning |
+| :--- | :--- |
+| `backend` | the catalog carries this name (complete classification evidence) |
+| `name-only` | catalog unavailable, or the catalog lacks this name: only the collector name rule applies, everything else passes as `numeric` |
+| `l1` | static dictionary (not wired in this layer; value reserved) |
+
+A failing `GET /metric/definition` **never blocks the chart**: the whole catalog falls back to `name-only`, the page says "metric catalog unavailable", and the series is still fetched. A text or event metric can then still flatten into a straight line — the gap is registered in `NMCPS-DESIGN-001` §6.6, never papered over by guessing at the name.
+
+### 8.5 Assertions
+
+| # | Assertion |
+| :---: | :--- |
+| S4 | catalog entries with `metric_type=string` never appear among the metric picker options |
+| S5 | when `/metric/definition` fails the chart still renders, and the catalog failure is not rendered as a retrieval error |
+
+---
+
+## 9. Changelog
 
 | Date | Version | Change |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: metrics contract (types, queryability, catalog, datapoint). |
 | 2026-11-05 | 0.2.0 | Added "§6 `/metric/datapoint` retrieval contract": request parameters (including the `ips` / `codes` batch mode and the `from` / `to` type gap between request and response), response envelope (`code` / `message` / `data`, batch echo as `null`), pair-unpacking hard constraints (string values must be converted, invalid points dropped without zero-fill), realtime/range exclusivity, `rate` decision rules, the normalisation pipeline (unpack → ascending sort → de-duplicate → format → pixel downsampling), failure semantics and three assertions. Lands ADR-0019 §7 obligation 3. |
 | 2026-11-06 | 0.3.0 | **Added "§7 `/metric/name` metric name list" together with its first consumer**: the request (`mgmt_ip`), the `MetricNameData` shape, the `RawMetricItem` dual shape (string / object, gap API-G12), the collector-namespace skip rule, the first-entry pick and the empty-list semantics are registered; a `/metric/datapoint` `metric_code` comes only from the list, never from guessing at the name. §6.6 now names the first pure-function landing `app/utils/chart/metricSeries.ts` (the empty string must be rejected explicitly: `Number("")` is `0`, which would draw "not collected" as a zero line). Types landed in `shared/types/metric.ts`. |
+| 2026-11-06 | 0.4.0 | **Added "§8 `/metric/definition` catalog join and three-way classification" together with the metric picker**: the request (`page_size=200`, why `metric_group` / `keyword` stay unset, the session-level cache), tolerant entry parsing (code from `code` → `metric_code` → `name`, type only from `METRIC_TYPES`), the fixed decision order (name → collector, catalog → text, everything else → numeric), the three `meta_source` states and the "a missing catalog never blocks the chart" degradation, plus assertions S4 / S5. §7 is reworded accordingly: the list answers names only, the type verdict lives in §8. First consumers: `app/utils/metric/metricCatalog.ts` and `layers/topology/app/composables/useMetricSeries.ts`, landed on `device-metrics` / `link-metrics`. |

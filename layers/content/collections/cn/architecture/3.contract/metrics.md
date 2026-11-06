@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -190,7 +190,7 @@ export interface MetricDatapointResponse {
 
 ## 七、`/metric/name` 指标名清单（单设备）
 
-`/metric/datapoint` 的 `metric_code` 只能来自清单，不允许按命名猜。本层只用清单本身，**不做类型三分类**（那需要目录 join + 字典，属指标页 P1；缺口登记在 `NMCPS-DESIGN-001` §6.5）。
+`/metric/datapoint` 的 `metric_code` 只能来自清单，不允许按命名猜。清单只回答「这台设备有哪些名字」；**名字 → 类型**的判定在 §八（目录 join + 三分类），选择器只列 §八 判为 `numeric` 的条目。
 
 ```ts
 export interface MetricNameData {
@@ -220,10 +220,63 @@ export interface RawMetricEntry {
 
 ---
 
-## 八、变更记录
+## 八、`/metric/definition` 目录 join 与三分类判定
+
+§三 的三分类口径在这里变成**可执行的判定顺序**：`/metric/name` 给名字、`/metric/definition` 给类型证据，两者 join 之后才敢说「这条能画折线」。
+
+### 8.1 请求
+
+| 参数 | 口径 |
+| :--- | :--- |
+| `page` / `page_size` | 后端默认 1 / 20；前端一次取 `page_size=200`，覆盖单租户目录 |
+| `metric_group` / `keyword` | 本层**不传**：目录是全量 join 的输入，按组过滤会让「没查到」被误判成「文本指标」 |
+| 结果缓存 | 目录与设备无关，一个应用会话取一次（模块级缓存）；失败不缓存，下次进页面重试 |
+
+### 8.2 条目解析（必须容错）
+
+`metric_listDefinition` 在 openapi 里只声明了 `metric_BaseResp` 信封，**条目字段未定稿**，所以按「能取到就用」的顺序解析：
+
+| 目标 | 取值顺序 |
+| :--- | :--- |
+| 编码 | `code` → `metric_code` → `name`（丢弃空串） |
+| 类型 | `metric_type`；不在 `METRIC_TYPES` 里的值丢弃（当作没有证据） |
+| 是否有时序 | `has_series`；只采信布尔 |
+| 展示字段 | `cn_name` / `en_name` / `unit` / `category` / `description`，缺失留空串 |
+
+### 8.3 三分类判定顺序（固定，不可调换）
+
+| 序 | 判据 | 结果 |
+| :---: | :--- | :--- |
+| 1 | 名字命中 `up` / `scrape_*` | `collector` |
+| 2 | 目录 `metric_type ∈ {string, event}` 或 `has_series === false` | `text` |
+| 3 | 其余（含目录里没有这个名字） | `numeric` |
+
+`selectable = kind === 'numeric'`，选择器**只列** `selectable` 的条目（§三：文本可见但不可选）。名字判定永远排在第 1 位：采集器自监控连目录都可能没有，不能等 join 结果。
+
+### 8.4 `meta_source` 与降级
+
+| 取值 | 含义 |
+| :--- | :--- |
+| `backend` | 目录里命中该名字（三分类证据完整） |
+| `name-only` | 目录不可用，或目录里没有这个名字：只能靠名字判 collector，其余一律按 `numeric` 放行 |
+| `l1` | 静态字典（本层未接，保留取值） |
+
+`GET /metric/definition` 失败**不阻塞出图**：整份目录落 `name-only`，页面提示「指标目录不可用」，图表照常取数。此时文本 / 事件指标仍可能被当数值画成一条直线 —— 缺口登记在 `NMCPS-DESIGN-001` §6.6，不靠命名猜测掩盖。
+
+### 8.5 断言
+
+| # | 断言 |
+| :---: | :--- |
+| S4 | 目录里 `metric_type=string` 的条目不出现在指标选择器的选项里 |
+| S5 | `/metric/definition` 失败时图表照常出图，且不把目录失败渲染成取数错误 |
+
+---
+
+## 九、变更记录
 
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化指标契约（指标类型、可查询性三分类、目录条目、数据点结构）。 |
 | 2026-11-05 | 0.2.0 | 增「§六 `/metric/datapoint` 取数口径」：登记请求参数（含 `ips` / `codes` 批量与 `from` / `to` 两侧类型差异）、响应信封（`code` / `message` / `data`，批量回显 `null`）、点对解包硬约束（字符串值必须数值化、非法点丢弃不补 0）、realtime/range 互斥、`rate` 判定、规范化管线（解包→升序→去重→格式化→像素降采样）、失败语义与三条断言。按 ADR-0019 §七 义务 3 落地。 |
 | 2026-11-06 | 0.3.0 | **增「§七 `/metric/name` 指标名清单」并落地首个消费面**：登记请求（`mgmt_ip`）、`MetricNameData` 形状、`RawMetricItem` 双形态（字符串 / 对象，缺口 API-G12）、采集器命名空间跳过规则、首项选取与空清单语义；`/metric/datapoint` 的 `metric_code` 只从清单来，不按命名猜类型。§6.6 的管线注明首个纯函数落点 `app/utils/chart/metricSeries.ts`（空串必须显式判掉：`Number("")` 是 `0`，会把「没采到」画成 0 值线）。类型落点 `shared/types/metric.ts` 同期补齐。 |
+| 2026-11-06 | 0.4.0 | **增「§八 `/metric/definition` 目录 join 与三分类判定」并落地指标选择器**：登记请求（`page_size=200`、不传 `metric_group` / `keyword` 的理由、会话级缓存）、条目容错解析（编码 `code` → `metric_code` → `name`，类型只认 `METRIC_TYPES`）、固定判定顺序（名字判 collector → 目录判 text → 其余 numeric）、`meta_source` 三态与「目录不可用不阻塞出图」的降级口径，以及 S4 / S5 两条断言。§七 相应改写：清单只回答名字，类型判定在 §八。首个消费面 `app/utils/metric/metricCatalog.ts` + `layers/topology/app/composables/useMetricSeries.ts`，落在 `device-metrics` / `link-metrics`。 |
