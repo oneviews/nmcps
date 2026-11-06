@@ -1,11 +1,11 @@
 # key: bff
-# source: CI run 41925325753 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-04 回填）
+# source: CI run 42140792105 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-06 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
-✅ 挂载策略成功 200 code 0（AttachPolicy 是 POST 动作路由） — 200 0
-✅ 摘除不存在的策略仍 200（DetachPolicy 幂等） — 200 0
-✅ iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做） — total=3
-✅ AssignRole 成功 200 code 0（body 三字段 subject_type / subject_id / role_id） — 200 0
-✅ RevokeRole 撤销不存在的绑定仍 200（幂等） — 200 0
-✅ 旧代策略域资源（role / permission / abac / access）→ 404 bff_resource_not_allowed — 404/bff_resource_not_allowed 404/bff_resource_not_allowed 404/bff_resource_not_allowed 404/bff_resource_not_allowed
-✅ system / transmission 命名空间在白名单内（非 resource_not_allowed） — upstream_not_found / upstream_not_found
-106/106 项通过
+✅ ⑨-4 allowWrite=false → 写端点 405 simulator_write_disabled — 405 simulator_write_disabled
+✅ ⑨-4 allowWrite=false 的写请求不触达上游 — hits=0
+✅ ⑨-4 allowWrite=true → 写端点到达假仿真平台（方法 / 路径原样） — 200 /api/network/nodes/n1/start
+✅ ⑨-4 allowWrite=true 的写调用出站仍无 authorization / cookie — 1 次
+✅ ⑨-6 白名单条目可从源码抽取（抽取为空即红，避免「白名单被清空」的假绿） — 23 条
+✅ ⑨-6 白名单 ⊆ openapi 快照（路径 + 动词逐条命中） — 23/23
+✅ ⑨-6 快照自身一致（pathCount = paths 键数，info.version 非空） — 113 条 / v0.1.0 / 采集于 2026-11-05
+127/127 项通过
