@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.4.0
+version: 0.5.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -99,13 +99,25 @@ export interface MetricCatalogItem {
 
 ```ts
 export interface MetricDatapoint {
-  metric: Record<string, string>   // label key is `metric` (incl. __name__ / instance / ip)
+  metric: Record<string, string>   // label map (see the table below)
   value?: [number, string]         // realtime single point (Unix second + string value)
   values?: Array<[number, string]> // time-series sequence
 }
 ```
 
 Constraints: sample values are always strings (unpack the tuple then cast to `number`); `realtime` uses `value`, `range` uses `values` (mutually exclusive); no data ⇒ `results = []` (no zero-fill).
+
+**Measured label set** (re-checked 2026-11-06 against the live upstream `192.168.1.55:8888`, `10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`):
+
+| Label | When it appears | Purpose |
+| :--- | :--- | :--- |
+| `instance` / `ip` | always | the device management IP — use it to confirm "this series really belongs to that device" |
+| `__name__` | **only when `rate=false`**; a `rate=true` VM result carries none | never identify a metric by `__name__` (it is absent in rate mode) |
+| `ifIndex` | **interface-level metrics only** (`ifInOctets` / `ifOperStatus` …), value is the interface index as a string | the link page's interface dimension (§6.9) |
+| `job` | always | one device may be scraped by several jobs (`snmp_devices` / `wireless_devices`) ⇒ the de-duplication key (§6.9) |
+| `sys_name` / `auth` / `node_uuid` | depends on the scraping job | display fallbacks only, **never** part of the series identity |
+
+> `results` is **not always a single entry**: a `range` request for one `mgmt_ip` + `metric_code` measured 2 results (device-level metric, two jobs) up to 4 results (interface-level metric, 2 `ifIndex` × 2 jobs). The old "take `results[0]`" behaviour was an unmeasured assumption and is replaced by §6.9.
 
 ---
 
@@ -184,6 +196,22 @@ export interface MetricDatapointResponse {
 | S1 | `results: []` renders the empty-state copy and the DOM contains no zero-valued polyline |
 | S2 | With all-string values, the played series matches the `Number()`-converted one (ordering, maximum) |
 | S3 | On `code !== 0` a `UAlert` appears whose text equals the upstream `message` verbatim |
+| S6 | With `ifIndex` supplied only that interface's series is used (its two `job` entries merged first) and its values are distinguishable from those of other interfaces / device-level series; without `ifIndex` the deterministic rule of §6.9 picks the group instead of `results[0]` |
+
+### 6.9 Multiple series: the `ifIndex` interface dimension and same-source de-duplication
+
+`results` may carry **several interfaces of one device** and **several jobs of one interface**, so "one series = one label group" must be resolved explicitly (pure-function landing `selectMetricSeries` in `app/utils/chart/metricSeries.ts`).
+
+| Case | Rule |
+| :--- | :--- |
+| The caller supplies `ifIndex` (the link page passes the endpoint port index) | Take the group with `metric.ifIndex === String(ifIndex)`; when **no result of that metric carries an `ifIndex` label at all** (a device-level metric) fall back to the device-level group and let the page label it "device-level"; when the metric is interface-scoped but lacks that index ⇒ **empty state** (`no_interface_series`), never a substitute port |
+| Several entries with the same `ip` + `ifIndex` (different `job`) | Merge into one by **arithmetic mean per timestamp** (v1 measured the same interface scraped by two jobs; summing would double the traffic) |
+| No `ifIndex` supplied (device / monitor pages) | Group by `ifIndex`, take the **lowest group key first**, de-duplicate inside the group as above; a series without an `ifIndex` label is device-level and forms its own group |
+| An empty group | Left to the drop counter of §6.3 ②, never zero-filled |
+
+- The grouping key is `ifIndex` alone: `job` / `auth` / `sys_name` / `node_uuid` are scraping-side metadata — the same interface under two jobs **is the same physical object**.
+- With `rate=true` the series carries no `__name__`, so grouping and group selection **look at `ifIndex` only**.
+- The old "one device + one metric ⇒ a single result, take the first" was an unmeasured assumption and is gone; `check:ui` case A12 pins the rule with a fake upstream returning two `ifIndex` × two `job`.
 
 ---
 
@@ -279,3 +307,4 @@ A failing `GET /metric/definition` **never blocks the chart**: the whole catalog
 | 2026-11-05 | 0.2.0 | Added "§6 `/metric/datapoint` retrieval contract": request parameters (including the `ips` / `codes` batch mode and the `from` / `to` type gap between request and response), response envelope (`code` / `message` / `data`, batch echo as `null`), pair-unpacking hard constraints (string values must be converted, invalid points dropped without zero-fill), realtime/range exclusivity, `rate` decision rules, the normalisation pipeline (unpack → ascending sort → de-duplicate → format → pixel downsampling), failure semantics and three assertions. Lands ADR-0019 §7 obligation 3. |
 | 2026-11-06 | 0.3.0 | **Added "§7 `/metric/name` metric name list" together with its first consumer**: the request (`mgmt_ip`), the `MetricNameData` shape, the `RawMetricItem` dual shape (string / object, gap API-G12), the collector-namespace skip rule, the first-entry pick and the empty-list semantics are registered; a `/metric/datapoint` `metric_code` comes only from the list, never from guessing at the name. §6.6 now names the first pure-function landing `app/utils/chart/metricSeries.ts` (the empty string must be rejected explicitly: `Number("")` is `0`, which would draw "not collected" as a zero line). Types landed in `shared/types/metric.ts`. |
 | 2026-11-06 | 0.4.0 | **Added "§8 `/metric/definition` catalog join and three-way classification" together with the metric picker**: the request (`page_size=200`, why `metric_group` / `keyword` stay unset, the session-level cache), tolerant entry parsing (code from `code` → `metric_code` → `name`, type only from `METRIC_TYPES`), the fixed decision order (name → collector, catalog → text, everything else → numeric), the three `meta_source` states and the "a missing catalog never blocks the chart" degradation, plus assertions S4 / S5. §7 is reworded accordingly: the list answers names only, the type verdict lives in §8. First consumers: `app/utils/metric/metricCatalog.ts` and `layers/topology/app/composables/useMetricSeries.ts`, landed on `device-metrics` / `link-metrics`. |
+| 2026-11-06 | 0.5.0 | **Measurement overturns "`results` is always one entry"; added "§6.9 Multiple series: the `ifIndex` interface dimension and same-source de-duplication"**: a direct probe of the live upstream (`192.168.1.55:8888`, `10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`) shows a `range` request returning 2 results (device-level metric × two scraping jobs) up to 4 results (interface-level metric × 2 `ifIndex` × 2 `job`); the `ifIndex` label really exists (so the interface dimension is available) and `rate=true` results carry no `__name__`. §5 gained the measured label set; §6.9 fixes the three rules (with `ifIndex` keep only that interface, merge same `ip`+`ifIndex` across `job` by per-timestamp mean, without `ifIndex` take the lowest group key), removes the "take `results[0]`" assumption and adds assertion S6. |

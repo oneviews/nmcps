@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.4.0
+version: 0.5.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -100,13 +100,25 @@ export interface MetricCatalogItem {
 
 ```ts
 export interface MetricDatapoint {
-  metric: Record<string, string>   // 标签键为 metric（含 __name__ / instance / ip）
+  metric: Record<string, string>   // 标签映射（见下方清单）
   value?: [number, string]         // 实时单点（Unix 秒 + 字符串值）
   values?: Array<[number, string]> // 时序序列
 }
 ```
 
 约束：采样值恒为字符串，消费方须解包元组后转 `number`；`realtime` 用 `value`、`range` 用 `values`（不并存）；无数据 ⇒ `results = []`（不补 0 值点）。
+
+**标签实测清单**（2026-11-06 直连上游 `192.168.1.55:8888` 复核，`10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`）：
+
+| 标签 | 出现条件 | 用途 |
+| :--- | :--- | :--- |
+| `instance` / `ip` | 恒有 | 设备管理 IP，回验「这条序列确实是这台设备的」 |
+| `__name__` | **`rate=false` 时才有**；`rate=true` 的 VM 输出不带 `__name__` | 不得用 `__name__` 判指标名（速率模式下它不存在） |
+| `ifIndex` | **接口级指标才有**（`ifInOctets` / `ifOperStatus` …），值为接口索引字符串 | 链路页的接口维度（§6.9） |
+| `job` | 恒有 | 同设备可能被多个 job 重复采集（`snmp_devices` / `wireless_devices`）⇒ 去重依据（§6.9） |
+| `sys_name` / `auth` / `node_uuid` | 视采集 job 而定 | 只作展示兜底，**不参与**序列身份判定 |
+
+> `results` **不是恒一条**：同一 `mgmt_ip` + `metric_code` 的 `range` 请求实测返回 2 条（设备级指标，两个 job）到 4 条（接口级指标，2 个 `ifIndex` × 2 个 job）。旧实现「取 `results[0]`」属未取证假设，已由 §6.9 取代。
 
 ---
 
@@ -185,6 +197,22 @@ export interface MetricDatapointResponse {
 | S1 | `results: []` 渲染空态文案，且 DOM 中没有 0 值折线 |
 | S2 | 值全为字符串时，播放的数值序列与 `Number()` 后一致（排序、最大值） |
 | S3 | `code !== 0` 时出现 `UAlert` 且文案等于上游 `message` 原文 |
+| S6 | 给 `ifIndex` 时只用该接口的序列（同 `ifIndex`、不同 `job` 的两条先合并），与他接口/设备级序列的值可区分；不给 `ifIndex` 时按 §6.9 的确定性规则选组，不再取 `results[0]` |
+
+### 6.9 多序列：`ifIndex` 接口维度与同源去重
+
+`results` 可能同时含**同一设备的多个接口**与**同一接口的多个 job**，因此「一条序列 = 一个标签组」必须显式收敛（纯函数落点 `selectMetricSeries`，见 §6.6 同目录文件的 `app/utils/chart/metricSeries.ts`）。
+
+| 场景 | 规则 |
+| :--- | :--- |
+| 调用方给了 `ifIndex`（链路页传端点端口索引） | 取 `metric.ifIndex === String(ifIndex)` 的组；**该指标整份 `results` 都没有 `ifIndex` 标签**（设备级指标）⇒ 如实回落设备级组并由页面标注「设备级」；有接口维度但没有这个索引 ⇒ **空态**（`no_interface_series`），不拿别的端口顶替 |
+| 同 `ip` + 同 `ifIndex` 的多条（不同 `job`） | 逐时间戳**算术均值**合并成一条（v1 实测双 job 重复采集；不得相加，那会把流量翻倍） |
+| 未给 `ifIndex`（设备页 / 监视页） | 按 `ifIndex` 分组、组键**升序取第一组**，组内仍按上一条去重；无 `ifIndex` 标签的序列即「设备级」，单独成组 |
+| 组内点集为空 | 交给 §6.3 ② 的丢弃计数，不补 0 |
+
+- 分组键只用 `ifIndex`：`job` / `auth` / `sys_name` / `node_uuid` 属采集侧元数据，同一接口在不同 job 下**是同一个物理对象**。
+- `rate=true` 时序列没有 `__name__`，因此分组与选组**只看 `ifIndex`**，不看 `__name__`。
+- 旧实现「单设备单指标 ⇒ `results` 恒一条，取第一条」是未经取证的错误假设，已删除；`check:ui` 的 A12 用双 `ifIndex` × 双 `job` 的假上游锁死这条规则。
 
 ---
 
@@ -280,3 +308,4 @@ export interface RawMetricEntry {
 | 2026-11-05 | 0.2.0 | 增「§六 `/metric/datapoint` 取数口径」：登记请求参数（含 `ips` / `codes` 批量与 `from` / `to` 两侧类型差异）、响应信封（`code` / `message` / `data`，批量回显 `null`）、点对解包硬约束（字符串值必须数值化、非法点丢弃不补 0）、realtime/range 互斥、`rate` 判定、规范化管线（解包→升序→去重→格式化→像素降采样）、失败语义与三条断言。按 ADR-0019 §七 义务 3 落地。 |
 | 2026-11-06 | 0.3.0 | **增「§七 `/metric/name` 指标名清单」并落地首个消费面**：登记请求（`mgmt_ip`）、`MetricNameData` 形状、`RawMetricItem` 双形态（字符串 / 对象，缺口 API-G12）、采集器命名空间跳过规则、首项选取与空清单语义；`/metric/datapoint` 的 `metric_code` 只从清单来，不按命名猜类型。§6.6 的管线注明首个纯函数落点 `app/utils/chart/metricSeries.ts`（空串必须显式判掉：`Number("")` 是 `0`，会把「没采到」画成 0 值线）。类型落点 `shared/types/metric.ts` 同期补齐。 |
 | 2026-11-06 | 0.4.0 | **增「§八 `/metric/definition` 目录 join 与三分类判定」并落地指标选择器**：登记请求（`page_size=200`、不传 `metric_group` / `keyword` 的理由、会话级缓存）、条目容错解析（编码 `code` → `metric_code` → `name`，类型只认 `METRIC_TYPES`）、固定判定顺序（名字判 collector → 目录判 text → 其余 numeric）、`meta_source` 三态与「目录不可用不阻塞出图」的降级口径，以及 S4 / S5 两条断言。§七 相应改写：清单只回答名字，类型判定在 §八。首个消费面 `app/utils/metric/metricCatalog.ts` + `layers/topology/app/composables/useMetricSeries.ts`，落在 `device-metrics` / `link-metrics`。 |
+| 2026-11-06 | 0.5.0 | **实测推翻「`results` 恒一条」并增「§6.9 多序列：`ifIndex` 接口维度与同源去重」**：直连上游（`192.168.1.55:8888`，`10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`）取证——`range` 实测返回 2 条（设备级指标 × 两个采集 job）到 4 条（接口级指标 × 2 个 `ifIndex` × 2 个 `job`），`ifIndex` 标签确实存在（接口维度可用），`rate=true` 时无 `__name__`。§五 补齐标签实测清单；§6.9 定死三条规则（给了 `ifIndex` 只取该接口、同 `ip`+`ifIndex` 跨 `job` 逐时间戳取均值、未给 `ifIndex` 时组键升序取第一组），删除「取 `results[0]`」的错误假设，并新增断言 S6。 |

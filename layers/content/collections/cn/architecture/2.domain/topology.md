@@ -15,7 +15,7 @@ authority: normative
 scope:
   - domain.topology
 status: baseline
-version: 0.6.0
+version: 0.7.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -161,11 +161,11 @@ tags:
 | 页面 | 台账端点 | 选中后取数 |
 | :--- | :--- | :--- |
 | `device-metrics` | `GET /metric/device`（`page` / `page_size`；信封的 `total` 作计数） | `mgmt_ip` = 该设备的 `mgmt_ip` |
-| `link-metrics` | `GET /metric/link`（同上） | `mgmt_ip` = 链路 **source 端设备**的 `mgmt_ip`（另取一次 `/metric/device` 建 `device_code → mgmt_ip` 映射） |
+| `link-metrics` | `GET /metric/link`（同上） | `mgmt_ip` = 链路 **source 端设备**的 `mgmt_ip`（另取一次 `/metric/device` 建 `device_code → mgmt_ip` 映射）+ **过滤键 `ifIndex` = `identity.source.if_index`** |
 
-- **共用内核**：`useMetricSeries(ip, { code, rate })` —— 目录（§6.1 列表里的 `/metric/definition`）、名字清单、序列三步一次到位；页面只把返回值绑到控件上。
+- **共用内核**：`useMetricSeries(ip, { code, rate, ifIndex })` —— 目录（§6.1 列表里的 `/metric/definition`）、名字清单、序列三步一次到位；页面只把返回值绑到控件上。
 - **选择器**：`USelect` 选项 = 目录里 `selectable === true` 的条目（label 取 `en_name` 再兜 `code`，后缀给 `unit`）；切换只换 `metric_code`，不重取名字清单。
-- **链路级时序缺口（登记，不伪造）**：`/metric/datapoint` 只认 `mgmt_ip` + `metric_code`，没有 `link_id` 维度。链路页的**当前值**来自 `/metric/link` 的 `metrics`（带宽利用率 / 时延 / 丢包），折线画的是该链路 source 端设备的同名指标；真正的链路级时序要等上游支持 `link_id` 取数，届时只换 `ip` 的来源，管线不动。
+- **链路时序 = source 端该端口（2026-11-06 实测改口径）**：`/metric/datapoint` 仍没有 `link_id` 维度，但实测序列**带 `ifIndex` 标签**（双 job 重复、2 个接口 × 2 job 共 4 条），因此链路页从「source 设备同名指标」升级为「source 设备**该端口**的接口序列」：传 `ifIndex = identity.source.if_index`，由 `selectMetricSeries`（`NMCPS-CONTRACT-002` §6.9）过滤 + 跨 job 取均值。三种如实标注：① 端点 `if_index` 缺失 ⇒ 只出当前值、不出折线；② 选的指标不带 `ifIndex` 标签（`sysUpTime` 这类设备级指标）⇒ 画出设备级序列并标注「这是设备级，不是端口级」；③ 该指标有端口维度、但没有这个 `if_index` 的序列 ⇒ `no_interface_series` 空态，**不拿别的端口顶替**。真正的 `link_id` 取数仍等上游。
 - **速率开关**：只在目录条目 `metric_type === 'counter'` 时出现（`NMCPS-CONTRACT-002` §6.5），`rate` 由用户显式勾选、默认 `false`；`gauge` / `duration` 不显示开关、恒传 `false`。
 - **空态与降级**：与 §6.5 同口径（空清单 / 无数据 / 点全部非法都是空态，绝不画 0 值直线）；目录失败只在图表卡内给一行提示，**不升级成页面级错误**。
 
@@ -223,9 +223,9 @@ tags:
 
 | A10 | 指标页台账与选择器（`device-metrics`） | 左栏渲染设备台账（行数 > 0、计数来自信封 `total`），默认选中第一条；右栏指标选择器**只列目录判为 `numeric` 的条目**（假上游把 `sys_name` 标成 `string`，选项里不得出现它） | 清单元数据 `meta_source` 为 `backend`（目录命中）；`GET /metric/definition` 只发一次 |
 | A11 | 指标页出图与速率开关（`device-metrics`） | 默认指标渲染 `TrendChart`，`/api/metric/datapoint` 带该设备 `mgmt_ip` 与 `metric_code=if_in_octets`；切到 `gauge` 类指标后请求换 `metric_code` 且**不带** `rate`（`counter` 才有速率开关） | 序列里非法点丢弃并计数；空态不画 0 值直线 |
-| A12 | 链路页台账与出图（`link-metrics`） | 左栏渲染链路台账（行数 > 0，当前值列来自 `/metric/link` 的 `metrics`）；选中一条后右栏出现 `TrendChart`，`/api/metric/datapoint` 带该链路 **source 端设备**的 `mgmt_ip` | `device_code → mgmt_ip` 映射来自 `/metric/device`；链路级时序缺口按 §6.6 如实标注，不伪造 |
+| A12 | 链路页台账与出图（`link-metrics`） | 左栏渲染链路台账（行数 > 0，当前值列来自 `/metric/link` 的 `metrics`）；选中一条后右栏出现 `TrendChart`，`/api/metric/datapoint` 带该链路 **source 端设备**的 `mgmt_ip`，折线取的是 **`metric.ifIndex === identity.source.if_index`** 的那一组（同 `ifIndex` 跨 `job` 先取均值，不与他端口混画） | `device_code → mgmt_ip` 映射来自 `/metric/device`；`if_index` 缺失 / 指标无 `ifIndex` 标签 / 零匹配三种情况按 §6.6 如实标注，不回落、不伪造 |
 
-> **落地状态（2026-11-06）**：A1 ~ A12 已全部由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `151/151` 全绿。A3 由三条断言锁住：点节点后详情栏出现 `TrendChart` 且编码取自 `/metric/name` 的**首个可绘图名**（假上游故意把 `up` / `scrape_*` 排在清单最前，并把 `sys_name` 标成 `string`）、`/api/metric/datapoint` 请求带该节点 `mgmt_ip` 与 `metric_code`、序列里夹的两个非法点（空串 / `NaN`）被丢弃并计数（不补 0）。A10 ~ A12 覆盖指标页（`device-metrics` / `link-metrics`）：台账左栏行数与 `total` 一致、指标选择器只列目录判为 `numeric` 的条目（`sys_name` 不得出现）、切换指标后请求换 `metric_code`、链路页取该链路 source 端设备的 `mgmt_ip`。A7 / A9 的精确面放在「仿真通道已配置」的两个对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF：一个 `allowWrite=false`，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失、写端点 405 且假仿真平台侧零写命中；一个 `NUXT_SIMULATOR_ALLOW_WRITE=true`，断言按钮可点、`UModal` 二次确认后写请求真的落到假仿真平台且路径与方法原样、成功 toast 出现）—— 只测「未配置」等于没测过通道接通。LLDP 邻接分区、告警角标、**链路动作**、真正的链路级时序（上游暂不支持 `link_id` 取数，见 §6.6）同样属 P1。
+> **落地状态（2026-11-06）**：A1 ~ A12 已全部由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `153/153` 全绿。A3 由三条断言锁住：点节点后详情栏出现 `TrendChart` 且编码取自 `/metric/name` 的**首个可绘图名**（假上游故意把 `up` / `scrape_*` 排在清单最前，并把 `sys_name` 标成 `string`）、`/api/metric/datapoint` 请求带该节点 `mgmt_ip` 与 `metric_code`、序列里夹的两个非法点（空串 / `NaN`）被丢弃并计数（不补 0）。A10 ~ A12 覆盖指标页（`device-metrics` / `link-metrics`）：台账左栏行数与 `total` 一致、指标选择器只列目录判为 `numeric` 的条目（`sys_name` 不得出现）、切换指标后请求换 `metric_code`、链路页取该链路 source 端设备的 `mgmt_ip`。A7 / A9 的精确面放在「仿真通道已配置」的两个对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF：一个 `allowWrite=false`，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失、写端点 405 且假仿真平台侧零写命中；一个 `NUXT_SIMULATOR_ALLOW_WRITE=true`，断言按钮可点、`UModal` 二次确认后写请求真的落到假仿真平台且路径与方法原样、成功 toast 出现）—— 只测「未配置」等于没测过通道接通。LLDP 邻接分区、告警角标、**链路动作**、真正的 `link_id` 级时序（上游暂不支持，`if_index` 级已按 §6.6 落地）同样属 P1。
 
 ---
 
@@ -239,3 +239,4 @@ tags:
 | 2026-11-06 | 0.4.0 | **写入口 P1-B 落码**：`monitor` 工具栏右区两个节点动作（重启 / 停止）接 `POST /api/network/nodes/{node_id}/{restart,stop}`，目标取仿真侧 `marker.simId`（不是 8888 的节点 id）；交互为 `UModal` 二次确认 + 成功 `useToast` + 立即刷新。写权限不再靠猜：新增 BFF 能力探针 `GET /api/sim/channel`（只回 `configured` / `writeEnabled` / `timeoutMs` / `readinessPath`，**不回 `baseUrl`**），`writeEnabled=false` 时按钮 `disabled` 且页面零写请求。§6.2 补写入口范围表（链路动作 / 运行态增删留 P1，**不设按钮**——不留点了没反应的死按钮）、§八 `allowWrite=false` 的判据改为能力位、§九 新增 **A9**（二次确认 + 上游实收 + 结构化审计日志 + 能力探针不泄露地址），落地状态更新为 `139/139`。 |
 | 2026-11-06 | 0.5.0 | **A3 落码，A1~A9 全绿**：`monitor` 详情栏接上节点趋势 —— 选中节点 → `GET /api/metric/name`（`mgmt_ip`）挑编码（只排除 `up` / `scrape_*` 采集器命名空间，不按名字猜类型）→ `GET /api/metric/datapoint`（`mode=range`、近 1 小时、`step=60`、`rate` 不传）→ `TrendChart` 自绘折线。取数内核 `layers/topology/app/composables/useNodeTrend.ts`（含切节点清空、同节点失败保留旧序列并标 stale 的竞态处理），解包 / 升序 / 去重 / 像素降采样落在 `app/utils/chart/metricSeries.ts` 纯函数（空串显式判掉：`Number("")` 是 0，会把「没采到」画成 0 值线）；§6.5 新增取数口径与登记缺口（类型三分类需目录 join，属指标页 P1）；§七 `TrendChart` 行补本页用法；§九 A3 判据补「非法点丢弃不补 0」，落地状态改为 `142/142`（第 11 段新增三条断言）。 |
 | 2026-11-06 | 0.6.0 | **指标页落码，A10~A12 随之上线**：`/metric/datapoint` 的两步取数抽成 `layers/topology/app/composables/useMetricSeries.ts`（目录 join + 名字清单 + 序列，通用内核），`useNodeTrend.ts` 收成不传编码的薄包装；类型三分类落到 `app/utils/metric/metricCatalog.ts`（判定顺序见 `NMCPS-CONTRACT-002` §八），`device-metrics` / `link-metrics` 从占位页变成真实页面（`Layout/Split.vue` 台账 + `useRecordSelection` + `USelect` 指标选择器 + `counter` 才有速率开关）。新增 §6.6 取数口径，并登记链路级时序缺口：`/metric/datapoint` 只认 `mgmt_ip`，链路页画的是 source 端设备的同名指标，链路当前值取自 `/metric/link` 的 `metrics`。`check:ui` 142 → 151 条（第 11 段 A10 ~ A12 共九条断言：台账行数 / 默认选中 / 目录只取一次 / 选择器只列 numeric / 换指标改写 `metric_code` / `gauge` 无速率开关 / 链路当前值 / source 端 IP 反查 / 缺 IP 不发请求）。 |
+| 2026-11-06 | 0.7.0 | **链路折线改成「source 端该端口」并清掉「`results` 恒一条」的错误假设**：直连上游实测 `/metric/datapoint` 的 `range` 返回带 `ifIndex` 标签的多条序列（同设备可能被 2 个 job 重复采集），据此 §6.6 把链路页的口径从「source 设备同名指标」改为「`metric.ifIndex === identity.source.if_index` 的接口序列」（跨 job 逐时间戳取均值，规则见 `NMCPS-CONTRACT-002` §6.9）；三种情况如实标注：`if_index` 缺失不出折线、指标无 `ifIndex` 标签时标为设备级、零匹配走 `no_interface_series` 空态不回落。A12 的判据同步收紧，`check:ui` 151 → 153 条（新增「折线命中 source 端 `ifIndex`」与「设备级指标如实标注」两条断言，假上游改为双 `ifIndex` × 双 `job`）。 |
