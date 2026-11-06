@@ -155,7 +155,142 @@ export function seriesExtent(points: MetricSeriesPoint[]): { min: number, max: n
 	return { min, max };
 }
 
-/** `metric/name` 的双形态条目 → 指标名（字符串原样、对象取 `metric_code` 再兜 `metric_name`） */
+/**
+ * 一条 `results` 入口的分组键：`ifIndex` 标签（`NMCPS-CONTRACT-002` §6.9）。
+ *
+ * 空串 = 该序列**没有** `ifIndex` 标签，即设备级（`sysUpTime` 这类）；接口级指标才有值。
+ * 只认 `ifIndex`，不看 `job` / `auth` / `sys_name` / `node_uuid` —— 同一接口在两个 job 下是
+ * **同一个物理对象**，拿 `job` 当身份会把一条曲线画成两条。
+ */
+export function seriesGroupKey(metric: Record<string, unknown> | null | undefined): string {
+	const raw = metric?.ifIndex;
+	if (typeof raw === "string")
+		return raw.trim();
+	if (typeof raw === "number" && Number.isFinite(raw))
+		return String(raw);
+	return "";
+}
+
+/** 选组结果：一条可画的曲线 + 它是谁（页面据此如实标注「端口级 / 设备级」） */
+export interface MetricSeriesSelection {
+	points: MetricSeriesPoint[]
+	/** 非法点丢弃计数（组内各序列求和） */
+	dropped: number
+	/** 命中组的组键：`ifIndex` 字符串；空串 = 设备级 */
+	ifIndex: string
+	/** 参与合并的原始序列条数（> 1 说明同一接口被多个 job 重复采集，已按时间戳取均值） */
+	seriesCount: number
+}
+
+/**
+ * 同时间戳**算术均值**合并多条点列（§6.9）：同一 `ip` + `ifIndex` 被多个采集 job 重复上报时，
+ * 它们是同一个物理对象的重复采样 —— 取均值，绝不相加（相加会把流量翻倍）。
+ */
+export function averageSeriesPoints(lists: MetricSeriesPoint[][]): MetricSeriesPoint[] {
+	if (lists.length <= 1)
+		return sortAndDedupeSeries(lists[0] ?? []);
+
+	const buckets = new Map<number, { sum: number, count: number }>();
+	for (const list of lists) {
+		for (const point of list) {
+			const bucket = buckets.get(point.t);
+			if (bucket) {
+				bucket.sum += point.v;
+				bucket.count += 1;
+			} else {
+				buckets.set(point.t, { sum: point.v, count: 1 });
+			}
+		}
+	}
+
+	return [...buckets.keys()]
+		.sort((a, b) => a - b)
+		.map((t) => ({ t, v: (buckets.get(t) as { sum: number, count: number }).sum / (buckets.get(t) as { sum: number, count: number }).count }));
+}
+
+/**
+ * 从 `/metric/datapoint` 的 `results` 里选出**一条**要画的曲线（`NMCPS-CONTRACT-002` §6.9）。
+ *
+ * - `ifIndex` 给了（链路页传端点端口索引）⇒ 取同 `ifIndex` 的组；**该指标本身没有 `ifIndex` 标签**
+ *   （整份 `results` 只有设备级一组）时如实回落设备级（`ifIndex` 返空串，页面据此标注「设备级」），
+ *   而「有接口维度但没这个索引」返回 `null`，由调用方走 `no_interface_series` 空态 —— 不拿别的端口顶替；
+ * - `ifIndex` 没给（设备页 / 监视页）⇒ 按组键升序取第一组（设备级 `""` 最前），结果确定性；
+ * - 组内多条（跨 job）按时间戳取均值，点集沿用 §6.3 的解包与丢弃规则。
+ *
+ * 取代旧实现「单设备单指标 ⇒ `results[0]`」的未取证假设。
+ */
+export function selectMetricSeries(
+	results: Array<{ metric?: Record<string, unknown>, values?: MetricPointPair[] }> | undefined | null,
+	ifIndex?: number | string | null
+): MetricSeriesSelection | null {
+	const entries = (results ?? []).filter(Boolean);
+	if (!entries.length)
+		return null;
+
+	const wanted = ifIndex === null || ifIndex === undefined ? "" : String(ifIndex).trim();
+	const groups = new Map<string, MetricPointPair[][]>();
+
+	for (const entry of entries) {
+		const key = seriesGroupKey(entry.metric);
+		const bucket = groups.get(key);
+		if (bucket)
+			bucket.push(entry.values ?? []);
+		else
+			groups.set(key, [entry.values ?? []]);
+	}
+
+	let key: string;
+
+	if (wanted) {
+		if (groups.has(wanted)) {
+			key = wanted;
+		} else if (groups.size === 1 && groups.has("")) {
+			/**
+			 * 这条指标**本身就没有 `ifIndex` 标签**（`sysUpTime` 这类设备级指标）：如实回落设备级序列，
+			 * 由页面标注「这是设备级，不是端口级」—— 比画一条空态更有信息量，也没有伪造端口维度。
+			 */
+			key = "";
+		} else {
+			/** 端口没匹配上（该指标有接口维度，但没有这个索引）：空态，不拿别的端口顶替 */
+			return null;
+		}
+	} else {
+		/** 组键升序：数字索引按数值比（`9` < `10`），设备级 `""` 排最前 */
+		key = [...groups.keys()].sort(compareGroupKeys)[0] ?? "";
+	}
+	const lists: MetricSeriesPoint[][] = [];
+	let dropped = 0;
+
+	for (const pairs of groups.get(key) ?? []) {
+		const unpacked = unpackSeries(pairs);
+		dropped += unpacked.dropped;
+		lists.push(unpacked.points);
+	}
+
+	return {
+		points: averageSeriesPoints(lists),
+		dropped,
+		ifIndex: key,
+		seriesCount: lists.length
+	};
+}
+
+/** 组键比较：空串（设备级）最前，数字按数值，其余按字典序 */
+function compareGroupKeys(a: string, b: string): number {
+	if (a === b)
+		return 0;
+	if (!a)
+		return -1;
+	if (!b)
+		return 1;
+
+	const na = Number(a);
+	const nb = Number(b);
+	if (Number.isFinite(na) && Number.isFinite(nb))
+		return na - nb;
+
+	return a < b ? -1 : 1;
+}
 export function metricNameOf(item: RawMetricItem): string {
 	if (typeof item === "string")
 		return item.trim();

@@ -2,8 +2,9 @@
 	<div class="flex min-h-0 flex-1 flex-col">
 		<!--
 			`/topology/link-metrics` 链路遥测指标（两栏，NMCPS-ADR-0017 D1）。
-			左栏 = `/metric/link` 的链路台账（`NMCPS-CONTRACT-002` §九），右栏 = 链路当前值 + source 端设备的趋势。
-			链路**没有 `mgmt_ip`**：折线用 source 端设备的指标（缺口登记在 NMCPS-DESIGN-001 §6.6，不伪造）。
+			左栏 = `/metric/link` 的链路台账（`NMCPS-CONTRACT-002` §九），右栏 = 链路当前值 + source 端设备**该端口**的趋势。
+			链路**没有 `mgmt_ip`**，也没有 `link_id` 取数：折线 = source 端设备 + `ifIndex = identity.source.if_index`
+			的接口序列（`NMCPS-CONTRACT-002` §6.9，口径见 NMCPS-DESIGN-001 §6.6），端到端如实标注、不伪造。
 			页面根显式取 `flex-1 min-h-0`（NMCPS-ARCH-006 §3.3）：definite height 链在这里落定。
 		-->
 		<Teleport to="#app-toolbar-left">
@@ -203,8 +204,11 @@
 							color="info"
 							variant="subtle"
 							icon="carbon:information"
-							:title="$t('pages.topology-link-metrics.gapTitle')"
-							:description="$t('pages.topology-link-metrics.gapBody', { source: selected.sourceCode || '—' })"
+							data-testid="link-series-scope"
+							:title="$t(portScope ? 'pages.topology-link-metrics.portTitle' : 'pages.topology-link-metrics.gapTitle')"
+							:description="portScope
+								? $t('pages.topology-link-metrics.portBody', { index: selected.sourceIfIndex })
+								: $t('pages.topology-link-metrics.gapBody', { source: selected.sourceCode || '—' })"
 						/>
 
 						<section class="space-y-2">
@@ -214,6 +218,7 @@
 							<MetricTrendPanel
 								:ip="sourceIp"
 								:name="selected.sourceCode || selected.id"
+								:if-index="selected.sourceIfIndex"
 								:missing-ip-text="$t('pages.topology-link-metrics.noIp')"
 							/>
 						</section>
@@ -247,11 +252,11 @@
 	 * 契约来源：NMCPS-CONTRACT-002 §六（`/metric/datapoint`）、§八（目录 join）、§九（`/metric/link` 台账）
 	 * 领域口径：NMCPS-DESIGN-001 §6.6（layers/content/collections/cn/architecture/2.domain/topology.md）
 	 *
-	 * ── 链路级时序缺口（如实登记，不假装已补）────────────────────────────────
-	 * `/metric/link` 的条目里**没有 `mgmt_ip`**，`/metric/datapoint` 只认设备管理 IP，所以链路自己没有
-	 * 历史曲线。页面用 `identity.source.device_code` 经 `/metric/device` 反查 source 端设备的 IP，
-	 * 画的是**那台设备**的指标：面板上方用一条 info 提示把这件事说清楚。反查不到 IP 就只展示当前值、
-	 * 不出折线 —— 绝不猜一个地址去取数。上游补上链路级时序端点后，整段替换这里即可。
+	 * ── 折线的范围（如实登记，不假装是 link_id 时序）──────────────────────────
+	 * `/metric/link` 的条目里**没有 `mgmt_ip`**，`/metric/datapoint` 也只认设备管理 IP + 指标名；但实测
+	 * 序列带 `ifIndex` 标签（`NMCPS-CONTRACT-002` §6.9），所以折线 = `identity.source` 那台设备上
+	 * **该端口**（`if_index`）的接口序列：跨 job 取均值、不与他端口混画。三种如实标注见 `portScope`
+	 * 与面板内的设备级说明；`if_index` 缺失时只出当前值、不出折线。真正的 `link_id` 时序仍等上游。
 	 */
 	definePageMeta({ sort: 3, icon: "carbon:link" });
 
@@ -287,6 +292,9 @@
 		const code = selected.value?.sourceCode;
 		return code ? ipIndex.value.get(code) ?? "" : "";
 	});
+
+	/** source 端有 `if_index` ⇒ 折线是这个端口级的（`NMCPS-CONTRACT-002` §6.9）；缺了就是设备级，如实说明 */
+	const portScope = computed(() => selected.value?.sourceIfIndex != null);
 
 	const toolbarPane = computed<"list" | "detail">(() =>
 		shape.value === "overlay" && hasSelection.value ? "detail" : "list");

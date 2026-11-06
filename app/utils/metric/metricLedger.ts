@@ -39,6 +39,12 @@ export interface MetricLinkRow {
 	/** 两端 `device_code`（source 端用于反查 `mgmt_ip`） */
 	sourceCode: string
 	targetCode: string
+	/**
+	 * 两端 `if_index`（`NMCPS-CONTRACT-002` §6.9 的接口维度）：链路折线按 source 端这个索引过滤，
+	 * `null` = 上游没给 ⇒ 页面只出当前值、不出折线（不猜索引）。
+	 */
+	sourceIfIndex: number | null
+	targetIfIndex: number | null
 	medium: string
 	status: string
 	usagePercent: number | null
@@ -112,6 +118,8 @@ export function normalizeMetricLinks(facts: MetricLinkFact[] | null | undefined)
 			targetLabel: endpointLabel(fact.identity?.target),
 			sourceCode: textOf(fact.identity?.source?.device_code),
 			targetCode: textOf(fact.identity?.target?.device_code),
+			sourceIfIndex: finiteOrNull(fact.identity?.source?.if_index),
+			targetIfIndex: finiteOrNull(fact.identity?.target?.if_index),
 			medium: textOf(metrics?.medium),
 			status: textOf(metrics?.status),
 			usagePercent: finiteOrNull(metrics?.bandwidth_usage_percent),

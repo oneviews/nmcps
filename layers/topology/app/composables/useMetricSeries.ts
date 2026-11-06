@@ -17,7 +17,7 @@ import type { ApiRequestOptions } from "~~/app/composables/useApi";
 import type { MetricSeriesPoint } from "~~/app/utils/chart/metricSeries";
 import type { MetricDefinitionData, RawMetricDefinition } from "~~/app/utils/metric/metricCatalog";
 import type { MetricCatalogItem, MetricDatapointData, MetricNameData, RawMetricItem } from "~~/shared/types/metric";
-import { normalizeMetricSeries } from "~~/app/utils/chart/metricSeries";
+import { selectMetricSeries } from "~~/app/utils/chart/metricSeries";
 import { buildMetricCatalog, pickPaintableMetricCode, selectableMetrics, toDefinitionMap } from "~~/app/utils/metric/metricCatalog";
 
 /** 时间窗：近 1 小时（DESIGN-001 §6.4 的默认窗口口径） */
@@ -27,8 +27,8 @@ const STEP_SECONDS = 60;
 /** 目录一次取多少条：覆盖单租户目录，避免「翻页丢了条目」被当成「目录里没有」（§8.1） */
 const CATALOG_PAGE_SIZE = 200;
 
-/** 「没有可画的序列」的三种正常原因（不是错误，不显示上游文案） */
-export type MetricSeriesReason = "" | "no_metric_names" | "no_paintable_metric" | "no_datapoints";
+/** 「没有可画的序列」的四种正常原因（不是错误，不显示上游文案） */
+export type MetricSeriesReason = "" | "no_metric_names" | "no_paintable_metric" | "no_datapoints" | "no_interface_series";
 
 /** 失败信息：`code` 保留 BFF / 上游语义，`message` 是原话（数据，不翻译） */
 export interface MetricSeriesError {
@@ -41,6 +41,12 @@ export interface MetricSeriesOptions {
 	code?: Ref<string>
 	/** 速率开关（只对 `counter` 有意义，§6.5）：由用户显式勾选，默认 `false` */
 	rate?: Ref<boolean>
+	/**
+	 * 接口维度过滤（`NMCPS-CONTRACT-002` §6.9）：链路页传端点 `if_index`，只画该端口的序列；
+	 * 不传 = 设备页 / 监视页口径（按组键升序取第一组）。给了却一条都没匹配上走
+	 * `no_interface_series` 空态，**不回落**设备级。
+	 */
+	ifIndex?: Ref<number | string | null | undefined>
 }
 
 /**
@@ -69,6 +75,7 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 	/** 当前选中的编码：页面可传入自己的 ref 以绑定选择器，否则内部持有 */
 	const selectedCode = options.code ?? ref("");
 	const rate = options.rate ?? ref(false);
+	const ifIndex = options.ifIndex ?? ref<number | string | null | undefined>(null);
 
 	const catalog = ref<MetricCatalogItem[]>([]);
 	/** 目录不可用（§8.4）：只有名字证据，页面提示一句但不进错误态 */
@@ -80,6 +87,10 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 	const loading = ref(false);
 	/** 保留的是上一次成功数据（网络抖动时页面据此提示「数据可能不是最新」） */
 	const stale = ref(false);
+	/** 已画曲线的组键：`ifIndex` 字符串；空串 = 设备级（页面据此区分「端口级 / 设备级」） */
+	const seriesIfIndex = ref("");
+	/** 参与合并的原始序列条数（> 1 = 跨 job 重复，已取均值；页面可据此如实标注） */
+	const seriesCount = ref(0);
 
 	/** 选择器选项 = 目录里 `selectable` 的条目（§8.3） */
 	const metricOptions = computed(() => selectableMetrics(catalog.value));
@@ -102,6 +113,8 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 		degraded.value = false;
 		points.value = [];
 		dropped.value = 0;
+		seriesIfIndex.value = "";
+		seriesCount.value = 0;
 		reason.value = "";
 		error.value = null;
 		stale.value = false;
@@ -130,6 +143,8 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 		if (target !== loadedFor) {
 			points.value = [];
 			dropped.value = 0;
+			seriesIfIndex.value = "";
+			seriesCount.value = 0;
 		}
 
 		reason.value = "";
@@ -162,11 +177,13 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 			if (effective !== selectedCode.value)
 				selectedCode.value = effective;
 
-			appliedKey = `${target}|${effective}|${rate.value}`;
+			appliedKey = `${target}|${effective}|${rate.value}|${ifIndexKey()}`;
 
 			if (!effective) {
 				points.value = [];
 				dropped.value = 0;
+				seriesIfIndex.value = "";
+				seriesCount.value = 0;
 				reason.value = built.items.length ? "no_paintable_metric" : "no_metric_names";
 				loadedFor = target;
 				return;
@@ -193,13 +210,20 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 			if (token !== sequence)
 				return;
 
-			// 单设备单指标 ⇒ `results` 恒一条；多条时取第一条（不合并不同标签集的序列，那会画成假线）
-			const series = data?.results?.[0];
-			const { points: normalized, dropped: discarded } = normalizeMetricSeries(series?.values);
+			/**
+			 * 多条 `results` 是常态（同设备多 job 重复采集、接口级指标还按 `ifIndex` 分组），
+			 * 选组与跨 job 取均值的规则在 `NMCPS-CONTRACT-002` §6.9；这里只把结果落盘。
+			 */
+			const wantedIfIndex = ifIndex.value === null || ifIndex.value === undefined ? "" : String(ifIndex.value).trim();
+			const picked = selectMetricSeries(data?.results, wantedIfIndex || null);
 
-			points.value = normalized;
-			dropped.value = discarded;
-			reason.value = normalized.length ? "" : "no_datapoints";
+			points.value = picked?.points ?? [];
+			dropped.value = picked?.dropped ?? 0;
+			seriesIfIndex.value = picked?.ifIndex ?? "";
+			seriesCount.value = picked?.seriesCount ?? 0;
+			reason.value = picked?.points.length
+				? ""
+				: (wantedIfIndex && !picked ? "no_interface_series" : "no_datapoints");
 			loadedFor = target;
 		} catch (raw) {
 			if (token !== sequence)
@@ -215,11 +239,16 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 		}
 	}
 
-	// 设备 / 编码 / 速率任一变化就重取；内部自动挑编码只写 `appliedKey`，不再触发一轮同名请求
+	/** `ifIndex` 的空值归一：`null` / `undefined` / 空串都视为「不过滤」 */
+	function ifIndexKey(): string {
+		return ifIndex.value === null || ifIndex.value === undefined ? "" : String(ifIndex.value).trim();
+	}
+
+	// 设备 / 编码 / 速率 / 接口任一变化就重取；内部自动挑编码只写 `appliedKey`，不再触发一轮同名请求
 	watch(
-		[ip, selectedCode, rate],
+		[ip, selectedCode, rate, ifIndex],
 		() => {
-			if (`${ip.value.trim()}|${selectedCode.value}|${rate.value}` === appliedKey)
+			if (`${ip.value.trim()}|${selectedCode.value}|${rate.value}|${ifIndexKey()}` === appliedKey)
 				return;
 
 			void load();
@@ -243,6 +272,10 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 		points,
 		/** 被丢弃的非法点数（`""` / `"NaN"` / `null`；不补 0，只计数） */
 		dropped,
+		/** 已画曲线的组键：`ifIndex` 字符串；空串 = 设备级（§6.9） */
+		seriesIfIndex,
+		/** 参与合并的原始序列条数（> 1 = 跨 job 重复，已取均值） */
+		seriesCount,
 		/** 「没有可画序列」的正常原因（页面按 i18n 映射文案） */
 		reason,
 		error,

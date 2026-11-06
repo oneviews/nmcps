@@ -7,7 +7,8 @@
 		空态分三类，都来自 `reason`（不是错误）：
 			`no_metric_names`    这台设备没有任何指标名（§七：合法空）；
 			`no_paintable_metric` 有名字但全是文本 / 采集器命名空间（§8.3：不硬画一条直线）；
-			`no_datapoints`      取到了名字，窗口内没有合法采样点（§6.3：非法点丢弃不计 0）。
+			`no_datapoints`      取到了名字，窗口内没有合法采样点（§6.3：非法点丢弃不计 0）；
+			`no_interface_series` 给了 `ifIndex` 却一条序列都没匹配上（§6.9：不回落设备级，不拿别的端口顶替）。
 -->
 	<div class="space-y-3">
 		<div class="flex flex-wrap items-center gap-2">
@@ -64,12 +65,27 @@
 
 		<template v-else>
 			<USkeleton v-if="loading" class="h-24 w-full rounded-md" />
-			<GraphTrendChart
+			<div
 				v-else
-				:points="points"
-				:label="$t('pages.topology-metrics.chartLabel', { name, metric: selectedCode || '—' })"
-				:empty-text="emptyText"
-			/>
+				data-testid="metric-trend"
+				:data-series-if-index="seriesIfIndex"
+				:data-series-count="String(seriesCount)"
+				:data-if-index-filter="ifIndexFilter"
+			>
+				<GraphTrendChart
+					:points="points"
+					:label="$t('pages.topology-metrics.chartLabel', { name, metric: selectedCode || '—' })"
+					:empty-text="emptyText"
+				/>
+				<!-- 端口过滤给了、但所选指标不带 `ifIndex` 标签（`sysUpTime` 这类）：如实说是设备级，不冒充端口级 -->
+				<p
+					v-if="deviceLevelOnly"
+					data-testid="metric-device-level-note"
+					class="pt-1 text-xs text-(--ui-text-muted)"
+				>
+					{{ $t("pages.topology-metrics.deviceLevelNote", { index: ifIndexFilter }) }}
+				</p>
+			</div>
 
 			<!-- 失败语义（§6.7）：上游原话逐字给出 + 重试，不静默降级成「无数据」 -->
 			<div v-if="error" data-testid="metric-trend-error">
@@ -112,6 +128,11 @@
 		name: string
 		/** 没有 IP 时的一句话（由页面按自己的语义传入：设备缺 IP / 链路 source 端缺 IP） */
 		missingIpText: string
+		/**
+		 * 接口维度过滤（`NMCPS-CONTRACT-002` §6.9）：链路页传 source 端 `if_index`，
+		 * 面板只画该端口的序列；不传 = 设备页口径。
+		 */
+		ifIndex?: number | null
 	}>();
 
 	const { t } = useI18n();
@@ -122,9 +143,15 @@
 	/** 编码与速率开关由面板持有：`useMetricSeries` 的 `code` ref 与选择器同一个 */
 	const selectedCode = ref("");
 	const rate = ref(false);
+	const ifIndexRef = computed(() => props.ifIndex ?? null);
 
-	const { options, points, dropped, rateAvailable, degraded, reason, error, loading, stale, reload }
-		= useMetricSeries(ip, { code: selectedCode, rate });
+	const { options, points, dropped, rateAvailable, degraded, reason, error, loading, stale, reload, seriesIfIndex, seriesCount }
+		= useMetricSeries(ip, { code: selectedCode, rate, ifIndex: ifIndexRef });
+
+	/** 过滤键（字符串；`""` = 不过滤）。页面断言用，避免正文里再复述一遍索引 */
+	const ifIndexFilter = computed(() => (ifIndexRef.value === null ? "" : String(ifIndexRef.value)));
+	/** 过滤给了但命中组是设备级（`ifIndex` 为空）⇒ 这条曲线不是端口级的，如实标注 */
+	const deviceLevelOnly = computed(() => !!ifIndexFilter.value && seriesCount.value > 0 && !seriesIfIndex.value);
 
 	const pickerItems = computed(() => options.value.map((item) => ({
 		label: metricOptionLabel(item),
@@ -137,6 +164,9 @@
 
 		if (reason.value === "no_paintable_metric")
 			return t("pages.topology-metrics.emptyNoPlottable");
+
+		if (reason.value === "no_interface_series")
+			return t("pages.topology-metrics.emptyNoInterface", { index: ifIndexFilter.value });
 
 		return t("pages.topology-metrics.emptyNoData");
 	});

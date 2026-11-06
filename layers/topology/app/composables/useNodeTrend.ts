@@ -22,9 +22,19 @@ export function useNodeTrend(ip: Ref<string>) {
 	 * 空态原因收敛到监控页的两种口径：清单里一条可画的都没有时，对页面而言等同于「没有可查指标」。
 	 * 选择器页面（`device-metrics`）直接用内核的三种原因，因为它要区分「这条是文本指标」。
 	 */
-	const reason = computed<NodeTrendReason>(() =>
-		series.reason.value === "no_paintable_metric" ? "no_metric_names" : series.reason.value
-	);
+	const reason = computed<NodeTrendReason>(() => {
+		const current = series.reason.value;
+
+		if (current === "no_paintable_metric")
+			return "no_metric_names";
+
+		// 监控页不传 `ifIndex`（§6.9 的过滤只用于链路页），这条内核原因在这里不可能出现；
+		// 万一将来出现，按「没有可画点」处理，仍不伪造 0 值曲线。
+		if (current === "no_interface_series")
+			return "no_datapoints";
+
+		return current as NodeTrendReason;
+	});
 
 	return {
 		/** 正在画的指标编码（`""` = 还没有） */
