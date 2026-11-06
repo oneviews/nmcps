@@ -1,26 +1,26 @@
 {
 	"bff": {
-		"sha256": "6ec2bc3ab1f373ed2cc7d16b16488d6fbe9cb5fd9b157a4e33a97b8c09db35c8",
-		"source": "CI run 42140792105 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-06 回填）"
+		"sha256": "57a277517106a8885d24aeb7d8b9326c7af3f5e9db96446e27aaf2433e23819d",
+		"source": "CI run 42146620406 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-06 回填）"
 	},
 	"governance": {
-		"sha256": "bde5d3857072f140e929e668cfeef1699e061e5c2a6c7e1ddbbd70bf3203e3d6",
-		"source": "CI run 42140792105 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-06 回填）"
+		"sha256": "3187a837ff998b67bf5ec1922cfe4cc44bd63a9e2cae28b591a3639b753fe6bd",
+		"source": "CI run 42146620406 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-06 回填）"
 	},
 	"i18n": {
-		"sha256": "5daedcf03e66224a221e10129fa9f9b0d9180761f311ab91b49a2d4a1f254798",
-		"source": "CI run 42140792105 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-06 回填）"
+		"sha256": "3fe91300f6ab74d2eb0046dcd2052338bb3ad4d8e054650a1dc80d38804b0e75",
+		"source": "CI run 42146620406 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-06 回填）"
 	},
 	"lint": {
-		"sha256": "0c03a4ea71a077c4474e1e472076bdfae98603bd6c27157be917c1676847471e",
-		"source": "CI run 42140792105 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-06 回填）"
+		"sha256": "88be734f869164a7391c846354c7aa299358d21dac29379da5b6598ec0c1816d",
+		"source": "CI run 42146620406 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-06 回填）"
 	},
 	"typecheck": {
-		"sha256": "cfbbf4bb4b00da0c867b136bdab10e89dde44308c71c8b4433089e05924da8b3",
-		"source": "CI run 42140792105 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-06 回填）"
+		"sha256": "6fe25ef9db0e35b61d818ecdf7ee101caaf963cc9cdf54f4c0e78d2560bb8d81",
+		"source": "CI run 42146620406 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-06 回填）"
 	},
 	"ui": {
-		"sha256": "397812a80bbcd014b79e0914b666b67ff6c1064120a7d06655540d44a5d3f573",
-		"source": "CI run 42140792105 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-06 回填）"
+		"sha256": "e12a8117eb15d01fcd9f4e3fc860cdbc164f34e8f4a711003ceebd7cad7f5872",
+		"source": "CI run 42146620406 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-06 回填）"
 	}
 }

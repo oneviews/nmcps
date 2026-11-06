@@ -1,5 +1,5 @@
 # key: bff
-# source: CI run 42140792105 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-06 回填）
+# source: CI run 42146620406 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-06 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ ⑨-4 allowWrite=false → 写端点 405 simulator_write_disabled — 405 simulator_write_disabled
 ✅ ⑨-4 allowWrite=false 的写请求不触达上游 — hits=0
