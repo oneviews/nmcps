@@ -1801,6 +1801,8 @@ if (upstreamPort) {
 			rows: document.querySelectorAll("[data-testid='metric-link-row']").length,
 			selected: document.querySelector("[data-testid='metric-link-row'][aria-selected='true']")?.getAttribute("data-link-id") ?? "",
 			chart: !!document.querySelector("[data-testid='trend-chart']"),
+			seriesIfIndex: document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-if-index") ?? "",
+			seriesCount: document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-count") ?? "",
 			text: document.body.textContent ?? ""
 		}));
 		log(
@@ -1820,8 +1822,30 @@ if (upstreamPort) {
 			&& !!linkIndex
 			&& linkProbe.chart
 			&& linkDatapoint.includes("mgmt_ip=10.0.0.2")
-			&& linkProbe.text.includes("这条折线来自 source 端设备"),
+			&& linkProbe.text.includes("这条折线来自 source 端的该端口"),
 			linkDatapoint ? linkDatapoint.split("?")[1]?.slice(0, 120) ?? "" : "未见 /api/metric/datapoint 请求"
+		);
+		// CONTRACT-002 §6.9：折线只取 source 端该端口（假上游造了 ifIndex 101/102 × 双 job），
+		// 命中的组键必须是 101，且跨 job 已合并成 2 条同源序列 —— 取 results[0] 或混画都会露馅。
+		log(
+			"A12 折线命中 source 端 ifIndex（两端口不混画、跨 job 取均值）",
+			linkProbe.seriesIfIndex === "101" && linkProbe.seriesCount === "2",
+			`ifIndex=${linkProbe.seriesIfIndex || "无"} series=${linkProbe.seriesCount || "无"}`
+		);
+
+		// 设备级指标（无 `ifIndex` 标签）在链路页必须如实标注，而不是冒充端口序列
+		await page.locator("[data-testid='metric-picker']").click();
+		await page.waitForTimeout(300);
+		await page.getByRole("option", { name: /CPU utilization/ }).first().click();
+		await page.waitForTimeout(1200);
+		const deviceLevelProbe = await page.evaluate(() => ({
+			note: !!document.querySelector("[data-testid='metric-device-level-note']"),
+			seriesIfIndex: document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-if-index") ?? ""
+		}));
+		log(
+			"A12 设备级指标标注为设备级（不冒充端口序列）",
+			deviceLevelProbe.note && deviceLevelProbe.seriesIfIndex === "",
+			`note=${deviceLevelProbe.note} ifIndex=${deviceLevelProbe.seriesIfIndex || "无"}`
 		);
 
 		// source 端没有 mgmt_ip（假上游的 DEV-AP-1）→ 只给一句原因，不发明请求

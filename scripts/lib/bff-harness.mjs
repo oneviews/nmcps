@@ -460,14 +460,15 @@ export async function startUpstream(port) {
 		}
 
 		// `/metric/link`：链路台账（A12）。链路**没有 `mgmt_ip`**，页面靠 source 端 `device_code`
-		// 反查设备 IP；第二条刻意从「没有 IP」的 `DEV-AP-1` 出发，把「取不到折线」这条分支固定进自查。
+		// 反查设备 IP，并用 source 端 `if_index` 过滤端口序列（CONTRACT-002 §6.9）；第二条刻意从
+		// 「没有 IP」的 `DEV-AP-1` 出发，把「取不到折线」这条分支固定进自查。
 		if (/^\/(?:api\/v1\/)?metric\/link$/.test(url.pathname) && req.method === "GET") {
 			const links = [
 				{
 					identity: {
 						link_id: "LNK-0001",
-						source: { device_code: "DEV-CORE-1", device_role: "core", interface_id: "GE0/0/1", interface_name: "GE0/0/1", medium: "fiber" },
-						target: { device_code: "DEV-ACC-1", device_role: "access", interface_id: "GE1/0/1", interface_name: "GE1/0/1", medium: "fiber" },
+						source: { device_code: "DEV-CORE-1", device_role: "core", interface_id: "GE0/0/1", if_index: 101, interface_name: "GE0/0/1", medium: "fiber" },
+						target: { device_code: "DEV-ACC-1", device_role: "access", interface_id: "GE1/0/1", if_index: 201, interface_name: "GE1/0/1", medium: "fiber" },
 						discovery: "lldp"
 					},
 					metrics: {
@@ -502,6 +503,9 @@ export async function startUpstream(port) {
 
 		// `/metric/datapoint` 回 VM 风格 matrix：点对恒为 `[unix秒, 字符串值]`。序列里**故意夹三个
 		// 非法点**（空串 / `NaN` / 缺值）—— 展示层必须丢弃并计数、绝不补 0（CONTRACT-002 §6.3 ②）。
+		// 多条 `results` 是常态（§6.9）：接口级指标按 `ifIndex` 分组、同一接口被两个 job 重复采集；
+		// 这里给 `if_in_octets` 造 2 个端口 × 2 个 job（同组的第二个 job 只回合法点，于是「丢弃计数」
+		// 仍是 3，不会被双 job 翻倍），另一端口的值刻意不同 —— 混画就一定能看出来。
 		if (/^\/(?:api\/v1\/)?metric\/datapoint$/.test(url.pathname) && req.method === "GET") {
 			const now = Math.floor(Date.now() / 1000);
 			const values = [
@@ -515,6 +519,23 @@ export async function startUpstream(port) {
 				[now - 60, "20.25"],
 				[now, "22"]
 			];
+			const validOnly = values.filter(([, raw]) => raw !== "" && raw !== "NaN");
+			const otherPort = validOnly.map(([ts]) => [ts, "41.5"]);
+
+			const code = url.searchParams.get("metric_code") ?? "";
+			const ip = url.searchParams.get("mgmt_ip") ?? "";
+			const withRate = url.searchParams.get("rate") === "true";
+			/** `rate=true` 时 VM 的输出不带 `__name__`（§五 实测），这里照抄，免得内核偷偷依赖它 */
+			const nameLabel = withRate ? {} : { __name__: code };
+
+			const results = code === "if_in_octets"
+				? [
+					{ metric: { ...nameLabel, ip, job: "snmp_devices", ifIndex: "101" }, values },
+					{ metric: { ...nameLabel, ip, job: "wireless_devices", ifIndex: "101" }, values: validOnly },
+					{ metric: { ...nameLabel, ip, job: "snmp_devices", ifIndex: "102" }, values: otherPort }
+				]
+				// 设备级指标（`sysUpTime` / `cpu_util_pct` 这类）没有 `ifIndex` 标签
+				: [{ metric: { ...nameLabel, ip, job: "snmp_devices" }, values }];
 
 			return send(200, {
 				code: 0,
@@ -523,13 +544,8 @@ export async function startUpstream(port) {
 					mode: url.searchParams.get("mode") ?? "range",
 					mgmt_ip: url.searchParams.get("mgmt_ip") ?? null,
 					metric_code: url.searchParams.get("metric_code") ?? null,
-					rate: false,
-					results: [
-						{
-							metric: { __name__: url.searchParams.get("metric_code") ?? "", ip: url.searchParams.get("mgmt_ip") ?? "" },
-							values
-						}
-					]
+					rate: withRate,
+					results
 				}
 			});
 		}
