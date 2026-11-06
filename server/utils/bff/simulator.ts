@@ -1,7 +1,7 @@
 import type { H3Event } from "h3";
 import type { SimulatorRoute } from "~~/shared/constants/simulatorRoutes";
 import type { ApiResponse } from "~~/shared/types/api";
-import { getHeader, getQuery, readRawBody, setResponseHeader, setResponseStatus } from "h3";
+import { getHeader, getQuery, getRequestIP, readRawBody, setResponseHeader, setResponseStatus } from "h3";
 import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { isApiEnvelope } from "~~/shared/utils/apiGuard";
 import { getSimulatorConfig } from "./simConfig";
@@ -140,12 +140,35 @@ function safeJsonParse(raw: string): unknown {
 }
 
 /**
+ * 写调用审计行（NMCPS-ARCH-002 §6.4）：**单行 JSON**，日志管道可直接解析。
+ *
+ * 取舍：
+ * - 落「方法 + 模板 + 实际路径 + 结果 + 耗时 + `x-request-id` + 客户端 IP」，**不落请求体**
+ *   （可能是拓扑改动细节，也可能是将来某个 PATCH 的凭据类字段）；
+ * - 不落操作者身份：身份 cookie（`nmcps_ui`）的作用域是 `/api/auth`，本通道读不到它。
+ *   「谁点的」按 `requestId` 与网关访问日志对齐，而不是在 BFF 里另存一份身份副本；
+ * - 失败也记（504 / 502）：审计要覆盖「尝试过」而不只是「成功了」。
+ */
+function auditWrite(event: H3Event, options: SimulatorProxyOptions, status: number, startedAt: number): void {
+	console.info(JSON.stringify({
+		event: "simulator.write",
+		method: options.route.method,
+		template: options.route.template,
+		path: `/${options.segments.join("/")}`,
+		status,
+		durationMs: Date.now() - startedAt,
+		requestId: getHeader(event, "x-request-id") ?? null,
+		clientIp: getRequestIP(event, { xForwardedFor: true }) ?? null
+	}));
+}
+
+/**
  * 仿真平台的**唯一出站点**：转发到白名单命中的端点，并把响应归一成 `ApiResponse<T>`。
  *
  * - 通道未启用（`baseUrl` 为空）→ 503 `simulator_not_configured`，不静默返回空数据；
  * - 不可达 → 502 `simulator_unreachable`；超时 → 504 `simulator_timeout`；
  * - 上游非 2xx → 保留真实状态码（仿真平台的 405/422 是页面要展示的诊断信息）；
- * - 写调用记一条结构化日志（`sim write <method> <template> <status> <duration>`），**不含请求体**；
+ * - 写调用记一行结构化审计日志（`{"event":"simulator.write",…}`，**不含请求体**，见 `auditWrite()`）；
  * - 不做 `list: null` 归一与凭据掩码：那是主上游的 D6/D7 口径，仿真平台没有这两类字段。
  */
 export async function proxyToSimulator<T = unknown>(event: H3Event, options: SimulatorProxyOptions): Promise<ApiResponse<T>> {
@@ -188,8 +211,7 @@ export async function proxyToSimulator<T = unknown>(event: H3Event, options: Sim
 		const payload = raw ? safeJsonParse(raw) : undefined;
 
 		if (options.route.write) {
-			// 写调用留痕：方法 + 模板 + 结果 + 耗时，故意不落请求体（可能是拓扑改动细节）
-			console.info(`[sim write] ${method} ${options.route.template} ${response.status} ${Date.now() - startedAt}ms`);
+			auditWrite(event, options, response.status, startedAt);
 		}
 
 		if (!response.ok) {
@@ -213,12 +235,18 @@ export async function proxyToSimulator<T = unknown>(event: H3Event, options: Sim
 		});
 	} catch (error) {
 		if (isAbortError(error)) {
+			if (options.route.write)
+				auditWrite(event, options, 504, startedAt);
+
 			return respond(event, 504, envelope(504, "error", SIMULATOR_MESSAGES.timeout));
 		}
 
 		if (import.meta.dev) {
 			console.error("[sim] upstream request failed", method, options.route.template, error);
 		}
+
+		if (options.route.write)
+			auditWrite(event, options, 502, startedAt);
 
 		return respond(event, 502, envelope(502, "error", SIMULATOR_MESSAGES.unreachable));
 	} finally {

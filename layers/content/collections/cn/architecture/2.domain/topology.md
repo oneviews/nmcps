@@ -15,7 +15,7 @@ authority: normative
 scope:
   - domain.topology
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -25,7 +25,7 @@ dependsOn:
   - NMCPS-ARCH-002
   - NMCPS-ARCH-006
 createdAt: "2026-10-25"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-06"
 icon: "carbon:cloud-monitoring"
 tags:
   - "领域基准"
@@ -118,6 +118,16 @@ tags:
 | 节点动作 | `POST /api/network/nodes/{node_id}/{start,stop,restart,power}`、`PATCH /api/network/nodes/{node_id}/{radio,ip}` | 同上；`radio` / `ip` 为 **PATCH** |
 | 运行态增删 | `POST /api/network/runtime/{nodes,links}`、`DELETE /api/network/runtime/{nodes,links}/{id}` | 直接改动正在跑的仿真，风险最高，需「允许写入」且单独二次确认 |
 
+**写入口落码范围（P1-B，2026-11-06）**：`monitor` 工具栏右区只放两个**节点动作**；链路动作与运行态增删**不设入口**（画布当前只能选中节点，链路选择随 P1 开放），避免出现一个点了没反应的按钮。
+
+| 页面入口 | 上游端点 | 前置条件 | 交互 |
+| :--- | :--- | :--- | :--- |
+| 重启节点 | `POST /api/network/nodes/{node_id}/restart` | 选中节点 + 该节点在仿真运行态里（`runtime-inventory` 对齐得到 `marker.simId`）+ 通道 `writeEnabled` | `UModal` 二次确认（写明仿真名与动作）→ 成功 `useToast` 提示 + 立刻 `refresh()` |
+| 停止节点 | `POST /api/network/nodes/{node_id}/stop` | 同上 | 同上 |
+| 链路动作 / 运行态增删 | 见上表 | 未开放（P1） | 不设按钮；开放时按同一套「能力位 → 二次确认 → 审计」口径落地 |
+
+客户端**不猜**写权限：页面从 BFF 自己的能力探针 `GET /api/sim/channel` 读 `{ configured, writeEnabled, timeoutMs, readinessPath }`。该端点只回能力位、**不回 `baseUrl`**（不把上游地址泄露给浏览器）；`writeEnabled=false` 时按钮 `disabled` 且页面**不发**写请求——BFF 的 405 是第二道闸，不是第一道。`node_id` 取 `marker.simId`（仿真侧 id），**不用** 8888 的节点 id（前者是仿真引擎的键，后者是管理 IP）。
+
 ### 6.3 本地引擎
 
 **本域不使用 BFF 本地引擎**（`NMCPS-ADR-0019` §5.2 未登记本域三元组）。布局计算是客户端纯函数（`app/utils/graph/*`：`topologyLayout` / `topologyLayering` / `topologyRadialLayout` / `topologyTierTreeLayout` / `topologyEdgeStyle`），输入节点与链路数组、输出坐标，不含任何状态。
@@ -156,7 +166,7 @@ tags:
 | 指标无数据点 | 空态 + 「该时间窗内无采集数据」；时间窗与指标选择器保持可用 | `matrix` 为空且无错误 |
 | 8888 未配置 / 不可达 | 页面级 `UAlert`（错误态）+ 重试；导航与其他域不受影响 | `/ready` 的 `upstream.configured === false` 或请求 `5xx` |
 | 仿真平台未配置 | **页面正常只读**：拓扑、指标照常展示；仿真控制按钮组整体 `disabled` 并带提示「仿真控制未启用」 | `runtimeConfig.simulator.baseUrl` 为空 |
-| 仿真平台 `allowWrite=false` | 写按钮可见但 `disabled`，hover 说明「仿真写入未开启」；即使绕过前端，BFF 亦返回 405 | 白名单条目的 `write: true` + 开关 false |
+| 仿真平台 `allowWrite=false` | 写按钮可见但 `disabled`，hover 说明「仿真写入未开启」；即使绕过前端，BFF 亦返回 405 | `/api/sim/channel` 的 `writeEnabled === false`（客户端不猜；页面对应请求一条都不发） |
 | 仿真平台不可达 | 局部降级：只读部分保留，仿真标记与 LLDP 分区显示「仿真平台不可达」；**不得**让 `/ready` 变红 | 通道请求超时 / 连接失败 |
 | 裁剪触发 | 画布内角标「已裁剪 N 个节点 / M 条链路」，并给出「切到分层/径向视图减少裁剪」的提示 | 节点 > 400 或链路 > 1,200 |
 
@@ -178,8 +188,9 @@ tags:
 | A6 | 仿真未配置时只读 | 不设 `NUXT_SIMULATOR_BASE_URL` → 拓扑正常渲染，仿真动作按钮全部 `disabled` |
 | A7 | 写端点被拒 | 两层门槛，顺序固定（路径白名单 → 通道是否启用 → 写权限）：通道未配置先短路成 503 `simulator_not_configured`；通道已配置而 `allowWrite` 仍为默认 false 时返回 405 `simulator_write_disabled`，且该请求不触达上游 |
 | A8 | 不做全站失效 | A6 / A7 场景下 `/ready` 仍 200 且 `upstream.configured === true` |
+| A9 | 写入口二次确认 + 审计留痕 | `allowWrite: true` 的实例上：`/api/sim/channel` 回 `writeEnabled=true`、选中仿真节点后按钮可点、`UModal` 二次确认后请求**到达假仿真平台**（方法与路径原样）、成功后 `useToast` 提示并刷新；BFF 侧输出一行结构化审计日志 `{"event":"simulator.write",…}`（方法 / 模板 / 状态 / 耗时 / `x-request-id` / 客户端 IP，**不含请求体**）。`allowWrite=false` 时按钮 `disabled`、页面零写请求，且能力探针响应里不出现上游 `baseUrl` |
 
-> **落地状态（2026-11-05）**：A1 / A2 / A4 / A5 / A6 / A7 / A8 已由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `130/130` 全绿。A7 的精确面放在「仿真通道已配置」的对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失，同时断言「已配置但未开写」的 405 且假仿真平台侧零写命中）—— 只测「未配置」等于没测过通道接通。**A3 仍未落地**（选中节点 → `TrendChart` + `/api/metric/datapoint`），随指标页 P1 补齐后再进断言表；本页目前只有结构视图与仿真标记叠加，LLDP 邻接分区、设备/链路台账侧栏、告警角标同样属 P1。
+> **落地状态（2026-11-06）**：A1 / A2 / A4 / A5 / A6 / A7 / A8 / A9 已由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `139/139` 全绿。A7 / A9 的精确面放在「仿真通道已配置」的两个对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF：一个 `allowWrite=false`，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失、写端点 405 且假仿真平台侧零写命中；一个 `NUXT_SIMULATOR_ALLOW_WRITE=true`，断言按钮可点、`UModal` 二次确认后写请求真的落到假仿真平台且路径与方法原样、成功 toast 出现）—— 只测「未配置」等于没测过通道接通。**A3 仍未落地**（选中节点 → `TrendChart` + `/api/metric/datapoint`），随指标页 P1 补齐后再进断言表；LLDP 邻接分区、设备/链路台账侧栏、告警角标、**链路动作**同样属 P1。
 
 ---
 
@@ -190,3 +201,4 @@ tags:
 | 2026-10-25 | 0.1.0 | 首版：固化拓扑监控领域基准（定位、功能范围、数据实体、边界、演进）。 |
 | 2026-11-05 | 0.2.0 | 按 `NMCPS-ADR-0019` 落实码前义务 1：补三页的 2.0 落点、数据源（8888 七个端点 + 8001 只读/写白名单 + 本地引擎空集）、图形形态（`TopologyCanvas` / `TrendChart` / `SparkStat`）、八种空态与降级态、8 条验收断言；`dependsOn` 增加 `NMCPS-ARCH-006`（`NMCPS-ADR-0019` 只作正文引用，Tier 2 normative 不 `dependsOn` Tier 5 记录层）。 |
 | 2026-11-05 | 0.3.0 | **`monitor` 页落码**（`layers/topology/app/pages/topology/monitor.vue`）：结构来自 `GET /api/topology/graph`，仿真运行态来自 8001 `runtime-inventory` / `stats`（按管理 IP 对齐后叠加虚线外环标记）；取数内核 `useTopologyMonitor()` 30s 轮询 + 页面不可见暂停，主上游失败走页面级错误、仿真通道失败只降级仿真区块。图形落 `app/components/Graph/{TopologyCanvas,SparkStat}.vue` + `app/utils/graph/{topologyNormalize,topologyLayout,topologyStatusStyle,simulatorOverlay}.ts`（纯函数）+ `app/composables/useGraphInteraction.ts`（拖拽 / 缩放，无 rAF）。§九 补落地状态：A1/A2/A4~A8 已进 `check:ui`，A3 与 LLDP / 台账 / 告警角标留 P1。 |
+| 2026-11-06 | 0.4.0 | **写入口 P1-B 落码**：`monitor` 工具栏右区两个节点动作（重启 / 停止）接 `POST /api/network/nodes/{node_id}/{restart,stop}`，目标取仿真侧 `marker.simId`（不是 8888 的节点 id）；交互为 `UModal` 二次确认 + 成功 `useToast` + 立即刷新。写权限不再靠猜：新增 BFF 能力探针 `GET /api/sim/channel`（只回 `configured` / `writeEnabled` / `timeoutMs` / `readinessPath`，**不回 `baseUrl`**），`writeEnabled=false` 时按钮 `disabled` 且页面零写请求。§6.2 补写入口范围表（链路动作 / 运行态增删留 P1，**不设按钮**——不留点了没反应的死按钮）、§八 `allowWrite=false` 的判据改为能力位、§九 新增 **A9**（二次确认 + 上游实收 + 结构化审计日志 + 能力探针不泄露地址），落地状态更新为 `139/139`。 |

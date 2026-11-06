@@ -12,14 +12,14 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-06"
 icon: "carbon:data-base"
 tags:
   - "Architecture"
@@ -106,6 +106,7 @@ The BFF (Nitro) has exactly two egress channels: the primary upstream (`runtimeC
 | Egress | `server/utils/bff/simulator.ts` | Its own `$fetch` instance; timeout and `AbortSignal`; responses normalised to `ApiResponse` |
 | Route | `server/api/sim/[...slug].ts` (a path-less `/api/sim` is answered 400 `bff_path_missing` by `server/api/sim/index.ts`, never by the primary gateway) | Whitelist first, egress second; no match → 404 `bff_resource_not_allowed`, wrong verb → 405 |
 | Whitelist | `shared/constants/simulatorRoutes.ts` | One row per entry `{ method, template, write }`; `{param}` template matching, never prefix passthrough |
+| Capability probe | `server/api/sim/channel.get.ts` | A static route wins over the `[...slug]` channel; returns only `{ configured, writeEnabled, timeoutMs, readinessPath }` and **never `baseUrl`** (the upstream address is not leaked to the browser), so the page decides button state from `writeEnabled` |
 
 ### 6.2 Why it must be a separate channel
 
@@ -121,7 +122,7 @@ The whitelist is not a hand-copied constant: it is derived mechanically from the
 
 ### 6.4 Write switch
 
-`allowWrite` defaults to `false`: every `write: true` endpoint answers 405 and the page renders read-only with a "simulator control disabled" note. Even when enabled, three constraints hold — the egress header whitelist is only `accept` / `content-type` (**no `authorization`**, never reads `nmcps_at`); each write call emits one structured BFF log line (`sim write <method> <template> <status> <duration>`, body excluded); and writes persist nothing locally, because the BFF keeps no second ledger.
+`allowWrite` defaults to `false`: every `write: true` endpoint answers 405 and the page renders read-only with a "simulator control disabled" note. The page does not guess: it reads the capability probe `GET /api/sim/channel` (§6.1) first, and with `writeEnabled=false` the buttons are `disabled` and it sends **not a single write request** — the BFF's 405 is only the second gate for a caller that bypasses the front end. Even when enabled, three constraints hold — the egress header whitelist is only `accept` / `content-type` (**no `authorization`**, never reads `nmcps_at`); each write call emits one **structured audit line** (a single JSON line so a log pipeline can parse it: `{"event":"simulator.write","method":…,"template":…,"path":…,"status":…,"durationMs":…,"requestId":…,"clientIp":…}`, body excluded); and writes persist nothing locally, because the BFF keeps no second ledger. The audit line carries no actor identity: the identity cookie (`nmcps_ui`) is scoped to `/api/auth`, which the simulator channel cannot read at all — when "who clicked it" matters, join on `requestId` against the gateway access log instead of keeping a second copy of identities inside the BFF.
 
 ### 6.5 Readiness separation
 
@@ -155,3 +156,4 @@ The snapshot has exactly one refresh entry: `NUXT_SIMULATOR_BASE_URL=http://<hos
 | 2026-10-25 | 0.1.0 | Initial: data source architecture (classification, storage layering, cloud/edge adapter, data flow). |
 | 2026-11-05 | 0.2.0 | Adds "§6 Second data source: the simulator": channel shape (`runtimeConfig.simulator` / `simConfig.ts` / `simulator.ts` / `server/api/sim/**` / `simulatorRoutes.ts`), why it must be separate (no Bearer egress, distinct 401 semantics), whitelist philosophy (per endpoint, grouped by layer, seven permanent exclusions, mechanically derived from `openapi.json`), write switch (`allowWrite` off by default, logging, no second ledger), readiness separation (an unreachable simulator never reddens `/ready`), the zero-storage stance and the group ⑨ guards; §2 gains a "simulator runtime" row and §5 gains the second-channel note. Delivers ADR-0019 §7 obligation 2. |
 | 2026-11-05 | 0.3.0 | **Pre-code obligation 4 is now fulfilled: the group ⑨ guards ship with the P1 code (`pnpm check:bff` 127/127).** ① `scripts/fixtures/simulator-openapi.json` is new — a mechanical projection of the upstream `/openapi.json` (113 paths → verb lists plus `_meta.source/capturedAt`), refreshable only via `NUXT_SIMULATOR_BASE_URL=<upstream> pnpm check:bff --refresh-simulator-snapshot`, with a `capturedAt` older than 180 days merely warning. ② `check:bff` gained group ⑨ (21 checkpoints) mapped one-to-one onto ⑨-1~⑨-6 (table in §6.7); the fake simulator `startSimulator()` (`scripts/lib/bff-harness.mjs`) records request headers **on the upstream side**, which is what proves the egress carries no `authorization` and never trades the `nmcps_at` cookie for a Bearer. ③ The §6.1 route row now names `server/api/sim/index.ts`: a path-less `/api/sim` answers 400 `bff_path_missing` instead of falling through to the primary gateway and reporting "path not allowed" for what was really a missing path. ④ §6.5 gained the `SIMULATOR_MESSAGES` vocabulary. ⑤ Reverse-checked: changing one whitelist template to `/api/network/stats-v2` reddens ⑨-6 and names that entry. |
+| 2026-11-06 | 0.4.0 | **With write entries open, the write gate moved forward to the page**: §6.1 gained the capability-probe row `server/api/sim/channel.get.ts` (a static route ahead of the catch-all channel; returns `configured` / `writeEnabled` / `timeoutMs` / `readinessPath` and **never `baseUrl`**); §6.4 upgraded "one structured log line" into a **single-line JSON audit record** `{"event":"simulator.write",…}` (with `path` / `requestId` / `clientIp`, still no body) and documented why the record carries no actor identity and how to join it instead (the identity cookie is scoped to `/api/auth`, so join on `requestId` against the gateway access log); with `allowWrite=false` the page sends zero write requests and the BFF's 405 becomes the second gate for bypassing the front end. `check:ui` section 11 grew to `139/139` (new A9 plus the assertion that the probe leaks no address). |

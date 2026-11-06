@@ -14,14 +14,14 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-06"
 icon: "carbon:data-base"
 tags:
   - "架构"
@@ -108,6 +108,7 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 | 出站 | `server/utils/bff/simulator.ts` | 独立 `$fetch` 实例；超时与 `AbortSignal`；响应归一为 `ApiResponse` |
 | 路由 | `server/api/sim/[...slug].ts`（`/api/sim` 无路径段由 `server/api/sim/index.ts` 回 400 `bff_path_missing`，不落到主网关） | 先过白名单再出站；未命中 → 404 `bff_resource_not_allowed`，动词不符 → 405 |
 | 白名单 | `shared/constants/simulatorRoutes.ts` | 逐条 `{ method, template, write }`；`{param}` 模板匹配，非前缀放行 |
+| 能力探针 | `server/api/sim/channel.get.ts` | 静态路由优先于 `[...slug]` 通道；只回 `{ configured, writeEnabled, timeoutMs, readinessPath }`，**不回 `baseUrl`**（不把上游地址泄露给浏览器），页面据 `writeEnabled` 决定写按钮可不可点 |
 
 ### 6.2 为什么必须是独立通道
 
@@ -123,7 +124,7 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 
 ### 6.4 写开关
 
-`allowWrite` 默认 `false`：全部 `write: true` 端点直接 405，页面以只读态呈现并标注「仿真控制未启用」。开启后仍受三条约束——出站头白名单只有 `accept` / `content-type`（**不注入 `authorization`**、不读 `nmcps_at`）；每次写调用在 BFF 记一条结构化日志（`sim write <method> <template> <status> <duration>`，不含请求体）；写操作不落任何本地存储，BFF 不持有第二本账。
+`allowWrite` 默认 `false`：全部 `write: true` 端点直接 405，页面以只读态呈现并标注「仿真控制未启用」。判据不是猜的——页面先读能力探针 `GET /api/sim/channel`（§6.1），`writeEnabled=false` 时按钮 `disabled` 且**一条写请求都不发**，BFF 的 405 只是绕过前端时的第二道闸。开启后仍受三条约束——出站头白名单只有 `accept` / `content-type`（**不注入 `authorization`**、不读 `nmcps_at`）；每次写调用在 BFF 记一行**结构化审计日志**（单行 JSON，便于日志管道解析：`{"event":"simulator.write","method":…,"template":…,"path":…,"status":…,"durationMs":…,"requestId":…,"clientIp":…}`，**不含请求体**）；写操作不落任何本地存储，BFF 不持有第二本账。审计行不带操作者身份：身份 cookie（`nmcps_ui`）的路径是 `/api/auth`，仿真通道根本读不到它——需要「谁点的」时按 `requestId` 与网关访问日志对齐，而不是在 BFF 里另外存一份身份副本。
 
 ### 6.5 就绪分离
 
@@ -156,3 +157,4 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化数据源架构（分类、存储分层、云边数据适配层、数据流转）。 |
 | 2026-11-05 | 0.3.0 | **落码前义务 4 已履行：⑨ 组守卫随 P1 代码落地（`pnpm check:bff` 127/127）**。① 新增 `scripts/fixtures/simulator-openapi.json`——上游 `/openapi.json` 的机械投影（113 条路径 → 动词列表 + `_meta.source/capturedAt`），刷新只有 `NUXT_SIMULATOR_BASE_URL=<上游> pnpm check:bff --refresh-simulator-snapshot` 一个入口，`capturedAt` 超 180 天只 `⚠️` 不判红；② `check:bff` 增第 ⑨ 组 21 个检查点，逐条对应 ⑨-1~⑨-6（见 §6.7 表），假仿真平台 `startSimulator()`（`scripts/lib/bff-harness.mjs`）在**上游侧**记录请求头，用于取证「出站不带 `authorization`、不把 `nmcps_at` 转 Bearer」；③ §6.1 路由行补 `server/api/sim/index.ts`：`/api/sim` 无路径段回 400 `bff_path_missing`，否则会落到主网关得 404，把「少写了路径」误报成「路径不允许」；④ §6.5 补 `SIMULATOR_MESSAGES` 词汇表；⑤ 反向验证：把白名单一条模板改成 `/api/network/stats-v2`，⑨-6 立刻点名该条变红。 |
+| 2026-11-06 | 0.4.0 | **写入口开通后写闸前移到页面**：§6.1 新增能力探针行 `server/api/sim/channel.get.ts`（静态路由优先于 catch-all 通道，只回 `configured` / `writeEnabled` / `timeoutMs` / `readinessPath`，**不回 `baseUrl`**）；§6.4 把「记一条结构化日志」升级为**单行 JSON 审计行** `{"event":"simulator.write",…}`（含 `path` / `requestId` / `clientIp`，仍不含请求体），并写明审计行不带操作者身份的原因与对齐方式（身份 cookie 作用域是 `/api/auth`，按 `requestId` 与网关访问日志对齐）；`allowWrite=false` 时页面零写请求，BFF 的 405 退化为「绕过前端」的第二道闸。`check:ui` 第 11 段随之扩到 `139/139`（新增 A9 与能力探针不泄露地址的断言）。 |

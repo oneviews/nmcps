@@ -197,12 +197,25 @@
 				"unreachableBody": "The read-only sections keep rendering; simulation markers and the LLDP section are unavailable for now ({reason}). The readiness probe is unaffected."
 			},
 			"simControls": {
-				"linkDown": "Link down",
+				"nodeStop": "Stop node",
 				"nodeRestart": "Restart node",
 				"disabled": "Simulation control is not enabled (simulator not configured)",
 				"unreachable": "Simulator unreachable, retry later",
 				"loading": "Probing the simulator channel…",
-				"readOnly": "Read-only: the simulation write entry lands with P1-B"
+				"writeDisabled": "Simulation writes are off (allowWrite=false); an operator has to enable them",
+				"selectNode": "Select a node on the canvas first — actions apply only to simulated nodes",
+				"notSimulated": "This node is not part of the simulator runtime, so no action can be sent",
+				"ready": "Send a simulation action to {name}, after a second confirmation",
+				"timeout": "The simulator timed out and the outcome is unknown: refresh the topology to check the current state",
+				"restarted": "Restart sent",
+				"stopped": "Stop sent",
+				"actionFailed": "Failed to send the simulation action",
+				"confirmTitle": "Send this simulation action?",
+				"confirmDescription": "This sends \"{action}\" to {name} (simulator id {id})",
+				"irreversibleTitle": "This cannot be undone",
+				"irreversibleBody": "The action applies straight to the running simulation; the BFF keeps no copy and performs no rollback.",
+				"cancel": "Cancel",
+				"confirmSubmit": "Send action"
 			},
 			"detail": {
 				"title": "Node detail",

@@ -1568,7 +1568,7 @@ if (upstreamPort) {
 	await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
 }
 
-// 11. 拓扑监控（NMCPS-DESIGN-001 §九 A1~A8）：页面接两条通道 —— 8888 `/api/topology/graph`
+// 11. 拓扑监控（NMCPS-DESIGN-001 §九 A1~A9）：页面接两条通道 —— 8888 `/api/topology/graph`
 // 与 8001 `/api/sim/api/network/runtime-inventory`。本段锁四件事：画得出来、空拓扑走空态、
 // 主上游掉线只降级不白屏、仿真通道未配置时页面照常只读且 `/ready` 不变红。
 // A4 / A5 依赖假上游的 `__control/topology-*` 与 `__control/down`，外部实例模式无法构造，故只在自建模式跑。
@@ -1695,6 +1695,8 @@ if (upstreamPort) {
 	try {
 		const simContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const simPage = await simContext.newPage();
+		// 记下「页面打开之前」的请求数：后面的「页面零写请求」只数这一段之后的新增
+		const simLogBeforePage = simulatorServer.log.length;
 		await simPage.goto(`${simBffBase}/auth/login`, { waitUntil: "networkidle" });
 		await simPage.locator("input[autocomplete='username']").fill(ACCOUNT);
 		await simPage.locator("input[type='password']").fill(PASSWORD);
@@ -1717,6 +1719,33 @@ if (upstreamPort) {
 			"仿真通道已配置时不再显示降级条",
 			!probe.text.includes("仿真控制未启用"),
 			probe.text.includes("仿真控制未启用") ? "仍提示未启用" : "无降级提示"
+		);
+
+		// A9 的「没开写」一半：能力位如实回报「已配置、未开写」，且响应体里没有上游地址 ——
+		// 页面据此把按钮置灰，而不是让用户点了再收 405。地址泄露是安全问题，这里按原文搜端口号。
+		const channelOff = await simPage.request.get(`${simBffBase}/api/sim/channel`).catch(() => null);
+		const channelOffJson = channelOff ? await channelOff.json().catch(() => null) : null;
+		const channelOffRaw = channelOff ? await channelOff.text().catch(() => "") : "";
+		log(
+			"能力探针回「已配置 + 未开写」且不泄露上游地址",
+			channelOff?.status() === 200
+			&& channelOffJson?.data?.configured === true
+			&& channelOffJson?.data?.writeEnabled === false
+			&& !channelOffRaw.includes(String(simPort)),
+			channelOff
+				? `${channelOff.status()} configured=${channelOffJson?.data?.configured} writeEnabled=${channelOffJson?.data?.writeEnabled} 泄露端口=${channelOffRaw.includes(String(simPort))}`
+				: "请求失败"
+		);
+
+		// 未开写时页面连一条写请求都不该发（BFF 的 405 只是绕过前端时的第二道闸）
+		const pageWriteHits = simulatorServer.log
+			.slice(simLogBeforePage)
+			.filter((entry) => entry.method !== "GET")
+			.length;
+		log(
+			"未开写时页面零写请求（按钮置灰不靠 405 兜底）",
+			pageWriteHits === 0,
+			`页面期间写请求共 ${pageWriteHits} 次`
 		);
 
 		// A7 的精确面：通道已配置、`NUXT_SIMULATOR_ALLOW_WRITE` 仍是默认 false → 必须 405
@@ -1743,6 +1772,120 @@ if (upstreamPort) {
 	} finally {
 		await stopBff(simBff);
 		await closeUpstream(simulatorServer);
+	}
+}
+
+// 11.2 写入口（NMCPS-DESIGN-001 §九 A9）：再起一个带 `NUXT_SIMULATOR_ALLOW_WRITE=true` 的 BFF。
+// 11.1 证明「没开写时一步也走不出去」，这里证明「开了写之后按钮真的能按下、按下真的到达上游」——
+// 两条合起来才是完整的写入口语义：能力位 → 二次确认 → 上游实收 → 成功提示。
+if (upstreamPort) {
+	const writeSimPort = await freePort();
+	const writeSimulator = await startSimulator(writeSimPort);
+	const writeBffPort = await freePort();
+	const writeBffBase = `http://${HOST}:${writeBffPort}`;
+	const writeBff = await startBff(writeBffPort, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		NUXT_SIMULATOR_BASE_URL: `http://${HOST}:${writeSimPort}`,
+		NUXT_SIMULATOR_ALLOW_WRITE: "true"
+	});
+
+	try {
+		const channelOnResponse = await fetch(`${writeBffBase}/api/sim/channel`).catch(() => null);
+		const channelOnBody = channelOnResponse ? await channelOnResponse.json().catch(() => null) : null;
+		log(
+			"开启写开关后能力探针回 writeEnabled=true",
+			channelOnResponse?.status === 200 && channelOnBody?.data?.writeEnabled === true,
+			`${channelOnResponse?.status ?? 0} writeEnabled=${channelOnBody?.data?.writeEnabled}`
+		);
+
+		/** 两个写入口按钮当前的 `disabled` 状态（顺序与 DOM 一致） */
+		const simActionStates = (page) => page.evaluate(() =>
+			Array.from(document.querySelectorAll("[data-testid='sim-action']")).map((el) => el.hasAttribute("disabled"))
+		);
+
+		const writeContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const writePage = await writeContext.newPage();
+		await writePage.goto(`${writeBffBase}/auth/login`, { waitUntil: "networkidle" });
+		await writePage.locator("input[autocomplete='username']").fill(ACCOUNT);
+		await writePage.locator("input[type='password']").fill(PASSWORD);
+		await writePage.locator("button[type='submit']").first().click();
+		await writePage.waitForURL((url) => url.pathname !== "/auth/login", { timeout: 20_000 }).catch(() => {});
+		await writePage.goto(`${writeBffBase}/topology/monitor`, { waitUntil: "networkidle" });
+		await writePage.waitForTimeout(800);
+
+		const idleActions = await simActionStates(writePage);
+		log(
+			"A9 开了写但没选节点时按钮仍 disabled",
+			idleActions.length === 2 && idleActions.every(Boolean),
+			`buttons=${idleActions.length} disabled=${idleActions.filter(Boolean).length}`
+		);
+
+		// 选一个「仿真中」的节点：虚线外环就是 8001 运行态对齐的结果（`circle[stroke-dasharray]`）。
+		// 用派发 click 而不是坐标点击：SVG 的命中测试会受缩放 / 拖拽层影响，派发事件测的是同一条处理链。
+		await writePage.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.querySelector("circle[stroke-dasharray]"));
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await writePage.waitForTimeout(300);
+
+		const selectedActions = await simActionStates(writePage);
+		log(
+			"A9 选中仿真节点后写按钮可点",
+			selectedActions.length === 2 && selectedActions.every((disabled) => disabled === false),
+			`buttons=${selectedActions.length} disabled=${selectedActions.filter(Boolean).length}`
+		);
+
+		const writeHitsBefore = writeSimulator.log.length;
+		await writePage.locator("[data-testid='sim-action'][data-action='restart']").click();
+		const confirmVisible = await writePage.locator("[data-testid='sim-confirm']").isVisible().catch(() => false);
+		// UModal 的根是 DialogRoot（无 DOM），`data-testid` 传不进去 —— 只按 ARIA 角色取整张弹窗，
+		// 这样标题（动作）、正文（目标）与按钮（提交）一起进断言，缺一样就红。
+		const confirmText = confirmVisible
+			? await writePage.locator("[role='dialog']").first().evaluate((el) => el.textContent ?? "").catch(() => "")
+			: "";
+		log(
+			"A9 点按钮先弹二次确认（写明动作与目标）",
+			confirmVisible
+			&& confirmText.includes("确认下发仿真动作")
+			&& confirmText.includes("重启节点")
+			&& confirmText.includes("核心路由器-1"),
+			confirmVisible ? `弹窗文案：${confirmText.replace(/\s+/g, " ").slice(0, 100)}` : "未出现确认弹窗"
+		);
+
+		// 未确认前上游不该收到任何东西：二次确认不是装饰
+		const writesBeforeConfirm = writeSimulator.log.slice(writeHitsBefore).filter((entry) => entry.method !== "GET").length;
+		log(
+			"A9 确认前不触达上游",
+			writesBeforeConfirm === 0,
+			`确认前写请求 ${writesBeforeConfirm} 次`
+		);
+
+		await writePage.locator("[data-testid='sim-confirm']").click();
+		await writePage.waitForTimeout(1000);
+
+		const writeHits = writeSimulator.log.slice(writeHitsBefore).filter((entry) => entry.method !== "GET");
+		const writeHit = writeHits[0];
+		log(
+			"A9 确认后写请求真的到达仿真平台（方法与路径原样）",
+			writeHits.length === 1
+			&& writeHit?.method === "POST"
+			&& /^\/api\/network\/nodes\/[^/]+\/restart$/.test(writeHit?.path ?? ""),
+			writeHit ? `${writeHit.method} ${writeHit.path}（共 ${writeHits.length} 次）` : `写请求 ${writeHits.length} 次`
+		);
+
+		const afterWriteText = await writePage.evaluate(() => document.body.textContent ?? "");
+		log(
+			"A9 成功后给出成功提示并关掉弹窗",
+			afterWriteText.includes("重启已下发")
+			&& (await writePage.locator("[data-testid='sim-confirm']").isVisible().catch(() => false)) === false,
+			afterWriteText.includes("重启已下发") ? "已提示「重启已下发」" : `未见成功提示：${afterWriteText.slice(0, 80)}`
+		);
+
+		await writeContext.close();
+	} finally {
+		await stopBff(writeBff);
+		await closeUpstream(writeSimulator);
 	}
 }
 

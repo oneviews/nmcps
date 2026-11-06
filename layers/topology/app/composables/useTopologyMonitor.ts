@@ -7,7 +7,7 @@
 // 两路数据的失败语义刻意不同：主上游失败 → 页面级错误；仿真通道失败 → 只读降级 + 一行说明
 // （DESIGN-001 §八「不允许把可选上游的抖动升级成整页错误」）。
 import type { SimulatorNodeMarker } from "~~/app/utils/graph/simulatorOverlay";
-import type { SimulatorNetworkStats, SimulatorRuntimeInventory } from "~~/shared/types/simulator";
+import type { SimulatorChannelInfo, SimulatorNetworkStats, SimulatorRuntimeInventory } from "~~/shared/types/simulator";
 import type { TopologyGraph } from "~~/shared/types/topology";
 import { buildSimulatorIndex, simulatorMarkerOf } from "~~/app/utils/graph/simulatorOverlay";
 import { layoutTopology } from "~~/app/utils/graph/topologyLayout";
@@ -16,6 +16,18 @@ import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 /** 仿真通道三态 + loading：`disabled` 是「未配置」，不是错误 */
 export type SimulatorChannelState = "loading" | "disabled" | "unreachable" | "ok";
+
+/** 页面开放的节点动作（NMCPS-DESIGN-001 §6.2 写入口范围表；端点由 `SIMULATOR_ROUTES` 白名单兜底） */
+export const SIMULATOR_NODE_ACTIONS = ["restart", "stop"] as const;
+export type SimulatorNodeAction = (typeof SIMULATOR_NODE_ACTIONS)[number];
+
+/** 动作结果：失败时 `message` 是 BFF/上游原话（数据，不翻译），由页面决定提示口径 */
+export interface SimulatorActionResult {
+	ok: boolean
+	action: SimulatorNodeAction
+	/** 失败原因（成功时为空串） */
+	message: string
+}
 
 /** 主上游拓扑图的失败信息（BFF 原始 message 属数据，展示时原样给出） */
 export interface TopologyGraphError {
@@ -32,6 +44,8 @@ export function useTopologyMonitor() {
 	const graph = ref<TopologyGraph | null>(null);
 	const inventory = ref<SimulatorRuntimeInventory | null>(null);
 	const stats = ref<SimulatorNetworkStats | null>(null);
+	/** 通道能力位（`/api/sim/channel`）：写按钮可不可点只看它，不猜 */
+	const channel = ref<SimulatorChannelInfo | null>(null);
 	const loading = ref(false);
 	const refreshing = ref(false);
 	const graphError = ref<TopologyGraphError | null>(null);
@@ -40,6 +54,8 @@ export function useTopologyMonitor() {
 	const simReason = ref<string>("");
 	const selectedId = ref<string | null>(null);
 	const lastLoadedAt = ref<Date | null>(null);
+	/** 正在下发的动作（按钮 `loading` 与重复提交的门闩） */
+	const acting = ref<SimulatorNodeAction | null>(null);
 
 	let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -64,6 +80,11 @@ export function useTopologyMonitor() {
 	const running = computed(() => simState.value === "ok" && inventory.value?.running === true);
 	const simNodeCount = computed(() => (simState.value === "ok" ? inventory.value?.nodes?.length ?? 0 : 0));
 	const simulatedCount = computed(() => Object.keys(markers.value).length);
+
+	/** 写开关（`allowWrite`）：页面唯一的判断来源；读不到能力位一律按「未开启」处理（默认安全） */
+	const writeEnabled = computed(() => channel.value?.writeEnabled === true);
+	/** 通道可用 + 写开关打开：两个条件缺一按钮就必须 disabled */
+	const canWrite = computed(() => simState.value === "ok" && writeEnabled.value);
 
 	/** 选中节点（画布点击 → 详情栏）：节点本身 + 归一状态 + 仿真标记 */
 	const selected = computed(() => {
@@ -107,6 +128,13 @@ export function useTopologyMonitor() {
 	 * 两者都不改 `graphError`：主上游结构照常渲染，仿真区块单独降级。
 	 */
 	async function loadSimulator(): Promise<void> {
+		// 能力位与运行态是两条独立请求：能力位读不到只让写入口关闭，不代表运行态也不可用
+		try {
+			channel.value = await api.get<SimulatorChannelInfo>("/api/sim/channel");
+		} catch {
+			channel.value = null;
+		}
+
 		try {
 			inventory.value = await api.get<SimulatorRuntimeInventory>("/api/sim/api/network/runtime-inventory");
 			simState.value = "ok";
@@ -136,6 +164,35 @@ export function useTopologyMonitor() {
 		await Promise.all([loadGraph(), loadSimulator()]);
 		lastLoadedAt.value = new Date();
 		refreshing.value = false;
+	}
+
+	/**
+	 * 下发一个节点动作（重启 / 停止）。
+	 *
+	 * `simId` 必须是对端仿真节点的 id（`marker.simId`），不是 8888 的节点 id：后者是管理 IP，
+	 * 用它拼出来的路径在仿真平台上必然 404。`action` 的取值集合 `SIMULATOR_NODE_ACTIONS`
+	 * 与白名单条目一一对应，写错会落到白名单 404 而不是静默成功。
+	 *
+	 * 成功后就地刷新：动作改的是运行态台账，靠轮询等 30s 才看到变化会让人以为「没生效」。
+	 */
+	async function performNodeAction(action: SimulatorNodeAction, simId: string): Promise<SimulatorActionResult> {
+		if (!writeEnabled.value)
+			return { ok: false, action, message: SIMULATOR_MESSAGES.writeDisabled };
+
+		if (acting.value)
+			return { ok: false, action, message: "simulator_action_in_flight" };
+
+		acting.value = action;
+		try {
+			await api.post(`/api/sim/api/network/nodes/${encodeURIComponent(simId)}/${action}`);
+			await refresh();
+			return { ok: true, action, message: "" };
+		} catch (error) {
+			const { message } = error as Partial<TopologyGraphError>;
+			return { ok: false, action, message: message ?? "api_network_error" };
+		} finally {
+			acting.value = null;
+		}
 	}
 
 	function stopPolling(): void {
@@ -177,6 +234,11 @@ export function useTopologyMonitor() {
 		layout,
 		inventory,
 		stats,
+		/** 通道能力位（`configured` / `writeEnabled` / `timeoutMs` / `readinessPath`） */
+		channel,
+		writeEnabled,
+		canWrite,
+		acting,
 		loading,
 		refreshing,
 		graphError,
@@ -191,6 +253,8 @@ export function useTopologyMonitor() {
 		lastLoadedAt,
 		selectNode,
 		refresh,
+		/** 下发节点动作（restart / stop）：`simId` 取 `selected.marker.simId` */
+		performNodeAction,
 		/** 页头展示用计数（空图时都是 0，页面据此走空态） */
 		nodeCount: computed(() => graph.value?.nodes?.length ?? 0),
 		linkCount: computed(() => topologyLinksOf(graph.value).length),

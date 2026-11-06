@@ -49,6 +49,18 @@ export function isSimulatorSessionState(value: unknown): value is SimulatorSessi
 	return isOneOf(SIMULATOR_SESSION_STATES, value);
 }
 
+/** `GET /api/sim/channel`：通道能力位（BFF 自产，不是上游资源的透传） */
+export interface SimulatorChannelInfo {
+	/** `runtimeConfig.simulator.baseUrl` 非空 ⇒ 通道已启用（`false` 不是错误） */
+	configured: boolean
+	/** `allowWrite`：写按钮可不可点的**唯一**依据（前端不猜） */
+	writeEnabled: boolean
+	/** 单次出站超时（毫秒），页面用于解释 504 */
+	timeoutMs: number
+	/** 就绪探针路径（运维排查用；不回 `baseUrl`，避免把上游地址泄露给浏览器） */
+	readinessPath: string
+}
+
 /** `GET /api/health`（`regulatory` 实测为 `US`） */
 export interface SimulatorHealth {
 	status: string

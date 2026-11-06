@@ -197,12 +197,25 @@
 				"unreachableBody": "只读区块照常展示；仿真标记与 LLDP 分区暂不可用（{reason}）。就绪探针不受影响。"
 			},
 			"simControls": {
-				"linkDown": "链路 down",
-				"nodeRestart": "节点重启",
+				"nodeStop": "停止节点",
+				"nodeRestart": "重启节点",
 				"disabled": "仿真控制未启用（未配置仿真平台）",
 				"unreachable": "仿真平台不可达，稍后重试",
 				"loading": "正在探测仿真通道…",
-				"readOnly": "只读态：仿真写入入口随 P1-B 落地"
+				"writeDisabled": "仿真写入未开启（allowWrite=false），需要运维打开写开关",
+				"selectNode": "先在画布上选中一个节点，动作只对仿真中的节点生效",
+				"notSimulated": "该节点不在仿真运行态里，无法下发动作",
+				"ready": "对 {name} 下发仿真动作，会先弹二次确认",
+				"timeout": "仿真平台响应超时，动作结果未知：请先刷新拓扑确认当前状态",
+				"restarted": "重启已下发",
+				"stopped": "停止已下发",
+				"actionFailed": "仿真动作下发失败",
+				"confirmTitle": "确认下发仿真动作？",
+				"confirmDescription": "将向 {name}（仿真 id {id}）下发「{action}」",
+				"irreversibleTitle": "这一步不可撤销",
+				"irreversibleBody": "动作直接作用在正在运行的仿真上，BFF 不保留副本，也不会自动回滚。",
+				"cancel": "取消",
+				"confirmSubmit": "确认下发"
 			},
 			"detail": {
 				"title": "节点详情",

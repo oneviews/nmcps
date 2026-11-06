@@ -14,7 +14,7 @@ authority: normative
 scope:
   - domain.topology
 status: baseline
-version: 0.3.0
+version: 0.4.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -24,7 +24,7 @@ dependsOn:
   - NMCPS-ARCH-002
   - NMCPS-ARCH-006
 createdAt: "2026-10-25"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-06"
 icon: "carbon:cloud-monitoring"
 tags:
   - "Domain"
@@ -117,6 +117,16 @@ The simulation control plane fills in only what 8888 lacks: **topology write ope
 | Node actions | `POST /api/network/nodes/{node_id}/{start,stop,restart,power}`, `PATCH /api/network/nodes/{node_id}/{radio,ip}` | same; `radio` / `ip` are **PATCH** |
 | Runtime add/remove | `POST /api/network/runtime/{nodes,links}`, `DELETE /api/network/runtime/{nodes,links}/{id}` | mutates the running simulation, the highest-risk group: needs "writes allowed" plus its own second confirmation |
 
+**Write entries shipped (P1-B, 2026-11-06)**: the toolbar's right area carries two **node actions** only; link actions and runtime add/remove have **no entry point** (the canvas can select nodes only, link selection ships with P1), so no button silently does nothing.
+
+| Page entry | Endpoint | Preconditions | Interaction |
+| :--- | :--- | :--- | :--- |
+| Restart node | `POST /api/network/nodes/{node_id}/restart` | a selected node + that node present in the simulator runtime (the `runtime-inventory` join gives `marker.simId`) + channel `writeEnabled` | `UModal` second confirmation (naming the simulated node and the action) → success `useToast` plus an immediate `refresh()` |
+| Stop node | `POST /api/network/nodes/{node_id}/stop` | same | same |
+| Link actions / runtime add-remove | see the table above | not open yet (P1) | no button at all; when opened it follows the same "capability bit → second confirmation → audit" routine |
+
+The client **does not guess** write permission: the page reads `{ configured, writeEnabled, timeoutMs, readinessPath }` from the BFF's own capability probe `GET /api/sim/channel`. That endpoint returns capability bits only and **never `baseUrl`** (the upstream address is not leaked to the browser); with `writeEnabled=false` the buttons are `disabled` and the page sends **no** write request at all — the BFF's 405 is the second gate, not the first. `node_id` comes from `marker.simId` (the simulator-side id), **not** the 8888 node id (one is the simulation engine's key, the other the management IP).
+
 ### 6.3 Local engines
 
 **This domain uses no BFF engine** (`NMCPS-ADR-0019` §5.2 registers no triple for it). Layout is a client-side pure function family (`app/utils/graph/*`: `topologyLayout` / `topologyLayering` / `topologyRadialLayout` / `topologyTierTreeLayout` / `topologyEdgeStyle`) that takes node and link arrays and returns coordinates, holding no state.
@@ -155,7 +165,7 @@ All graphics are drawn in-house (`NMCPS-ADR-0019` D1 / D2). This domain may use 
 | No metric points | empty state + "no collected data in this window"; the window and metric pickers stay usable | empty matrix, no error |
 | 8888 unconfigured / unreachable | page-level `UAlert` (error) + retry; navigation and other domains unaffected | `/ready` has `upstream.configured === false`, or the request returns `5xx` |
 | Simulator unconfigured | **page renders read-only as normal**: topology and metrics still show; the simulation action group is `disabled` with "simulation control disabled" | `runtimeConfig.simulator.baseUrl` empty |
-| Simulator with `allowWrite=false` | write buttons visible but `disabled`, with a "simulation writes disabled" hint; the BFF answers 405 even if the front end is bypassed | a `write: true` entry plus the switch off |
+| Simulator with `allowWrite=false` | write buttons visible but `disabled`, with a "simulation writes disabled" hint; the BFF answers 405 even if the front end is bypassed | `writeEnabled === false` from `/api/sim/channel` (the client never guesses, and the page sends no write request at all) |
 | Simulator unreachable | partial degradation: the read-only panes stay, the simulated badge and LLDP section show "simulation platform unreachable"; `/ready` must **not** go red | channel timeout / connection failure |
 | Trimming triggered | a corner badge "N nodes / M links trimmed" plus a hint to switch to the layered/radial view | more than 400 nodes or 1,200 links |
 
@@ -177,8 +187,9 @@ Asserted one by one when `check:ui` lands (unimplemented items are filled in wit
 | A6 | read-only when the simulator is unconfigured | without `NUXT_SIMULATOR_BASE_URL` the topology renders normally and every simulation action button is `disabled` |
 | A7 | write endpoints rejected | two gates in a fixed order (path whitelist → channel enabled → write permission): an unconfigured channel short-circuits to 503 `simulator_not_configured`; a configured channel with `allowWrite` still at its default `false` answers 405 `simulator_write_disabled`, and that request never reaches the upstream |
 | A8 | no site-wide outage | in the A6 / A7 scenarios `/ready` still returns 200 with `upstream.configured === true` |
+| A9 | write entries confirm twice and leave an audit trail | on an `allowWrite: true` instance: `/api/sim/channel` says `writeEnabled=true`, the buttons become clickable once a simulated node is selected, and after the `UModal` second confirmation the request **reaches the fake simulator** with method and path unchanged; a success `useToast` appears and the page refreshes; the BFF emits one structured audit line `{"event":"simulator.write",…}` (method / template / status / duration / `x-request-id` / client IP, **no request body**). With `allowWrite=false` the buttons are `disabled`, the page sends zero write requests, and the capability probe never contains the upstream `baseUrl` |
 
-> **Status (2026-11-05)**: A1 / A2 / A4 / A5 / A6 / A7 / A8 are asserted by `pnpm check:ui` (section 11 of `scripts/check-ui.mjs`; A4 / A5 need the fake upstream's `__control/topology-empty` and `__control/down`, so they only run in self-hosted mode), and a self-hosted run measures `130/130` green. A7's precise half lives in the companion case, which boots a second BFF with `NUXT_SIMULATOR_BASE_URL` and proves the IP-aligned "simulated" markers are really drawn, the degraded banner disappears, and a write with the channel configured but writes still off answers 405 with zero write hits on the fake simulator — testing only "not configured" would never exercise the channel itself. **A3 is still open** (select a node → `TrendChart` + `/api/metric/datapoint`) and lands with the metrics pages; today the page only offers the structural view plus the simulation overlay, and the LLDP neighbourhood section, the device/link ledger pane and the alarm badges are likewise P1.
+> **Status (2026-11-06)**: A1 / A2 / A4 / A5 / A6 / A7 / A8 / A9 are asserted by `pnpm check:ui` (section 11 of `scripts/check-ui.mjs`; A4 / A5 need the fake upstream's `__control/topology-empty` and `__control/down`, so they only run in self-hosted mode), and a self-hosted run measures `139/139` green. A7 / A9's precise halves live in two companion cases, each booting a second BFF with `NUXT_SIMULATOR_BASE_URL`: one with `allowWrite=false` proves the IP-aligned "simulated" markers are really drawn, the degraded banner disappears, a write answers 405 and the fake simulator sees zero write hits; the other with `NUXT_SIMULATOR_ALLOW_WRITE=true` proves the buttons become clickable, the `UModal` confirmation really sends the write to the fake simulator with method and path unchanged, and the success toast appears — testing only "not configured" would never exercise the channel itself. **A3 is still open** (select a node → `TrendChart` + `/api/metric/datapoint`) and lands with the metrics pages; the LLDP neighbourhood section, the device/link ledger pane, the alarm badges and **link actions** are likewise P1.
 
 ---
 
@@ -189,4 +200,5 @@ Asserted one by one when `check:ui` lands (unimplemented items are filled in wit
 | 2026-10-25 | 0.1.0 | Initial: topology monitoring domain baseline. |
 | 2026-11-05 | 0.2.0 | Obligation 1 of `NMCPS-ADR-0019` applied: added the 2.0 locations of the three pages, the data sources (seven 8888 endpoints + the 8001 read/write whitelist + the empty local-engine set), the graphic shapes (`TopologyCanvas` / `TrendChart` / `SparkStat`), eight empty and degraded states, eight acceptance assertions; `dependsOn` gained `NMCPS-ARCH-006` (`NMCPS-ADR-0019` is cited in prose only — a Tier 2 normative doc does not `dependsOn` a Tier 5 record). |
 | 2026-11-05 | 0.3.0 | **The `monitor` page landed** (`layers/topology/app/pages/topology/monitor.vue`): structure from `GET /api/topology/graph`, simulator runtime from the 8001 `runtime-inventory` / `stats` (IP-aligned, drawn as a dashed outer ring); the `useTopologyMonitor()` data kernel polls every 30 s, pauses while the page is hidden, and splits failures — a primary-upstream failure is a page-level error, a simulator failure degrades only the simulation section. Graphics land in `app/components/Graph/{TopologyCanvas,SparkStat}.vue` plus `app/utils/graph/{topologyNormalize,topologyLayout,topologyStatusStyle,simulatorOverlay}.ts` (pure functions) and `app/composables/useGraphInteraction.ts` (drag / zoom, no rAF). §9 records the status: A1/A2/A4–A8 are in `check:ui`, A3 plus LLDP / ledger / alarm badges stay with P1. |
+| 2026-11-06 | 0.4.0 | **Write entries shipped (P1-B)**: the two toolbar actions (restart / stop) call `POST /api/network/nodes/{node_id}/{restart,stop}` targeting the simulator-side `marker.simId` (not the 8888 node id), with `UModal` confirmation, a success `useToast` and an immediate refresh. Write permission is no longer guessed: a new BFF capability probe `GET /api/sim/channel` returns only `configured` / `writeEnabled` / `timeoutMs` / `readinessPath` (**never `baseUrl`**), and with `writeEnabled=false` the buttons are `disabled` and the page issues zero write requests. §6.2 gained the write-entry scope table (link actions and runtime add/remove stay P1, **no buttons at all** — a dead button that cannot be reached is worse than none), §8's `allowWrite=false` trigger became the capability bit, §9 gained **A9** (second confirmation + upstream receipt + structured audit line + no address leak from the probe), and the status now reads `139/139`. |
 

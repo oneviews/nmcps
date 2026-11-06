@@ -16,16 +16,20 @@
 		</Teleport>
 
 		<Teleport to="#app-toolbar-right">
+			<!-- 仿真写入口（NMCPS-DESIGN-001 §6.2）：两个节点动作，权限来自 `/api/sim/channel` 的 `writeEnabled` -->
 			<UTooltip :text="simControlHint">
 				<span class="inline-flex">
 					<UButton
 						data-testid="sim-action"
+						data-action="stop"
 						size="sm"
 						color="neutral"
 						variant="outline"
-						icon="carbon:plug"
-						:label="$t('pages.topology-monitor.simControls.linkDown')"
-						disabled
+						icon="carbon:stop-outline"
+						:label="$t('pages.topology-monitor.simControls.nodeStop')"
+						:disabled="!canOperate"
+						:loading="acting === 'stop'"
+						@click="askAction('stop')"
 					/>
 				</span>
 			</UTooltip>
@@ -33,12 +37,15 @@
 				<span class="inline-flex">
 					<UButton
 						data-testid="sim-action"
+						data-action="restart"
 						size="sm"
 						color="neutral"
 						variant="outline"
 						icon="carbon:restart"
 						:label="$t('pages.topology-monitor.simControls.nodeRestart')"
-						disabled
+						:disabled="!canOperate"
+						:loading="acting === 'restart'"
+						@click="askAction('restart')"
 					/>
 				</span>
 			</UTooltip>
@@ -246,6 +253,53 @@
 				</div>
 			</aside>
 		</div>
+
+		<!-- 二次确认（NMCPS-DESIGN-001 §6.2 / A9）：动作直接作用在正在跑的仿真上，不可撤销 -->
+		<UModal
+			v-model:open="confirmOpen"
+			:title="$t('pages.topology-monitor.simControls.confirmTitle')"
+			:description="confirmDescription"
+			:dismissible="!acting"
+			:ui="{ footer: 'justify-end' }"
+		>
+			<template #body>
+				<div class="space-y-3">
+					<UAlert
+						color="warning"
+						variant="subtle"
+						icon="carbon:warning-alt"
+						:title="$t('pages.topology-monitor.simControls.irreversibleTitle')"
+						:description="$t('pages.topology-monitor.simControls.irreversibleBody')"
+					/>
+					<UAlert
+						v-if="actionError"
+						data-testid="sim-action-error"
+						color="error"
+						variant="subtle"
+						icon="carbon:warning-alt"
+						:title="$t('pages.topology-monitor.simControls.actionFailed')"
+						:description="actionError"
+					/>
+				</div>
+			</template>
+
+			<template #footer>
+				<UButton
+					color="neutral"
+					variant="ghost"
+					:label="$t('pages.topology-monitor.simControls.cancel')"
+					:disabled="!!acting"
+					@click="confirmOpen = false"
+				/>
+				<UButton
+					data-testid="sim-confirm"
+					color="error"
+					:label="$t('pages.topology-monitor.simControls.confirmSubmit')"
+					:loading="!!acting"
+					@click="submitAction()"
+				/>
+			</template>
+		</UModal>
 	</div>
 </template>
 
@@ -253,13 +307,15 @@
 	// `/topology/monitor` 网络拓扑总览（NMCPS-DESIGN-001 §二 / §七 / §八）。
 	// 主数据源 8888 `/api/topology/graph`，第二数据源 8001 `runtime-inventory`（只读叠加）。
 	// 仿真通道未配置 / 不可达时页面照常只读：拓扑与统计继续渲染，仿真区块单独降级。
-	import type { SimulatorChannelState } from "~~/layers/topology/app/composables/useTopologyMonitor";
+	import type { SimulatorChannelState, SimulatorNodeAction } from "~~/layers/topology/app/composables/useTopologyMonitor";
 	import type { TopologyNodeStatus } from "~~/shared/types/topology";
 	import { nodeFillClass, nodeStatusColor, statusI18nKey } from "~~/app/utils/graph/topologyStatusStyle";
+	import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 	definePageMeta({ sort: 1, icon: "carbon:network-3" });
 
 	const { t } = useI18n();
+	const toast = useToast();
 
 	const {
 		graph,
@@ -276,6 +332,10 @@
 		selected,
 		selectNode,
 		refresh,
+		writeEnabled,
+		canWrite,
+		acting,
+		performNodeAction,
 		nodeCount,
 		linkCount,
 		comboCount
@@ -284,18 +344,94 @@
 	/** 图例固定四档 + 未知：与 `TopologyNodeStatus` 同集合，新增档位必须同时改这里与 i18n */
 	const legendStatuses: readonly TopologyNodeStatus[] = ["online", "warning", "critical", "offline"];
 
+	/** 动作目标：选中节点在仿真侧的那一条（没有就说明这个节点不在仿真里，写不了） */
+	const actionTarget = computed(() => selected.value?.marker ?? null);
+
+	const pendingAction = ref<SimulatorNodeAction | null>(null);
+	const confirmOpen = ref(false);
+	const actionError = ref("");
+
+	/** 两个条件缺一不可：通道 + 写开关（`canWrite`），以及一个可下发的仿真节点 */
+	const canOperate = computed(() => canWrite.value && !!actionTarget.value && !acting.value);
+
+	const pendingLabel = computed(() => (pendingAction.value === "stop"
+		? t("pages.topology-monitor.simControls.nodeStop")
+		: t("pages.topology-monitor.simControls.nodeRestart")));
+
+	/** 确认弹窗的正文：目标（仿真名 + 仿真 id）+ 动作，缺一样都别让人按下去 */
+	const confirmDescription = computed(() => {
+		const target = actionTarget.value;
+		if (!target)
+			return "";
+		return t("pages.topology-monitor.simControls.confirmDescription", {
+			action: pendingLabel.value,
+			name: target.name,
+			id: target.simId
+		});
+	});
+
 	/**
-	 * 仿真控制按钮的禁用原因：三种状态各说一句话，不出现「点了没反应」。
-	 * 写入口本身留给 P1-B（确认弹窗 + 审计），这里只表达当前能不能写。
+	 * 按钮禁用原因：按「通道 → 写开关 → 选中 → 是否在仿真里」的顺序各说一句话。
+	 * 顺序即优先级——先说缺的那一层，用户才知道该找运维开开关还是先去点节点。
 	 */
 	const simControlHint = computed(() => {
 		const state: SimulatorChannelState = simState.value;
+		if (state === "loading")
+			return t("pages.topology-monitor.simControls.loading");
 		if (state === "disabled")
 			return t("pages.topology-monitor.simControls.disabled");
 		if (state === "unreachable")
 			return t("pages.topology-monitor.simControls.unreachable");
-		if (state === "loading")
-			return t("pages.topology-monitor.simControls.loading");
-		return t("pages.topology-monitor.simControls.readOnly");
+		if (!writeEnabled.value)
+			return t("pages.topology-monitor.simControls.writeDisabled");
+		if (!selected.value)
+			return t("pages.topology-monitor.simControls.selectNode");
+		if (!actionTarget.value)
+			return t("pages.topology-monitor.simControls.notSimulated");
+		return t("pages.topology-monitor.simControls.ready", { name: actionTarget.value.name });
 	});
+
+	/** 失败原因：本方词汇（未开写 / 不可达 / 超时）翻成文案，其余是上游原话，照原样展示 */
+	function describeActionError(message: string): string {
+		if (message === SIMULATOR_MESSAGES.writeDisabled)
+			return t("pages.topology-monitor.simControls.writeDisabled");
+		if (message === SIMULATOR_MESSAGES.unreachable)
+			return t("pages.topology-monitor.simControls.unreachable");
+		if (message === SIMULATOR_MESSAGES.timeout)
+			return t("pages.topology-monitor.simControls.timeout");
+		return message;
+	}
+
+	function askAction(action: SimulatorNodeAction): void {
+		if (!canOperate.value)
+			return;
+
+		actionError.value = "";
+		pendingAction.value = action;
+		confirmOpen.value = true;
+	}
+
+	async function submitAction(): Promise<void> {
+		const target = actionTarget.value;
+		const action = pendingAction.value;
+		if (!target || !action || acting.value)
+			return;
+
+		const result = await performNodeAction(action, target.simId);
+
+		if (!result.ok) {
+			actionError.value = describeActionError(result.message);
+			return;
+		}
+
+		toast.add({
+			title: t(action === "stop"
+				? "pages.topology-monitor.simControls.stopped"
+				: "pages.topology-monitor.simControls.restarted"),
+			description: target.name,
+			color: "success"
+		});
+		confirmOpen.value = false;
+		pendingAction.value = null;
+	}
 </script>
