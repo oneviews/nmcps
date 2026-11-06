@@ -233,6 +233,16 @@
 				"title": "Legend",
 				"simulatedHint": "A dashed outer ring marks a node coming from the simulator runtime (8001)."
 			},
+			"trend": {
+				"title": "Node metric trend",
+				"selectNode": "Select a node to see its metric trend over the last hour",
+				"chartLabel": "{metric} trend of {name}",
+				"empty": "No samples in this time window",
+				"noMetricNames": "This device exposes no plottable metric name",
+				"errorTitle": "Metric retrieval failed",
+				"dropped": "Ignored {count} invalid samples (no zero-fill)",
+				"stale": "The metric channel is unavailable: this is the last successful data"
+			},
 			"status": {
 				"online": "Online",
 				"warning": "Warning",

@@ -36,6 +36,7 @@
 					v-for="item in nodes"
 					:key="item.id"
 					data-testid="topology-node"
+					:data-node-id="item.id"
 					class="cursor-pointer outline-none"
 					role="button"
 					tabindex="0"

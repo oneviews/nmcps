@@ -380,8 +380,56 @@ export async function startUpstream(port) {
 
 			return send(200, { code: 0, msg: "success", data: graph });
 		}
+		// ── /metric/*：节点指标（`/topology/monitor` 详情栏趋势，NMCPS-DESIGN-001 A3） ──
+		// `/metric/name` 回该设备可用指标名清单：新路径是字符串数组、旧路径是对象数组（双形态，缺口
+		// `API-G12`），两家都要吃得下。这里**首项刻意放采集器自监控名**（`up` / `scrape_*`）——
+		// 断言「挑编码时跳过 collector 命名空间」而不是抓到什么画什么（NMCPS-CONTRACT-002 §三）。
+		if (/^\/(?:api\/v1\/)?metric\/name$/.test(url.pathname) && req.method === "GET") {
+			const ip = url.searchParams.get("mgmt_ip");
+			return send(200, {
+				code: 0,
+				msg: "success",
+				data: {
+					mgmt_ip: ip ?? null,
+					metrics: ["up", "scrape_duration_seconds", "if_in_octets", "cpu_util_pct"]
+				}
+			});
+		}
 
-		// ── /account*：账号域（`/system/user` 两栏自查；BFF 网关透传路径可能带 `/api/v1` 前缀） ──
+		// `/metric/datapoint` 回 VM 风格 matrix：点对恒为 `[unix秒, 字符串值]`。序列里**故意夹三个
+		// 非法点**（空串 / `NaN` / 缺值）—— 展示层必须丢弃并计数、绝不补 0（CONTRACT-002 §6.3 ②）。
+		if (/^\/(?:api\/v1\/)?metric\/datapoint$/.test(url.pathname) && req.method === "GET") {
+			const now = Math.floor(Date.now() / 1000);
+			const values = [
+				[now - 600, "12.5"],
+				[now - 480, "18.25"],
+				[now - 420, ""],
+				[now - 360, "21"],
+				[now - 240, "NaN"],
+				[now - 180, "19.75"],
+				[now - 120, "23.5"],
+				[now - 60, "20.25"],
+				[now, "22"]
+			];
+
+			return send(200, {
+				code: 0,
+				msg: "success",
+				data: {
+					mode: url.searchParams.get("mode") ?? "range",
+					mgmt_ip: url.searchParams.get("mgmt_ip") ?? null,
+					metric_code: url.searchParams.get("metric_code") ?? null,
+					rate: false,
+					results: [
+						{
+							metric: { __name__: url.searchParams.get("metric_code") ?? "", ip: url.searchParams.get("mgmt_ip") ?? "" },
+							values
+						}
+					]
+				}
+			});
+		}
+
 		const accountPath = url.pathname.match(/^\/(?:api\/v1\/)?account(\/.*)?$/);
 		if (accountPath) {
 			const rest = accountPath[1] ?? "";

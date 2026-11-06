@@ -233,6 +233,16 @@
 				"title": "图例",
 				"simulatedHint": "虚线外环表示该节点来自仿真运行态（8001）。"
 			},
+			"trend": {
+				"title": "节点指标趋势",
+				"selectNode": "选中节点后，这里显示该节点近 1 小时的指标趋势",
+				"chartLabel": "{name} 的 {metric} 趋势",
+				"empty": "该时间窗内无采集数据",
+				"noMetricNames": "该设备没有可绘图的指标名",
+				"errorTitle": "指标取数失败",
+				"dropped": "已忽略 {count} 个非法采样点（不补 0）",
+				"stale": "指标通道暂时不可用：当前显示的是上一次成功的数据"
+			},
 			"status": {
 				"online": "在线",
 				"warning": "告警",

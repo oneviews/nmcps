@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -22,7 +22,7 @@ dependsOn:
   - NMCPS-ARCH-002
   - NMCPS-DESIGN-001
 createdAt: "2026-10-25"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-06"
 icon: "carbon:chart-line"
 tags:
   - "契约"
@@ -165,7 +165,7 @@ export interface MetricDatapointResponse {
 
 `解包 → 丢弃非法点 → 按 ts 升序 → 同 ts 去重（保留最后一条）→ 单位与小数位取目录条目 → 像素级降采样 → 渲染`
 
-- 每一步是 `app/utils/chart/*` 的无状态纯函数，输入输出都是点数组，可单测。
+- 每一步是 `app/utils/chart/*` 的无状态纯函数，输入输出都是点数组，可单测；首个落点 `app/utils/chart/metricSeries.ts`（`unpackSeries` / `sortAndDedupeSeries` / `normalizeMetricSeries` / `downsampleSeries` / `seriesExtent`）。
 - 降采样只在点数 > 2 × 画布像素列宽时触发，按列保留 **min/max**（保住毛刺），不取平均。
 - 单位与小数位只影响**显示**：`unit` / `metric_type` 来自目录条目，缺失则如实显示原值不加单位。
 
@@ -188,9 +188,42 @@ export interface MetricDatapointResponse {
 
 ---
 
-## 七、变更记录
+## 七、`/metric/name` 指标名清单（单设备）
+
+`/metric/datapoint` 的 `metric_code` 只能来自清单，不允许按命名猜。本层只用清单本身，**不做类型三分类**（那需要目录 join + 字典，属指标页 P1；缺口登记在 `NMCPS-DESIGN-001` §6.5）。
+
+```ts
+export interface MetricNameData {
+  mgmt_ip?: string | null        // 未传 mgmt_ip 时回显 null（禁空串）
+  ips?: string[] | null
+  metrics?: RawMetricItem[] | null
+}
+export type RawMetricItem = string | RawMetricEntry   // 双形态（缺口 API-G12）
+export interface RawMetricEntry {
+  metric_code?: string
+  metric_name?: string
+  metric_group?: string
+  unit?: string
+  data_type?: string
+  description?: string
+}
+```
+
+| 规则 | 口径 |
+| :--- | :--- |
+| 请求 | `GET /metric/name?mgmt_ip=<设备管理 IP>`（走 BFF 网关：`/api/metric/name`） |
+| 条目形态 | 新路径回**字符串数组**、旧路径回**对象数组**；归一只取 `metric_code` 再兜 `metric_name`，两种都要吃得下 |
+| 采集器命名空间 | `up` / `scrape_*` 属 §三 `collector`，**不进业务指标集**；清单首项可能正是它们，挑选时跳过 |
+| 首项选取 | `monitor` 详情栏只画清单里**第一个非 collector 条目**，不按名字挑（`cpu` 子串不等于 `gauge`） |
+| 空清单 | 是合法空（该设备暂无可查指标），渲染空态文案，不打 `/metric/datapoint` |
+| 类型落点 | `shared/types/metric.ts`（`MetricNameData` / `RawMetricItem` / `RawMetricEntry`） |
+
+---
+
+## 八、变更记录
 
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化指标契约（指标类型、可查询性三分类、目录条目、数据点结构）。 |
 | 2026-11-05 | 0.2.0 | 增「§六 `/metric/datapoint` 取数口径」：登记请求参数（含 `ips` / `codes` 批量与 `from` / `to` 两侧类型差异）、响应信封（`code` / `message` / `data`，批量回显 `null`）、点对解包硬约束（字符串值必须数值化、非法点丢弃不补 0）、realtime/range 互斥、`rate` 判定、规范化管线（解包→升序→去重→格式化→像素降采样）、失败语义与三条断言。按 ADR-0019 §七 义务 3 落地。 |
+| 2026-11-06 | 0.3.0 | **增「§七 `/metric/name` 指标名清单」并落地首个消费面**：登记请求（`mgmt_ip`）、`MetricNameData` 形状、`RawMetricItem` 双形态（字符串 / 对象，缺口 API-G12）、采集器命名空间跳过规则、首项选取与空清单语义；`/metric/datapoint` 的 `metric_code` 只从清单来，不按命名猜类型。§6.6 的管线注明首个纯函数落点 `app/utils/chart/metricSeries.ts`（空串必须显式判掉：`Number("")` 是 `0`，会把「没采到」画成 0 值线）。类型落点 `shared/types/metric.ts` 同期补齐。 |

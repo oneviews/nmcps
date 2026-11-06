@@ -236,6 +236,59 @@
 					</p>
 				</div>
 
+				<!-- 节点趋势（NMCPS-DESIGN-001 §6.5 / A3）：选中节点 → `/api/metric/name` 挑编码 →
+					`/api/metric/datapoint` 取近 1 小时序列 → `TrendChart` 自绘折线 -->
+				<div class="rounded-lg border border-(--ui-border) p-3">
+					<div class="mb-2 flex items-baseline justify-between gap-2">
+						<h2 class="text-sm font-semibold">
+							{{ $t("pages.topology-monitor.trend.title") }}
+						</h2>
+						<span v-if="selected && trendMetricCode" class="truncate font-mono text-xs text-(--ui-text-muted)">
+							{{ trendMetricCode }}
+						</span>
+					</div>
+
+					<template v-if="selected">
+						<USkeleton v-if="trendLoading" class="h-24 w-full rounded-md" />
+						<GraphTrendChart
+							v-else
+							:points="trendPoints"
+							:label="$t('pages.topology-monitor.trend.chartLabel', { name: selected.label, metric: trendMetricCode || '—' })"
+							:empty-text="trendEmptyText"
+						/>
+						<!-- 失败语义（CONTRACT-002 §6.7）：上游原话逐字给出 + 重试，不静默降级成「无数据」 -->
+						<div v-if="trendError" data-testid="trend-error" class="mt-2">
+							<UAlert
+								color="error"
+								variant="subtle"
+								icon="carbon:warning-alt"
+								:title="$t('pages.topology-monitor.trend.errorTitle')"
+								:description="trendError.message"
+							>
+								<template #actions>
+									<UButton
+										size="sm"
+										color="neutral"
+										variant="subtle"
+										:label="$t('pages.topology-monitor.error.retry')"
+										@click="reloadTrend()"
+									/>
+								</template>
+							</UAlert>
+						</div>
+						<p v-else-if="trendDropped > 0" class="mt-2 text-xs text-(--ui-text-muted)">
+							{{ $t("pages.topology-monitor.trend.dropped", { count: trendDropped }) }}
+						</p>
+						<p v-if="trendStale" class="mt-2 text-xs text-(--ui-warning)">
+							{{ $t("pages.topology-monitor.trend.stale") }}
+						</p>
+					</template>
+
+					<p v-else class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.trend.selectNode") }}
+					</p>
+				</div>
+
 				<!-- 图例：与画布同一套语义色（`topologyStatusStyle.ts`） -->
 				<div class="rounded-lg border border-(--ui-border) p-3">
 					<h2 class="mb-2 text-sm font-semibold">
@@ -343,6 +396,23 @@
 
 	/** 图例固定四档 + 未知：与 `TopologyNodeStatus` 同集合，新增档位必须同时改这里与 i18n */
 	const legendStatuses: readonly TopologyNodeStatus[] = ["online", "warning", "critical", "offline"];
+
+	// 节点趋势（A3）：选中节点的管理 IP 是唯一入参 —— 交给 8888 的永远是设备管理 IP，不是节点 id
+	const {
+		metricCode: trendMetricCode,
+		points: trendPoints,
+		dropped: trendDropped,
+		reason: trendReason,
+		error: trendError,
+		loading: trendLoading,
+		stale: trendStale,
+		reload: reloadTrend
+	} = useNodeTrend(computed(() => selected.value?.ip ?? ""));
+
+	/** 空态文案按原因分流：没指标名 / 该时段没数据，是两件事，别写成一句「无数据」 */
+	const trendEmptyText = computed(() => (trendReason.value === "no_metric_names"
+		? t("pages.topology-monitor.trend.noMetricNames")
+		: t("pages.topology-monitor.trend.empty")));
 
 	/** 动作目标：选中节点在仿真侧的那一条（没有就说明这个节点不在仿真里，写不了） */
 	const actionTarget = computed(() => selected.value?.marker ?? null);

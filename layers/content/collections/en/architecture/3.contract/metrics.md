@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.2.0
+version: 0.3.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -21,7 +21,7 @@ dependsOn:
   - NMCPS-ARCH-002
   - NMCPS-DESIGN-001
 createdAt: "2026-10-25"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-06"
 icon: "carbon:chart-line"
 tags:
   - "Contract"
@@ -164,7 +164,7 @@ export interface MetricDatapointResponse {
 
 `unpack → drop invalid points → sort ascending by ts → de-duplicate equal ts (keep the last) → unit and decimals from the catalog entry → pixel-level downsampling → render`
 
-- Each step is a stateless pure function in `app/utils/chart/*`, taking and returning point arrays, so it is unit-testable.
+- Each step is a stateless pure function in `app/utils/chart/*`, taking and returning point arrays, so it is unit-testable; the first landing is `app/utils/chart/metricSeries.ts` (`unpackSeries` / `sortAndDedupeSeries` / `normalizeMetricSeries` / `downsampleSeries` / `seriesExtent`).
 - Downsampling only kicks in above 2 × canvas pixel columns and keeps **min/max** per column (preserving spikes); it never averages.
 - Unit and decimals affect **display only**: `unit` / `metric_type` come from the catalog entry; when missing, show the raw value with no unit rather than inventing one.
 
@@ -187,9 +187,42 @@ export interface MetricDatapointResponse {
 
 ---
 
-## 7. Changelog
+## 7. `/metric/name` Metric Name List (single device)
+
+`/metric/datapoint`'s `metric_code` may only come from the list, never from guessing at the name. This layer uses the list as-is and **does not** do the three-way classification (that needs the catalog join plus the dictionary and belongs to the metrics pages' P1; the gap is registered in `NMCPS-DESIGN-001` §6.5).
+
+```ts
+export interface MetricNameData {
+  mgmt_ip?: string | null        // null when mgmt_ip was not sent (empty string forbidden)
+  ips?: string[] | null
+  metrics?: RawMetricItem[] | null
+}
+export type RawMetricItem = string | RawMetricEntry   // dual shape (gap API-G12)
+export interface RawMetricEntry {
+  metric_code?: string
+  metric_name?: string
+  metric_group?: string
+  unit?: string
+  data_type?: string
+  description?: string
+}
+```
+
+| Rule | Contract |
+| :--- | :--- |
+| Request | `GET /metric/name?mgmt_ip=<device management IP>` (through the BFF gateway: `/api/metric/name`) |
+| Entry shape | the new path returns a **string array**, the old path an **object array**; normalisation takes `metric_code` and falls back to `metric_name`, so both shapes must be accepted |
+| Collector namespace | `up` / `scrape_*` are `collector` (§3) and **never enter the business metric set**; the list may well start with them, so picking skips them |
+| First-entry pick | the `monitor` detail pane draws the **first non-collector entry** of the list and never picks by name (`cpu` as a substring does not mean `gauge`) |
+| Empty list | a legal empty (the device exposes nothing queryable right now): render the empty copy and do **not** call `/metric/datapoint` |
+| Type location | `shared/types/metric.ts` (`MetricNameData` / `RawMetricItem` / `RawMetricEntry`) |
+
+---
+
+## 8. Changelog
 
 | Date | Version | Change |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: metrics contract (types, queryability, catalog, datapoint). |
 | 2026-11-05 | 0.2.0 | Added "§6 `/metric/datapoint` retrieval contract": request parameters (including the `ips` / `codes` batch mode and the `from` / `to` type gap between request and response), response envelope (`code` / `message` / `data`, batch echo as `null`), pair-unpacking hard constraints (string values must be converted, invalid points dropped without zero-fill), realtime/range exclusivity, `rate` decision rules, the normalisation pipeline (unpack → ascending sort → de-duplicate → format → pixel downsampling), failure semantics and three assertions. Lands ADR-0019 §7 obligation 3. |
+| 2026-11-06 | 0.3.0 | **Added "§7 `/metric/name` metric name list" together with its first consumer**: the request (`mgmt_ip`), the `MetricNameData` shape, the `RawMetricItem` dual shape (string / object, gap API-G12), the collector-namespace skip rule, the first-entry pick and the empty-list semantics are registered; a `/metric/datapoint` `metric_code` comes only from the list, never from guessing at the name. §6.6 now names the first pure-function landing `app/utils/chart/metricSeries.ts` (the empty string must be rejected explicitly: `Number("")` is `0`, which would draw "not collected" as a zero line). Types landed in `shared/types/metric.ts`. |

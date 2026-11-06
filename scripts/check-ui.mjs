@@ -1639,6 +1639,53 @@ if (upstreamPort) {
 	);
 
 	if (upstreamPort) {
+		// A3：选中节点 → 详情栏出 `TrendChart`，指标请求带该节点的**管理 IP**（不是节点 id）。
+		// 请求监听器要挂在点击之前：趋势是「选中即取」，挂晚了只能看到空清单。
+		const trendRequests = [];
+		const recordTrend = (request) => {
+			if (request.url().includes("/api/metric/"))
+				trendRequests.push(request.url());
+		};
+		page.on("request", recordTrend);
+
+		const clickedNode = await page.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.2");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return node?.getAttribute("data-node-id") ?? null;
+		});
+		await page.waitForTimeout(800);
+
+		const trendProbe = await page.evaluate(() => ({
+			chart: !!document.querySelector("[data-testid='trend-chart']"),
+			lines: document.querySelectorAll("[data-testid='trend-line']").length,
+			text: document.body.textContent ?? ""
+		}));
+		page.off("request", recordTrend);
+
+		// 编码断言的不是「随便抓一个名字」：假上游把 `up` / `scrape_*` 放在清单最前面，
+		// 出现 `if_in_octets` 说明真的跳过了采集器自监控命名空间（CONTRACT-002 §三）。
+		log(
+			"A3 选中节点后详情栏出现 TrendChart（按目录选编码，跳过 collector）",
+			clickedNode === "10.0.0.2" && trendProbe.chart && trendProbe.lines === 1 && trendProbe.text.includes("if_in_octets"),
+			`node=${clickedNode} chart=${trendProbe.chart} lines=${trendProbe.lines}`
+		);
+
+		const datapointRequest = trendRequests.find((url) => url.includes("/api/metric/datapoint")) ?? "";
+		log(
+			"A3 指标请求带该节点管理 IP",
+			datapointRequest.includes("mgmt_ip=10.0.0.2") && datapointRequest.includes("metric_code=if_in_octets"),
+			datapointRequest ? datapointRequest.split("?")[1]?.slice(0, 120) ?? "" : "未见 /api/metric/datapoint 请求"
+		);
+
+		// 假上游的序列里夹了空串与 `NaN` 两个非法点：它们必须被丢弃并计数，绝不能被当成 0 画进来
+		// （CONTRACT-002 §6.3 ②：丢弃 + 计数，不补 0、不插值）。
+		log(
+			"A3 非法采样点被丢弃并计数（不补 0）",
+			trendProbe.text.includes("已忽略 2 个非法采样点"),
+			trendProbe.text.includes("已忽略 2 个非法采样点") ? "计数 2" : `未见丢弃提示：${trendProbe.text.slice(0, 100)}`
+		);
+
 		// A4：上游回空节点集 → 空态而不是空白画布
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
 		await page.reload({ waitUntil: "networkidle" });

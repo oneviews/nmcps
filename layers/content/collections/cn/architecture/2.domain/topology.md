@@ -15,7 +15,7 @@ authority: normative
 scope:
   - domain.topology
 status: baseline
-version: 0.4.0
+version: 0.5.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -139,6 +139,21 @@ tags:
 3. **时间窗**：指标页默认近 1 小时、`step` 随窗口自动选取；时间窗选择器按 `NMCPS-ARCH-006` §4.1 用「一个摘要按钮 + `UPopover`（预设列 + `UCalendar range`）」，不出现两个并排 `datetime-local`。
 4. **失败分类**：`ApiError.code` 为 401 走统一刷新；`5xx` 展示错误态并保留重试；`code=0` 且 `data` 为空按空态处理，**不**渲染成错误。
 
+### 6.5 节点趋势取数口径（A3，2026-11-06 落码）
+
+`monitor` 详情栏的 `TrendChart` 只画**一个**序列，两步都经 BFF 网关（页面不直连上游）：
+
+| 步骤 | 端点（8888 `/api/v1`） | 参数 | 说明 |
+| :--- | :--- | :--- | :--- |
+| ① 挑编码 | `GET /metric/name` | `mgmt_ip` = 选中节点的**管理 IP** | 该设备可用指标名清单（双形态，归一口径见 `NMCPS-CONTRACT-002` §七）；只排除采集器自监控命名空间（`up` / `scrape_*`），**不按名字猜类型** |
+| ② 取序列 | `GET /metric/datapoint` | `mode=range` / `mgmt_ip` / `metric_code` / `from` / `to`（ISO 字符串）/ `step=60` | 近 1 小时窗口；`rate` 不传 —— 类型未定就不开速率（`NMCPS-CONTRACT-002` §6.5） |
+
+- **取数内核**：`layers/topology/app/composables/useNodeTrend.ts`（两步请求 + 状态 + 竞态序号）；解包 / 升序 / 去重 / 降采样全部落在 `app/utils/chart/metricSeries.ts` 的纯函数里（`NMCPS-CONTRACT-002` §6.6），组件只负责画。
+- **图形**：`app/components/Graph/TrendChart.vue`（SVG 折线 + 面积填充；`vector-effect` 让线宽不随拉伸变化；点数 > 2 × 列宽时按列保留 min/max，保住毛刺）。
+- **不设选择器**：指标选择器随 `device-metrics` / `link-metrics` 的 P1 落地；本页只画清单首项，避免「选了文本指标看到一条直线」的错配面先在监视页复现。
+- **失败语义**：`code !== 0` → `UAlert` 展示上游 `message` 原文 + 重试；同一节点重取失败保留上一次序列并标「可能不是最新」；`results: []` 与「点全部非法」都走空态，**绝不画 0 值直线**。
+- **登记缺口**：指标类型三分类需要目录 join（`GET /metric/definition` + 字典），属指标页 P1；在此之前文本 / 事件指标仍可能落成一条直线 —— 缺口写在这里，不用命名猜测绕过去。
+
 ---
 
 ## 七、图形形态
@@ -148,7 +163,7 @@ tags:
 | 组件 | 用在哪 | 载体 | 关键要求 |
 | :--- | :--- | :--- | :--- |
 | `TopologyCanvas` | `monitor` 主视图 | SVG（≤ 400 节点）+ 等轴投影（2.5D 观感） | 布局以纯函数注入；节点上限 400 / 链路上限 1,200，超出按权重裁剪并显示「已裁剪 N 个」；拖拽 / 缩放 / 框选命中测试由 `app/composables/useGraphInteraction.ts` 统一提供 |
-| `TrendChart` | `device-metrics` / `link-metrics` 主图 | SVG 折线 + 面积填充 | 阈值带、时间窗选区、游标读数；> 2,000 点按像素列聚合（保留极值） |
+| `TrendChart` | `device-metrics` / `link-metrics` 主图；`monitor` 详情栏的节点趋势 | SVG 折线 + 面积填充 | 阈值带、时间窗选区、游标读数；> 2,000 点按像素列聚合（保留极值） |
 | `SparkStat` | 页面头部与详情栏的小卡片 | SVG | 单值 + 迷你趋势 + 状态色，替代 1.0 里分散的 unovis 迷你图 |
 
 - **状态色**：节点 / 链路状态色来自 `app.config.ts` 的语义色，禁止硬编码 hex。
@@ -182,7 +197,7 @@ tags:
 | :---: | :--- | :--- |
 | A1 | 三页均可路由到达且标题来自 i18n | `i18n/locales/*.json` 的 `topology-{monitor,device-metrics,link-metrics}` 各出现一次，页面无硬编码 CJK |
 | A2 | 拓扑页渲染出 `TopologyCanvas` | 选择器命中 `[data-testid="topology-canvas"]`，SVG 内 `circle`/`path` 数量 > 0 |
-| A3 | 选中节点后详情栏出现该节点指标 | 点击节点 → 右栏出现 `TrendChart`，且请求 `/api/metric/datapoint` 带该节点 `mgmt_ip` |
+| A3 | 选中节点后详情栏出现该节点指标 | 点击节点 → 右栏出现 `TrendChart`，且请求 `/api/metric/datapoint` 带该节点 `mgmt_ip`（编码取自 `/metric/name` 的首个非采集器名；序列里非法采样点丢弃并计数，不补 0） |
 | A4 | 空拓扑渲染空态而非空白画布 | 假上游返回 `nodes: []` → 出现空态文案，`topology-canvas` 不存在 |
 | A5 | 8888 掉线降级 | 关闭假上游 → 点工具栏「刷新拓扑」→ 出现错误态 `UAlert` + 重试按钮，页面不白屏；上游恢复后点「重试」回到拓扑。**不整页 reload**：掉线时重载会让会话探测一起失败，被守卫送回登录页，断言的就不是本页的错误态了 |
 | A6 | 仿真未配置时只读 | 不设 `NUXT_SIMULATOR_BASE_URL` → 拓扑正常渲染，仿真动作按钮全部 `disabled` |
@@ -190,7 +205,7 @@ tags:
 | A8 | 不做全站失效 | A6 / A7 场景下 `/ready` 仍 200 且 `upstream.configured === true` |
 | A9 | 写入口二次确认 + 审计留痕 | `allowWrite: true` 的实例上：`/api/sim/channel` 回 `writeEnabled=true`、选中仿真节点后按钮可点、`UModal` 二次确认后请求**到达假仿真平台**（方法与路径原样）、成功后 `useToast` 提示并刷新；BFF 侧输出一行结构化审计日志 `{"event":"simulator.write",…}`（方法 / 模板 / 状态 / 耗时 / `x-request-id` / 客户端 IP，**不含请求体**）。`allowWrite=false` 时按钮 `disabled`、页面零写请求，且能力探针响应里不出现上游 `baseUrl` |
 
-> **落地状态（2026-11-06）**：A1 / A2 / A4 / A5 / A6 / A7 / A8 / A9 已由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `139/139` 全绿。A7 / A9 的精确面放在「仿真通道已配置」的两个对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF：一个 `allowWrite=false`，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失、写端点 405 且假仿真平台侧零写命中；一个 `NUXT_SIMULATOR_ALLOW_WRITE=true`，断言按钮可点、`UModal` 二次确认后写请求真的落到假仿真平台且路径与方法原样、成功 toast 出现）—— 只测「未配置」等于没测过通道接通。**A3 仍未落地**（选中节点 → `TrendChart` + `/api/metric/datapoint`），随指标页 P1 补齐后再进断言表；LLDP 邻接分区、设备/链路台账侧栏、告警角标、**链路动作**同样属 P1。
+> **落地状态（2026-11-06）**：A1 ~ A9 已全部由 `pnpm check:ui` 断言（`scripts/check-ui.mjs` 第 11 段；A4 / A5 依赖假上游的 `__control/topology-empty` 与 `__control/down`，只在自建模式跑），自建模式实测 `142/142` 全绿。A3 由三条断言锁住：点节点后详情栏出现 `TrendChart` 且编码取自 `/metric/name` 的**首个非采集器名**（假上游故意把 `up` / `scrape_*` 排在清单最前）、`/api/metric/datapoint` 请求带该节点 `mgmt_ip` 与 `metric_code`、序列里夹的两个非法点（空串 / `NaN`）被丢弃并计数（不补 0）。A7 / A9 的精确面放在「仿真通道已配置」的两个对照面里（另起带 `NUXT_SIMULATOR_BASE_URL` 的 BFF：一个 `allowWrite=false`，断言按管理 IP 对齐的「仿真中」标记真的画出来、降级条消失、写端点 405 且假仿真平台侧零写命中；一个 `NUXT_SIMULATOR_ALLOW_WRITE=true`，断言按钮可点、`UModal` 二次确认后写请求真的落到假仿真平台且路径与方法原样、成功 toast 出现）—— 只测「未配置」等于没测过通道接通。LLDP 邻接分区、设备/链路台账侧栏、告警角标、**链路动作**、指标选择器（含类型三分类，见 §6.5 登记的缺口）同样属 P1。
 
 ---
 
@@ -202,3 +217,4 @@ tags:
 | 2026-11-05 | 0.2.0 | 按 `NMCPS-ADR-0019` 落实码前义务 1：补三页的 2.0 落点、数据源（8888 七个端点 + 8001 只读/写白名单 + 本地引擎空集）、图形形态（`TopologyCanvas` / `TrendChart` / `SparkStat`）、八种空态与降级态、8 条验收断言；`dependsOn` 增加 `NMCPS-ARCH-006`（`NMCPS-ADR-0019` 只作正文引用，Tier 2 normative 不 `dependsOn` Tier 5 记录层）。 |
 | 2026-11-05 | 0.3.0 | **`monitor` 页落码**（`layers/topology/app/pages/topology/monitor.vue`）：结构来自 `GET /api/topology/graph`，仿真运行态来自 8001 `runtime-inventory` / `stats`（按管理 IP 对齐后叠加虚线外环标记）；取数内核 `useTopologyMonitor()` 30s 轮询 + 页面不可见暂停，主上游失败走页面级错误、仿真通道失败只降级仿真区块。图形落 `app/components/Graph/{TopologyCanvas,SparkStat}.vue` + `app/utils/graph/{topologyNormalize,topologyLayout,topologyStatusStyle,simulatorOverlay}.ts`（纯函数）+ `app/composables/useGraphInteraction.ts`（拖拽 / 缩放，无 rAF）。§九 补落地状态：A1/A2/A4~A8 已进 `check:ui`，A3 与 LLDP / 台账 / 告警角标留 P1。 |
 | 2026-11-06 | 0.4.0 | **写入口 P1-B 落码**：`monitor` 工具栏右区两个节点动作（重启 / 停止）接 `POST /api/network/nodes/{node_id}/{restart,stop}`，目标取仿真侧 `marker.simId`（不是 8888 的节点 id）；交互为 `UModal` 二次确认 + 成功 `useToast` + 立即刷新。写权限不再靠猜：新增 BFF 能力探针 `GET /api/sim/channel`（只回 `configured` / `writeEnabled` / `timeoutMs` / `readinessPath`，**不回 `baseUrl`**），`writeEnabled=false` 时按钮 `disabled` 且页面零写请求。§6.2 补写入口范围表（链路动作 / 运行态增删留 P1，**不设按钮**——不留点了没反应的死按钮）、§八 `allowWrite=false` 的判据改为能力位、§九 新增 **A9**（二次确认 + 上游实收 + 结构化审计日志 + 能力探针不泄露地址），落地状态更新为 `139/139`。 |
+| 2026-11-06 | 0.5.0 | **A3 落码，A1~A9 全绿**：`monitor` 详情栏接上节点趋势 —— 选中节点 → `GET /api/metric/name`（`mgmt_ip`）挑编码（只排除 `up` / `scrape_*` 采集器命名空间，不按名字猜类型）→ `GET /api/metric/datapoint`（`mode=range`、近 1 小时、`step=60`、`rate` 不传）→ `TrendChart` 自绘折线。取数内核 `layers/topology/app/composables/useNodeTrend.ts`（含切节点清空、同节点失败保留旧序列并标 stale 的竞态处理），解包 / 升序 / 去重 / 像素降采样落在 `app/utils/chart/metricSeries.ts` 纯函数（空串显式判掉：`Number("")` 是 0，会把「没采到」画成 0 值线）；§6.5 新增取数口径与登记缺口（类型三分类需目录 join，属指标页 P1）；§七 `TrendChart` 行补本页用法；§九 A3 判据补「非法点丢弃不补 0」，落地状态改为 `142/142`（第 11 段新增三条断言）。 |
