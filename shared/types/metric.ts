@@ -2,7 +2,9 @@
 // 指标契约（`NMCPS-CONTRACT-002`）在 2.0 的类型落点：
 //   §二 指标类型（`MetricType`）、§三 可查询性三分类（`MetricCatalogKind`）、
 //   §五 数据点（`MetricDatapoint`）、§六 `/metric/datapoint` 取数口径（`MetricDatapointData`）、
-//   §七 指标名清单（`/metric/name` 的 `MetricNameData` + 双形态条目 `RawMetricItem`）。
+//   §七 指标名清单（`/metric/name` 的 `MetricNameData` + 双形态条目 `RawMetricItem`）、
+//   §八 目录 join（`MetricCatalogItem`）、§九 指标台账（`/metric/device` 与 `/metric/link` 的
+//   `MetricDeviceFact` / `MetricLinkFact` 与分页信封 `MetricLedgerData`）。
 //
 // 只登记**要消费**的形状，不做归一：解包 / 排序 / 去重 / 降采样落在
 // `app/utils/chart/metricSeries.ts`（无状态纯函数），页面取数在
@@ -78,4 +80,111 @@ export interface MetricNameData {
 	mgmt_ip?: string | null
 	ips?: string[] | null
 	metrics?: RawMetricItem[] | null
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 九、指标台账：`/metric/device` 与 `/metric/link`（§九）
+//
+// 两条台账端点是**指标页左栏**的数据源：`/metric/datapoint` 只回「某个 `mgmt_ip` 的某条指标的
+// 历史」，回答不了「有哪些设备 / 哪些链路、当前值多少」。字段口径取自 openapi 的
+// `metric_DeviceFact` / `metric_LinkFact`（`_reference` 里 1.0 的同一份 schema），
+// `null` = 不可判定（契约禁 0 / 空串伪造），展示层显示 `—`。
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** 设备健康（`metric_DeviceFact.health`）：三项都可能缺 */
+export interface MetricDeviceHealth {
+	cpu_percent?: number | null
+	mem_percent?: number | null
+	temperature_c?: number | null
+}
+
+/** 端口汇总（`metric_DeviceFact.interface_summary`；上游由端口现算，禁取 `ifNumber`） */
+export interface MetricInterfaceSummary {
+	total?: number
+	up?: number
+	down?: number
+}
+
+/** 设备流量（`metric_DeviceFact.traffic`；一期速率类恒 `null`） */
+export interface MetricDeviceTraffic {
+	in_bps?: number | null
+	out_bps?: number | null
+	total_bps?: number | null
+	in_octets_total?: number | null
+	out_octets_total?: number | null
+}
+
+/** 设备台账条目（§九；`/metric/device` 的 `data.list[]`） */
+export interface MetricDeviceFact {
+	/** 设备主键（台账 `?id` 用它；缺失 ⇒ 条目丢弃） */
+	device_code?: string
+	/** 管理 IP：`/metric/name` 与 `/metric/datapoint` 的唯一入参；缺失 ⇒ 取不到时序 */
+	mgmt_ip?: string | null
+	role?: string
+	vendor?: string
+	model?: string | null
+	sys_name?: string | null
+	/** `online` / `offline` / `degraded`（未知取值原样展示） */
+	status?: string | null
+	uptime_sec?: number | null
+	health?: MetricDeviceHealth
+	interface_summary?: MetricInterfaceSummary
+	traffic?: MetricDeviceTraffic
+}
+
+/** 链路单侧端点（`identity.{source,target}`）；**没有 `mgmt_ip`**，这是链路级时序缺口的根因 */
+export interface MetricLinkEndpoint {
+	device_code?: string
+	device_role?: string
+	interface_id?: string
+	if_index?: number | null
+	interface_name?: string | null
+	medium?: string
+	oper_status?: number | null
+	capacity_mbps?: number | null
+	rssi_dbm?: number | null
+	tx_rate_mbps?: number | null
+}
+
+/** 链路身份（`metric_LinkFact.identity`）：`link_id` 两侧字典序 ⇒ 交换不变 */
+export interface MetricLinkIdentity {
+	link_id?: string
+	source?: MetricLinkEndpoint
+	target?: MetricLinkEndpoint
+	discovery?: string
+	ssid?: string | null
+}
+
+/** 链路当前值（`metric_LinkFact.metrics`；单位后缀强制，不可判定 ⇒ `null`） */
+export interface MetricLinkMetrics {
+	status?: string | null
+	graph_status?: string | null
+	medium?: string | null
+	bandwidth_mbps?: number | null
+	traffic_in_mbps?: number | null
+	traffic_out_mbps?: number | null
+	bandwidth_usage_percent?: number | null
+	latency_ms?: number | null
+	jitter_ms?: number | null
+	packet_loss_percent?: number | null
+	error_rate_percent?: number | null
+	rx_power_dbm?: number | null
+}
+
+/** 链路台账条目（§九；`/metric/link` 的 `data.list[]`） */
+export interface MetricLinkFact {
+	identity?: MetricLinkIdentity
+	metrics?: MetricLinkMetrics
+	/** 质量标记（只读；本层不据此派生契约字段） */
+	quality?: Record<string, boolean>
+}
+
+/** 台账分页信封（两条端点同构）：`total` 是**命中总数**，不是本页条数 */
+export interface MetricLedgerData<TFact> {
+	list?: TFact[] | null
+	page?: number
+	page_size?: number
+	total?: number
+	/** ISO 8601（UTC） */
+	generated_at?: string
 }

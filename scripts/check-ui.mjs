@@ -1723,6 +1723,123 @@ if (upstreamPort) {
 		await page.waitForTimeout(1500);
 		const recovered = await page.evaluate(() => !!document.querySelector("[data-testid='topology-canvas']"));
 		log("A5 上游恢复后点重试可回到拓扑", recovered, recovered ? "已恢复" : "仍无 canvas");
+
+		// A10：`/topology/device-metrics` —— 左栏台账行数与信封 `total` 一致、默认选中第一条、
+		// 指标选择器**只列目录判为 `numeric` 的条目**（假上游把 `sys_name` 标成 `string`，
+		// 把 `up` / `scrape_*` 放在名字清单最前：一个都不许出现在选项里）。
+		const metricRequests = [];
+		const recordMetric = (request) => {
+			if (request.url().includes("/api/metric/"))
+				metricRequests.push(request.url());
+		};
+		page.on("request", recordMetric);
+
+		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1200);
+
+		const deviceProbe = await page.evaluate(() => ({
+			rows: document.querySelectorAll("[data-testid='metric-device-row']").length,
+			selected: document.querySelector("[data-testid='metric-device-row'][aria-selected='true']")?.getAttribute("data-device-id") ?? "",
+			chart: !!document.querySelector("[data-testid='trend-chart']"),
+			text: document.body.textContent ?? ""
+		}));
+		log(
+			"A10 设备台账渲染 + 默认选中第一条（计数来自信封 total）",
+			deviceProbe.rows === 3 && deviceProbe.selected === "DEV-CORE-1" && deviceProbe.text.includes("共 3 台设备"),
+			`rows=${deviceProbe.rows} selected=${deviceProbe.selected || "无"}`
+		);
+		log(
+			"A10 选中设备后按 mgmt_ip 出 TrendChart",
+			deviceProbe.chart && metricRequests.some((url) => url.includes("/api/metric/datapoint") && url.includes("mgmt_ip=10.0.0.2")),
+			deviceProbe.chart ? "已出图" : "无 [data-testid='trend-chart']"
+		);
+
+		const definitionCalls = metricRequests.filter((url) => url.includes("/api/metric/definition")).length;
+		log("A10 指标目录一次会话只取一次", definitionCalls === 1, `/api/metric/definition 命中 ${definitionCalls} 次`);
+
+		// 选择器内容：真打开下拉读选项文案，而不是「页面上出现了某个字符串」
+		await page.locator("[data-testid='metric-picker']").click();
+		await page.waitForTimeout(400);
+		const pickerOptions = await page.evaluate(() =>
+			Array.from(document.querySelectorAll("[role='option']")).map((el) => el.textContent?.trim() ?? ""));
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(200);
+		const pickerClean = pickerOptions.length > 0
+			&& pickerOptions.some((item) => item.includes("Interface in octets"))
+			&& pickerOptions.some((item) => item.includes("CPU utilization"))
+			&& pickerOptions.every((item) => !item.includes("System name") && !item.includes("Scrape duration") && item !== "Up");
+		log(
+			"A10 指标选择器只列 numeric（sys_name / collector 全部缺席）",
+			pickerClean,
+			pickerOptions.length ? pickerOptions.join(" | ") : "下拉没有选项"
+		);
+
+		// A11：换指标 → `/api/metric/datapoint` 换 `metric_code`，且 `gauge` 上不出现速率开关
+		// （§6.5：类型未定就不摆一个点了没反应的开关）。
+		metricRequests.length = 0;
+		await page.locator("[data-testid='metric-picker']").click();
+		await page.waitForTimeout(300);
+		await page.getByRole("option", { name: /CPU utilization/ }).first().click();
+		await page.waitForTimeout(1200);
+		const switched = metricRequests.filter((url) => url.includes("/api/metric/datapoint")).at(-1) ?? "";
+		const rateSwitch = await page.evaluate(() => !!document.querySelector("[data-testid='metric-rate']"));
+		log(
+			"A11 切换指标改写 metric_code（仍是同一台设备的 mgmt_ip）",
+			switched.includes("metric_code=cpu_util_pct") && switched.includes("mgmt_ip=10.0.0.2"),
+			switched ? switched.split("?")[1]?.slice(0, 120) ?? "" : "未见 /api/metric/datapoint 请求"
+		);
+		log("A11 gauge 指标不显示速率开关", rateSwitch === false, rateSwitch ? "仍显示速率开关" : "已隐藏");
+
+		// A12：`/topology/link-metrics` —— 台账当前值来自 `/metric/link`；链路没有 `mgmt_ip`，
+		// 折线取 **source 端设备** 的 IP（靠 `/metric/device` 建 `device_code → mgmt_ip` 索引），
+		// source 端没 IP 时只说明原因、不发请求。
+		metricRequests.length = 0;
+		await page.goto(`${BASE_URL}/topology/link-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1200);
+
+		const linkProbe = await page.evaluate(() => ({
+			rows: document.querySelectorAll("[data-testid='metric-link-row']").length,
+			selected: document.querySelector("[data-testid='metric-link-row'][aria-selected='true']")?.getAttribute("data-link-id") ?? "",
+			chart: !!document.querySelector("[data-testid='trend-chart']"),
+			text: document.body.textContent ?? ""
+		}));
+		log(
+			"A12 链路台账渲染当前值（利用率 / 时延来自 /metric/link）",
+			linkProbe.rows === 2
+			&& linkProbe.text.includes("共 2 条链路")
+			&& linkProbe.text.includes("32.5%")
+			&& linkProbe.text.includes("1.2 ms"),
+			`rows=${linkProbe.rows} selected=${linkProbe.selected || "无"}`
+		);
+
+		const linkIndex = metricRequests.find((url) => url.includes("/api/metric/device") && url.includes("page_size=200")) ?? "";
+		const linkDatapoint = metricRequests.filter((url) => url.includes("/api/metric/datapoint")).at(-1) ?? "";
+		log(
+			"A12 链路折线取 source 端设备 IP（device_code → mgmt_ip 反查）",
+			linkProbe.selected === "LNK-0001"
+			&& !!linkIndex
+			&& linkProbe.chart
+			&& linkDatapoint.includes("mgmt_ip=10.0.0.2")
+			&& linkProbe.text.includes("这条折线来自 source 端设备"),
+			linkDatapoint ? linkDatapoint.split("?")[1]?.slice(0, 120) ?? "" : "未见 /api/metric/datapoint 请求"
+		);
+
+		// source 端没有 mgmt_ip（假上游的 DEV-AP-1）→ 只给一句原因，不发明请求
+		metricRequests.length = 0;
+		await page.locator("[data-link-id='LNK-0002']").click();
+		await page.waitForTimeout(900);
+		const noIpProbe = await page.evaluate(() => ({
+			notice: !!document.querySelector("[data-testid='metric-no-ip']"),
+			chart: !!document.querySelector("[data-testid='trend-chart']")
+		}));
+		const noIpRequests = metricRequests.filter((url) => url.includes("/api/metric/datapoint")).length;
+		log(
+			"A12 source 端缺 mgmt_ip 时只说明原因、不发取数请求",
+			noIpProbe.notice && !noIpProbe.chart && noIpRequests === 0,
+			`notice=${noIpProbe.notice} chart=${noIpProbe.chart} datapoint=${noIpRequests}`
+		);
+
+		page.off("request", recordMetric);
 	}
 }
 

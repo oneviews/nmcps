@@ -391,9 +391,113 @@ export async function startUpstream(port) {
 				msg: "success",
 				data: {
 					mgmt_ip: ip ?? null,
-					metrics: ["up", "scrape_duration_seconds", "if_in_octets", "cpu_util_pct"]
+					// `sys_name` 排在最后且被目录标成 `string`：它必须**不**进指标选择器
+					// （NMCPS-CONTRACT-002 §八 三分类），否则「文本指标画成折线」的缺口就被掩盖了。
+					metrics: ["up", "scrape_duration_seconds", "if_in_octets", "cpu_util_pct", "sys_name"]
 				}
 			});
+		}
+
+		// `/metric/definition`：指标目录（§八 的 join 依据）。`up` / `scrape_*` 即使登记也不可选（名字判据优先），
+		// `sys_name` 标 `string` + `has_series: false` —— 两条文本判据各留一条样本。
+		if (/^\/(?:api\/v1\/)?metric\/definition$/.test(url.pathname) && req.method === "GET") {
+			return send(200, {
+				code: 0,
+				msg: "success",
+				data: {
+					list: [
+						{ code: "up", metric_type: "gauge", unit: "", en_name: "Up" },
+						{ code: "scrape_duration_seconds", metric_type: "gauge", unit: "s", en_name: "Scrape duration" },
+						{ code: "if_in_octets", metric_type: "counter", unit: "bytes", en_name: "Interface in octets" },
+						{ code: "cpu_util_pct", metric_type: "gauge", unit: "%", en_name: "CPU utilization" },
+						{ code: "sys_name", metric_type: "string", has_series: false, en_name: "System name" }
+					],
+					page: 1,
+					page_size: 200,
+					total: 5
+				}
+			});
+		}
+
+		// `/metric/device`：设备台账（指标页左栏，`NMCPS-DESIGN-001` §6.6 / A10）。
+		// 三行刻意各有缺口：② 的 `cpu` / `ports` 缺一项（展示 `—`，不补 0）、③ 没有 `mgmt_ip`
+		// （趋势面板只能说明原因，不许发明请求）。
+		if (/^\/(?:api\/v1\/)?metric\/device$/.test(url.pathname) && req.method === "GET") {
+			const devices = [
+				{
+					device_code: "DEV-CORE-1",
+					mgmt_ip: "10.0.0.2",
+					sys_name: "核心路由器-1",
+					role: "core",
+					vendor: "huawei",
+					status: "online",
+					health: { cpu_percent: 21.5, mem_percent: 48 },
+					interface_summary: { total: 24, up: 22, down: 2 }
+				},
+				{
+					device_code: "DEV-ACC-1",
+					mgmt_ip: "10.0.0.3",
+					sys_name: "接入交换机-1",
+					role: "access",
+					vendor: "h3c",
+					status: "degraded",
+					health: { cpu_percent: 63.25, mem_percent: null },
+					interface_summary: { total: 48, up: null, down: null }
+				},
+				{
+					device_code: "DEV-AP-1",
+					mgmt_ip: null,
+					sys_name: "无线AP-1",
+					role: "ap",
+					vendor: "ruijie",
+					status: "online",
+					health: {},
+					interface_summary: { total: 1, up: 1, down: 0 }
+				}
+			];
+
+			return send(200, { code: 0, msg: "success", data: iamPaged(devices, url) });
+		}
+
+		// `/metric/link`：链路台账（A12）。链路**没有 `mgmt_ip`**，页面靠 source 端 `device_code`
+		// 反查设备 IP；第二条刻意从「没有 IP」的 `DEV-AP-1` 出发，把「取不到折线」这条分支固定进自查。
+		if (/^\/(?:api\/v1\/)?metric\/link$/.test(url.pathname) && req.method === "GET") {
+			const links = [
+				{
+					identity: {
+						link_id: "LNK-0001",
+						source: { device_code: "DEV-CORE-1", device_role: "core", interface_id: "GE0/0/1", interface_name: "GE0/0/1", medium: "fiber" },
+						target: { device_code: "DEV-ACC-1", device_role: "access", interface_id: "GE1/0/1", interface_name: "GE1/0/1", medium: "fiber" },
+						discovery: "lldp"
+					},
+					metrics: {
+						status: "up",
+						medium: "fiber",
+						bandwidth_mbps: 10000,
+						bandwidth_usage_percent: 32.5,
+						latency_ms: 1.2,
+						packet_loss_percent: 0
+					}
+				},
+				{
+					identity: {
+						link_id: "LNK-0002",
+						source: { device_code: "DEV-AP-1", device_role: "ap", interface_id: "WLAN-0", interface_name: "WLAN-0", medium: "wireless" },
+						target: { device_code: "DEV-CORE-1", device_role: "core", interface_id: "GE0/0/9", interface_name: "GE0/0/9", medium: "wireless" },
+						discovery: "lldp"
+					},
+					metrics: {
+						status: "down",
+						medium: "wireless",
+						bandwidth_mbps: 300,
+						bandwidth_usage_percent: null,
+						latency_ms: null,
+						packet_loss_percent: null
+					}
+				}
+			];
+
+			return send(200, { code: 0, msg: "success", data: iamPaged(links, url) });
 		}
 
 		// `/metric/datapoint` 回 VM 风格 matrix：点对恒为 `[unix秒, 字符串值]`。序列里**故意夹三个
