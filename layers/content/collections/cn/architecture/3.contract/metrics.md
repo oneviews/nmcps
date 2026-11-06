@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.5.0
+version: 0.5.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -190,6 +190,8 @@ export interface MetricDatapointResponse {
 | 401 / `40101` | 走会话刷新流程（`NMCPS-CONTRACT-001` 的 auth 契约），面板不单独处理登录 |
 | 目录条目标 `has_series: false` | 该指标不进入折线面板（选它只显示最新单点值），避免「选了文本指标看到一条直线」 |
 
+失败语义对**三个入口**一视同仁（`link-metrics` 链路详情、`device-metrics` 设备详情、`monitor` 节点详情栏；后两者分别直接 / 间接复用同一个 `useMetricSeries` 内核），而且**纯失败态不画图**：手上没有可保留的旧序列时，图表容器整体不渲染 —— 否则图里写着「该时间窗内无采集数据」、下面写着「取数失败」，两句互相矛盾（前者说没采到，后者说没取到）。只有「同设备重取失败」才留图 + 一行 stale 说明。
+
 ### 6.8 断言（供 `check:ui` 后续覆盖）
 
 | # | 断言 |
@@ -197,6 +199,7 @@ export interface MetricDatapointResponse {
 | S1 | `results: []` 渲染空态文案，且 DOM 中没有 0 值折线 |
 | S2 | 值全为字符串时，播放的数值序列与 `Number()` 后一致（排序、最大值） |
 | S3 | `code !== 0` 时出现 `UAlert` 且文案等于上游 `message` 原文 |
+| S7 | 三个入口（链路详情 / 设备详情 / 节点详情栏）在 `code !== 0` 时都只出「原话 + 重试」且不渲染图表容器；同设备重取遇网络错误时折线保留并出现 stale 说明（`check:ui` A13 ~ A16） |
 | S6 | 给 `ifIndex` 时只用该接口的序列（同 `ifIndex`、不同 `job` 的两条先合并），与他接口/设备级序列的值可区分；不给 `ifIndex` 时按 §6.9 的确定性规则选组，不再取 `results[0]` |
 
 ### 6.9 多序列：`ifIndex` 接口维度与同源去重
@@ -309,3 +312,4 @@ export interface RawMetricEntry {
 | 2026-11-06 | 0.3.0 | **增「§七 `/metric/name` 指标名清单」并落地首个消费面**：登记请求（`mgmt_ip`）、`MetricNameData` 形状、`RawMetricItem` 双形态（字符串 / 对象，缺口 API-G12）、采集器命名空间跳过规则、首项选取与空清单语义；`/metric/datapoint` 的 `metric_code` 只从清单来，不按命名猜类型。§6.6 的管线注明首个纯函数落点 `app/utils/chart/metricSeries.ts`（空串必须显式判掉：`Number("")` 是 `0`，会把「没采到」画成 0 值线）。类型落点 `shared/types/metric.ts` 同期补齐。 |
 | 2026-11-06 | 0.4.0 | **增「§八 `/metric/definition` 目录 join 与三分类判定」并落地指标选择器**：登记请求（`page_size=200`、不传 `metric_group` / `keyword` 的理由、会话级缓存）、条目容错解析（编码 `code` → `metric_code` → `name`，类型只认 `METRIC_TYPES`）、固定判定顺序（名字判 collector → 目录判 text → 其余 numeric）、`meta_source` 三态与「目录不可用不阻塞出图」的降级口径，以及 S4 / S5 两条断言。§七 相应改写：清单只回答名字，类型判定在 §八。首个消费面 `app/utils/metric/metricCatalog.ts` + `layers/topology/app/composables/useMetricSeries.ts`，落在 `device-metrics` / `link-metrics`。 |
 | 2026-11-06 | 0.5.0 | **实测推翻「`results` 恒一条」并增「§6.9 多序列：`ifIndex` 接口维度与同源去重」**：直连上游（`192.168.1.55:8888`，`10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`）取证——`range` 实测返回 2 条（设备级指标 × 两个采集 job）到 4 条（接口级指标 × 2 个 `ifIndex` × 2 个 `job`），`ifIndex` 标签确实存在（接口维度可用），`rate=true` 时无 `__name__`。§五 补齐标签实测清单；§6.9 定死三条规则（给了 `ifIndex` 只取该接口、同 `ip`+`ifIndex` 跨 `job` 逐时间戳取均值、未给 `ifIndex` 时组键升序取第一组），删除「取 `results[0]`」的错误假设，并新增断言 S6。 |
+| 2026-11-06 | 0.5.1 | **§6.7 补充「三个入口一视同仁 + 纯失败态不画图」**：`device-metrics` 与 `monitor` 详情栏（后者经 `useNodeTrend` 薄封装）此前在上游信封失败时仍会渲染图表，「该时间窗内无采集数据」与「指标取数失败」并排出现，等于把「取不到」说成「没采到」；现在纯失败态（没有可保留的旧序列）整个图表容器不渲染，只有同设备重取失败才留图并标 stale。新增断言 S7 锁定三个入口的一致性。 |

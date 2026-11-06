@@ -1906,6 +1906,108 @@ if (upstreamPort) {
 			`box=${retryProbe.box} chart=${retryProbe.chart} ifIndex=${retryProbe.seriesIfIndex || "无"}`
 		);
 
+		// A14：同一个共用面板挂到**设备页**（`/topology/device-metrics`）时，失败语义不能因为换页退回空态。
+		// 设备页要先选一台设备才出面板：点第一行带管理 IP 的台账行（`/metric/device` 与取数无关）。
+		// 上面 A13 的反向断言把开关恢复成 ok 了，这里重新打开 —— 失败语义要在三个入口上都成立。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/metric-error`);
+		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_000);
+		const pickedRow = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='metric-device-row']"));
+			const row = rows.find((el) => (el.textContent ?? "").includes("·") && !/\u2014 \u00B7/.test(el.textContent ?? ""));
+			row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return row?.getAttribute("data-device-id") ?? null;
+		});
+		await page.waitForTimeout(1_500);
+		const deviceFailProbe = await page.evaluate(() => {
+			const box = document.querySelector("[data-testid='metric-trend-error']");
+			return {
+				box: !!box,
+				text: box?.textContent ?? "",
+				chart: !!document.querySelector("[data-testid='metric-trend']"),
+				page: document.body.textContent ?? ""
+			};
+		});
+		log(
+			"A14 设备页共用面板同样逐字展示原话、不降级成空态",
+			!!pickedRow
+			&& deviceFailProbe.box
+			&& deviceFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)
+			&& deviceFailProbe.text.includes("重试")
+			&& !deviceFailProbe.chart
+			&& !deviceFailProbe.page.includes("该时间窗内无采集数据"),
+			`row=${pickedRow ?? "无"} box=${deviceFailProbe.box} chart=${deviceFailProbe.chart} 原话=${deviceFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)}`
+		);
+
+		// A15：监控页详情栏走的是同一内核的薄封装（`useNodeTrend`），语义必须一致 —— 失败就只出原话 + 重试，
+		// 不能在图里写「该时间窗内无采集数据」（那是「没采到」，与「取数没成功」是两回事，§6.7）。
+		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_000);
+		const monitorNode = await page.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.2");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return node?.getAttribute("data-node-id") ?? null;
+		});
+		await page.waitForTimeout(1_500);
+		const monitorFailProbe = await page.evaluate(() => {
+			const box = document.querySelector("[data-testid='trend-error']");
+			return {
+				box: !!box,
+				text: box?.textContent ?? "",
+				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				page: document.body.textContent ?? ""
+			};
+		});
+		log(
+			"A15 监控页详情栏同样逐字展示原话、不降级成空态",
+			monitorNode === "10.0.0.2"
+			&& monitorFailProbe.box
+			&& monitorFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)
+			&& monitorFailProbe.text.includes("重试")
+			&& !monitorFailProbe.chart
+			&& !monitorFailProbe.page.includes("该时间窗内无采集数据"),
+			`node=${monitorNode ?? "无"} box=${monitorFailProbe.box} chart=${monitorFailProbe.chart} 原话=${monitorFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)}`
+		);
+
+		// A16：**网络错误**下的 stale 分支（与上面「信封失败」是两条路）：上游已掉线，但手上还有上次成功的
+		// 序列 —— 框架必须保留折线并说明「显示的是上一次成功的数据」，而不是清空成空态（§6.7 / §8.3）。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/metric-ok`);
+		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_000);
+		await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='metric-device-row']"));
+			const row = rows.find((el) => (el.textContent ?? "").includes("·") && !/\u2014 \u00B7/.test(el.textContent ?? ""));
+			row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await page.waitForTimeout(1_500);
+		const beforeStale = await page.evaluate(() => document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-count") ?? "");
+
+		await fetch(`http://${HOST}:${upstreamPort}/__control/down`);
+		await page.getByRole("button", { name: "刷新指标" }).first().click();
+		await page.waitForTimeout(1_500);
+		const staleProbe = await page.evaluate(() => {
+			const box = document.querySelector("[data-testid='metric-trend-error']");
+			const trend = document.querySelector("[data-testid='metric-trend']");
+			return {
+				box: !!box,
+				chart: !!trend,
+				seriesCount: trend?.getAttribute("data-series-count") ?? "",
+				page: document.body.textContent ?? ""
+			};
+		});
+		// 掉线期间页面其它请求也会失败，先恢复上游，避免后面的断言被这条开关连坐
+		await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
+		log(
+			"A16 同设备重取遇到网络错误时保留旧折线并标 stale（不清成空态）",
+			beforeStale !== ""
+			&& staleProbe.box
+			&& staleProbe.chart
+			&& staleProbe.seriesCount === beforeStale
+			&& staleProbe.page.includes("指标通道暂时不可用"),
+			`series=${beforeStale || "无"} → ${staleProbe.seriesCount || "无"} box=${staleProbe.box} stale=${staleProbe.page.includes("指标通道暂时不可用")}`
+		);
+
 		page.off("request", recordMetric);
 	}
 }

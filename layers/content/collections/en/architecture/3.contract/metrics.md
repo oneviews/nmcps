@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.5.0
+version: 0.5.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -189,6 +189,8 @@ export interface MetricDatapointResponse {
 | 401 / `40101` | Go through the session refresh flow (the auth contract in `NMCPS-CONTRACT-001`); panels never handle login themselves |
 | Catalog entry says `has_series: false` | That metric never enters a line panel (selecting it shows only the latest single value), avoiding "pick a text metric, see a flat line" |
 
+These semantics hold identically on **all three entries** (the `link-metrics` link detail, the `device-metrics` device detail and the `monitor` node pane; the latter two share the same `useMetricSeries` kernel directly and through a thin wrapper), and a **pure failure renders no chart at all**: with no previously successful series to keep, the chart container is not rendered, because a "no collected data in this window" line above a "fetch failed" alert contradicts itself (the first says nothing was scraped, the second says the fetch did not succeed). Only a re-fetch of the *same* device keeps the polyline and adds a stale note.
+
 ### 6.8 Assertions (for later `check:ui` coverage)
 
 | # | Assertion |
@@ -196,6 +198,7 @@ export interface MetricDatapointResponse {
 | S1 | `results: []` renders the empty-state copy and the DOM contains no zero-valued polyline |
 | S2 | With all-string values, the played series matches the `Number()`-converted one (ordering, maximum) |
 | S3 | On `code !== 0` a `UAlert` appears whose text equals the upstream `message` verbatim |
+| S7 | All three entries (link detail, device detail, node pane) show only "verbatim message + retry" on `code !== 0` and render no chart container; a re-fetch of the same device under a network error keeps the polyline and adds a stale note (`check:ui` A13–A16) |
 | S6 | With `ifIndex` supplied only that interface's series is used (its two `job` entries merged first) and its values are distinguishable from those of other interfaces / device-level series; without `ifIndex` the deterministic rule of §6.9 picks the group instead of `results[0]` |
 
 ### 6.9 Multiple series: the `ifIndex` interface dimension and same-source de-duplication
@@ -308,3 +311,4 @@ A failing `GET /metric/definition` **never blocks the chart**: the whole catalog
 | 2026-11-06 | 0.3.0 | **Added "§7 `/metric/name` metric name list" together with its first consumer**: the request (`mgmt_ip`), the `MetricNameData` shape, the `RawMetricItem` dual shape (string / object, gap API-G12), the collector-namespace skip rule, the first-entry pick and the empty-list semantics are registered; a `/metric/datapoint` `metric_code` comes only from the list, never from guessing at the name. §6.6 now names the first pure-function landing `app/utils/chart/metricSeries.ts` (the empty string must be rejected explicitly: `Number("")` is `0`, which would draw "not collected" as a zero line). Types landed in `shared/types/metric.ts`. |
 | 2026-11-06 | 0.4.0 | **Added "§8 `/metric/definition` catalog join and three-way classification" together with the metric picker**: the request (`page_size=200`, why `metric_group` / `keyword` stay unset, the session-level cache), tolerant entry parsing (code from `code` → `metric_code` → `name`, type only from `METRIC_TYPES`), the fixed decision order (name → collector, catalog → text, everything else → numeric), the three `meta_source` states and the "a missing catalog never blocks the chart" degradation, plus assertions S4 / S5. §7 is reworded accordingly: the list answers names only, the type verdict lives in §8. First consumers: `app/utils/metric/metricCatalog.ts` and `layers/topology/app/composables/useMetricSeries.ts`, landed on `device-metrics` / `link-metrics`. |
 | 2026-11-06 | 0.5.0 | **Measurement overturns "`results` is always one entry"; added "§6.9 Multiple series: the `ifIndex` interface dimension and same-source de-duplication"**: a direct probe of the live upstream (`192.168.1.55:8888`, `10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`) shows a `range` request returning 2 results (device-level metric × two scraping jobs) up to 4 results (interface-level metric × 2 `ifIndex` × 2 `job`); the `ifIndex` label really exists (so the interface dimension is available) and `rate=true` results carry no `__name__`. §5 gained the measured label set; §6.9 fixes the three rules (with `ifIndex` keep only that interface, merge same `ip`+`ifIndex` across `job` by per-timestamp mean, without `ifIndex` take the lowest group key), removes the "take `results[0]`" assumption and adds assertion S6. |
+| 2026-11-06 | 0.5.1 | **§6.7 gains "identical on all three entries, and a pure failure draws no chart"**: the `device-metrics` and `monitor` panes (the latter through the `useNodeTrend` wrapper) used to keep rendering the chart when the upstream envelope failed, so "no collected data in this window" and "metric fetch failed" appeared side by side — reading as "nothing was scraped" when the truth was "the fetch did not succeed". Now a pure failure renders no chart container at all, and only a re-fetch of the same device keeps the polyline with a stale note. Assertion S7 pins the three entries to the same behaviour. |

@@ -250,8 +250,13 @@
 
 					<template v-if="selected">
 						<USkeleton v-if="trendLoading" class="h-24 w-full rounded-md" />
+						<!--
+							纯失败态（手上没有可保留的旧序列）不画图：否则图里写着「该时间窗内无采集数据」、
+							下面的告警写着「指标取数失败」，两句互相矛盾（NMCPS-CONTRACT-002 §6.7 / A15）。
+							上游抖动但还有上次成功的数据时（`stale`）照旧画，另有一行 stale 提示。
+						-->
 						<GraphTrendChart
-							v-else
+							v-else-if="!trendError || trendPoints.length > 0"
 							:points="trendPoints"
 							:label="$t('pages.topology-monitor.trend.chartLabel', { name: selected.label, metric: trendMetricCode || '—' })"
 							:empty-text="trendEmptyText"
