@@ -349,7 +349,7 @@ export async function startUpstream(port) {
 	 * 自检因此默认就覆盖「线格式 → 拍平」这条路，而不是比现网更干净。
 	 * `__control/topology-flat` 切回扁平形状（A27 用它证明两种形状渲染结果一致）。
 	 */
-	const control = { down: false, topologyEmpty: false, topologyNested: true, metricError: false, catalogError: false };
+	const control = { down: false, topologyEmpty: false, topologyNested: true, metricError: false, catalogError: false, alarmError: false, alarmFlood: false };
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -378,7 +378,33 @@ export async function startUpstream(port) {
 			return send(200, { down: false });
 		}
 		if (url.pathname === "/__control/state")
-			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, topologyNested: control.topologyNested, metricError: control.metricError, catalogError: control.catalogError });
+			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, topologyNested: control.topologyNested, metricError: control.metricError, catalogError: control.catalogError, alarmError: control.alarmError, alarmFlood: control.alarmFlood });
+		/**
+		 * 告警取数失败开关：`/alarm/alarm-events` 回 HTTP 200 + `code !== 0` + 一句上游原话。
+		 * 拓扑 / 仿真照常（告警是叠加层），页面必须写「告警通道不可用：<原话>」，**不能**写「无告警」——
+		 * 「读不到」和「没有」是两件事（NMCPS-DESIGN-001 §6.1 / A32）。
+		 */
+		if (url.pathname === "/__control/alarm-error") {
+			control.alarmError = true;
+			return send(200, { alarmError: true });
+		}
+		if (url.pathname === "/__control/alarm-ok") {
+			control.alarmError = false;
+			return send(200, { alarmError: false });
+		}
+		/**
+		 * 告警极端样本开关（A36 / A37）：换成「103 条挂在一台设备上、其中一条严重度是上游从未出现过的取值」
+		 * 的样本，钉住两条兜底口径 —— 角标数字超 99 写 `99+`（角标是读数不是报表），未知严重度归最低档
+		 * `info`（不升级成 `critical`，NMCPS-DESIGN-001 §6.12 口径 ②）。
+		 */
+		if (url.pathname === "/__control/alarm-flood") {
+			control.alarmFlood = true;
+			return send(200, { alarmFlood: true });
+		}
+		if (url.pathname === "/__control/alarm-flood-off") {
+			control.alarmFlood = false;
+			return send(200, { alarmFlood: false });
+		}
 		/**
 		 * 指标取数失败开关：`/metric/datapoint` 回 HTTP 200 + `code !== 0` + 一句上游原话。
 		 * 这不是网络错误（`__control/down` 是），而是「上游回了信封但业务失败」——
@@ -575,6 +601,83 @@ export async function startUpstream(port) {
 
 			// 默认出站即现网的两层形状（`__control/topology-flat` 才回扁平本体）。
 			return send(200, { code: 0, msg: "success", data: control.topologyNested ? nestTopologyGraph(graph) : graph });
+		}
+		// ── /alarm*：告警事件（`/topology/monitor` 的告警叠加，NMCPS-DESIGN-001 §6.1 / A31） ──
+		// 形状对齐 `shared/types/alarm.ts` 的实测口径：
+		//   ① `data` 是分页信封 `{ list, page, page_size, total }`；
+		//   ② `status` 过滤在**上游**生效 —— 假上游照做（`status=firing` 时把 resolved 那条剔掉），
+		//      页面因此不能靠「自己再筛一遍」蒙对；
+		//   ③ `target_type` 只有 `device`，`target_id` = 设备管理 IP = 拓扑节点 `id`；
+		//   ④ 有 3 条**不该落角标**的干扰项：`target_id` 空串、不在图上的 `10.9.9.9`、以及 resolved 那条。
+		//      它们进不了角标才算「不编数据」（空 id 聚成「未知节点」就是编）。
+		if (/^\/(?:api\/v1\/)?alarm\/alarm-events$/.test(url.pathname) && req.method === "GET") {
+			if (control.alarmError)
+				return send(200, { code: 500, msg: "告警库连接超时（alarm-db: connection timed out）", data: null });
+
+			const event = (id, severity, status, eventType, targetId, message, triggerCount, at) => ({
+				id,
+				severity,
+				status,
+				event_type: eventType,
+				target_type: "device",
+				target_id: targetId,
+				target_name: targetId || null,
+				message,
+				first_triggered_at: at,
+				last_triggered_at: at,
+				trigger_count: triggerCount
+			});
+			const all = [
+				// 10.0.0.1：4 条 firing → 角标写 4，详情栏列 3 条 + 「另有 1 条」
+				event("ev-1", "critical", "firing", "wired_cpu_high", "10.0.0.1", "核心路由器-1 CPU 使用率 92%（阈值 80%）", 3, "2026-11-07T10:12:00Z"),
+				event("ev-2", "warning", "firing", "wired_mem_high", "10.0.0.1", "核心路由器-1 内存使用率 71%", 1, "2026-11-07T10:05:00Z"),
+				event("ev-3", "warning", "firing", "if_flap", "10.0.0.1", "Gi0/3 接口抖动 5 次/分钟", 5, "2026-11-07T09:58:00Z"),
+				event("ev-4", "info", "firing", "config_changed", "10.0.0.1", "配置变更：ACL 2000 新增 3 条规则", null, "2026-11-07T09:40:00Z"),
+				// 10.0.0.4：1 条 → 第二台有告警的设备
+				event("ev-5", "warning", "firing", "wifi_interference", "10.0.0.4", "无线AP-1 信道 149 干扰严重", 2, "2026-11-07T10:01:00Z"),
+				// 干扰项 ①：空 target_id（现网 77 条 firing 里 9 条如此）
+				event("ev-6", "critical", "firing", "node_down", "", "未知设备离线", 1, "2026-11-07T10:10:00Z"),
+				// 干扰项 ②：不在当前画布上的目标
+				event("ev-7", "critical", "firing", "wired_cpu_high", "10.9.9.9", "图外设备 CPU 使用率 99%", 4, "2026-11-07T10:11:00Z"),
+				// 干扰项 ③：resolved（`status=firing` 时必须被上游过滤掉）
+				event("ev-8", "warning", "resolved", "wired_mem_high", "10.0.0.2", "汇聚交换机-1 内存使用率 68%（已恢复）", 1, "2026-11-07T09:20:00Z")
+			];
+			const status = url.searchParams.get("status");
+			let list = status ? all.filter((item) => item.status === status) : all;
+
+			// A36 / A37 的极端样本：103 条挂在 `10.0.0.1`。前三条刻意是「严重 → 警告 → 未登记取值」，
+			// 好让详情栏前三行正好把三档都摆出来（`catastrophic` 必须落到「提示」而不是「严重」）；
+			// 余下 100 条是时间更早的 info，角标数字因此超 99，必须截成 `99+`。
+			if (control.alarmFlood) {
+				const flood = [
+					event("ev-f1", "critical", "firing", "wired_cpu_high", "10.0.0.1", "核心路由器-1 CPU 使用率 97%（阈值 80%）", 2, "2026-11-07T12:00:00Z"),
+					event("ev-f2", "warning", "firing", "wired_mem_high", "10.0.0.1", "核心路由器-1 内存使用率 78%", 1, "2026-11-07T11:00:00Z"),
+					event("ev-f3", "catastrophic", "firing", "sensor_overheat", "10.0.0.1", "核心路由器-1 板卡温度异常（上游 severity=catastrophic）", 1, "2026-11-07T10:00:00Z"),
+					...Array.from({ length: 100 }, (_, index) =>
+						event(
+							`ev-f${index + 4}`,
+							"info",
+							"firing",
+							"config_changed",
+							"10.0.0.1",
+							`配置变更 #${index + 1}`,
+							1,
+							`2026-11-07T09:${String(59 - (index % 60)).padStart(2, "0")}:00Z`
+						))
+				];
+				list = status ? flood.filter((item) => item.status === status) : flood;
+			}
+
+			return send(200, {
+				code: 0,
+				msg: "success",
+				data: {
+					list,
+					page: Number(url.searchParams.get("page") ?? 1),
+					page_size: Number(url.searchParams.get("page_size") ?? 100),
+					total: list.length
+				}
+			});
 		}
 		// ── /metric/*：节点指标（`/topology/monitor` 详情栏趋势，NMCPS-DESIGN-001 A3） ──
 		// `/metric/name` 回该设备可用指标名清单：新路径是字符串数组、旧路径是对象数组（双形态，缺口
@@ -1409,16 +1512,36 @@ export async function startSimulator(port) {
 		}
 	}
 
+	/**
+	 * 假仿真平台的开关（与 8888 假上游各自独立）：`__control/lldp-error` 打开时
+	 * `/api/lldp/neighbors/*` 回 500 + 一句上游原话，用来证明「读不到邻居」不会被写成「没有邻居」
+	 * （NMCPS-DESIGN-001 §6.14 / A40）。
+	 */
+	const control = { lldpError: false };
+
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url, `http://${HOST}:${port}`);
 		const path = url.pathname;
-		log.push({ method: req.method, path, headers: req.headers });
 
 		const send = (status, payload) => {
 			const body = JSON.stringify(payload);
 			res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
 			res.end(body);
 		};
+
+		// 控制端点先于请求日志处理：页面期间「零写请求」的断言只数非 GET，
+		// 但这些调用也不该混进上游日志里（保持 `simulatorServer.log` 只有真请求）。
+		if (path.startsWith("/__control/")) {
+			if (path === "/__control/lldp-error")
+				control.lldpError = true;
+			else if (path === "/__control/lldp-ok")
+				control.lldpError = false;
+			else if (path !== "/__control/state")
+				return send(404, { detail: "unknown_control", path });
+			return send(200, { lldpError: control.lldpError });
+		}
+
+		log.push({ method: req.method, path, headers: req.headers });
 
 		// ── 只读 ──
 		if (path === "/api/network/runtime-inventory" && req.method === "GET") {
@@ -1482,16 +1605,76 @@ export async function startSimulator(port) {
 			});
 		}
 
+		// ── /api/lldp/*：邻接发现（NMCPS-DESIGN-001 §6.2 / §6.13） ──
+		// 形状对齐 2026-11-07 对 8001 的实测（`shared/types/simulator.ts` 的 LLDP 两段）：
+		//   ① summary 是「本轮扫描规模 + 一台示例端点的自报身份」，**不是**按交换机分组的邻居计数；
+		//   ② 邻居项两套身份并存（`neighbor_id` 是平台台账、`sys_name` 是 MIB 字段），两端接口分名，
+		//      `mib_oids` 是「字段名 → OID」的对照表；`discovered_at` 带微秒但**不带时区**。
 		if (path === "/api/lldp/summary" && req.method === "GET") {
-			return send(200, { neighbor_count: 12, switches: ["S1", "S2"] });
+			return send(200, {
+				node_count: 36,
+				neighbor_entry_count: 96,
+				mode: "native",
+				mib_standard: "IEEE 802.1AB",
+				lldp_mib_oid: "1.0.8802.1.1.2.1.4.1.1",
+				local_sys_name: "核心路由器-1",
+				local_sys_desc: "n1 LLDP agent (IEEE 802.1AB)",
+				local_chassis_id: "00:00:00:00:00:00"
+			});
 		}
 
 		const neighbor = path.match(/^\/api\/lldp\/neighbors\/([^/]+)$/);
 		if (neighbor && req.method === "GET") {
-			return send(200, {
-				node_id: decodeURIComponent(neighbor[1]),
-				neighbors: [{ id: "n2", name: "S1", local_port: "Gi0/1", remote_port: "Gi0/2", ttl: 120, mib_oids: {} }]
+			// 失败分支（A40）：上游原话放 `detail`，BFF 原样透出（数据不翻译）——
+			// 页面这时只能写「邻接通道不可用：<原话>」，不能写成「没有邻居」。
+			if (control.lldpError)
+				return send(500, { detail: "lldp_agent_unreachable: snmp timeout on n1" });
+
+			const nodeId = decodeURIComponent(neighbor[1]);
+			const lldpNeighbor = (peerId, peerType, peerName, sysName, localIf, remoteIf, discoveredAt) => ({
+				neighbor_id: peerId,
+				neighbor_type: peerType,
+				neighbor_name: peerName,
+				local_interface: localIf,
+				remote_interface: remoteIf,
+				chassis_id: "00:00:00:00:00:00",
+				chassis_id_subtype: "mac",
+				port_id: remoteIf,
+				port_id_subtype: "ifname",
+				port_descr: `${peerId} port ${remoteIf}`,
+				sys_name: sysName,
+				sys_desc: `${peerId} (${peerType}) LLDP agent`,
+				ttl: 120,
+				link_type: "wired",
+				link_status: "up",
+				discovered_at: discoveredAt,
+				mib_oids: {
+					lldpRemChassisId: "1.0.8802.1.1.2.1.4.1.1.5",
+					lldpRemChassisIdValue: "00:00:00:00:00:00",
+					lldpRemPortId: "1.0.8802.1.1.2.1.4.1.1.7",
+					lldpRemPortIdValue: remoteIf,
+					lldpRemSysName: "1.0.8802.1.1.2.1.4.1.1.9",
+					lldpRemSysNameValue: sysName
+				}
 			});
+			// 邻居条目按「实测形状」给，且**一台设备可以有几个邻居**：
+			//   `n1`（画布节点 10.0.0.1）—— 两个邻居，`n2` 在画布上（10.0.0.2，可 join）、
+			//                              `n10` 不在运行态快照里（画布外设备，照实列出）；
+			//   `n4`（不在运行态快照里）—— 两台，用来证明「画布外的设备也有台账」；
+			//   其余节点 —— 空数组：空数组也是上游真实回答（没开采集的节点照实回 `[]`，不是 404）。
+			const neighbors = nodeId === "n4"
+				? [
+					lldpNeighbor("n1", "router", "N1", "核心路由器-1", "n4-eth1", "n1-eth2", "2026-11-05T10:38:56.863667"),
+					lldpNeighbor("n10", "switch", "N10", "接入交换机-1", "n4-eth5", "n10-eth2", "2026-11-05T10:38:56.922743")
+				]
+				: nodeId === "n1"
+					? [
+						lldpNeighbor("n2", "switch", "N2", "汇聚交换机-1", "n1-eth0", "n2-eth0", "2026-11-05T10:38:56.843328"),
+						lldpNeighbor("n10", "switch", "N10", "接入交换机-1", "n1-eth4", "n10-eth1", "2026-11-05T10:38:56.901117")
+					]
+					: [];
+
+			return send(200, { node_id: nodeId, neighbors });
 		}
 
 		if (path === "/api/network/runtime/preview" && req.method === "GET") {

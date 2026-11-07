@@ -1743,7 +1743,7 @@ if (upstreamPort) {
 		// 三种布局必须两两不同；层级树再验「每层均值 = 画布中心」（居中分层的数学保证）。
 		const readGeometry = () => page.evaluate(() => {
 			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']")).map((el) => {
-				const circle = el.querySelector("circle:last-of-type");
+				const circle = el.querySelector("[data-testid='topology-node-shape']");
 				return {
 					id: el.getAttribute("data-node-id") ?? "",
 					x: Number(circle?.getAttribute("cx") ?? NaN),
@@ -1848,9 +1848,9 @@ if (upstreamPort) {
 			};
 		});
 
-		/** 按住节点圆心拖到 (+dx, +dy) 像素处松手（拖的是 `<circle>`，不是整个 `<g>` 的外框） */
+		/** 按住节点圆心拖到 (+dx, +dy) 像素处松手（拖的是节点本体 `<circle>`，不是 `<g>` 外框、也不是告警角标） */
 		const dragNode = async (id, dx, dy) => {
-			const box = await page.locator(`[data-testid='topology-node'][data-node-id='${id}'] circle:last-of-type`).boundingBox();
+			const box = await page.locator(`[data-testid='topology-node'][data-node-id='${id}'] [data-testid='topology-node-shape']`).boundingBox();
 			if (!box)
 				return false;
 			const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -2068,6 +2068,147 @@ if (upstreamPort) {
 			+ ` card=${apWifi.card} coreCard=${coreWifi.card}`
 		);
 
+		// A31：告警叠加（§6.1）。假上游回 8 条：5 条 firing 里 4 条挂 `10.0.0.1`、1 条挂 `10.0.0.4`，
+		// 另有三条**不该落角标**的干扰项 —— 空 `target_id`（现网 77 条 firing 里 9 条如此）、
+		// 不在画布上的 `10.9.9.9`、以及已 resolved 的 `10.0.0.2`（`status=firing` 由上游过滤）。
+		// 断言「角标数 = 该节点 firing 条数」「页头读的是设备数与事件数两个不同的数」。
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		const alarmCanvas = await page.evaluate(() => {
+			const byNode = {};
+			for (const node of document.querySelectorAll("[data-testid='topology-node']")) {
+				const badge = node.querySelector("[data-testid='topology-node-alarm']");
+				if (badge)
+					byNode[node.getAttribute("data-node-id") ?? ""] = Number(badge.getAttribute("data-alarm-count"));
+			}
+			const pageBadge = document.querySelector("[data-testid='topology-alarm-badge']");
+			return {
+				byNode,
+				badges: Object.keys(byNode).length,
+				badgeText: pageBadge?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+				events: Number(pageBadge?.getAttribute("data-alarm-events") ?? -1),
+				nodes: Number(pageBadge?.getAttribute("data-alarm-nodes") ?? -1),
+				stat: document.querySelector("[data-testid='topology-stat-alarms']")?.textContent?.replace(/\s+/g, " ").trim() ?? ""
+			};
+		});
+		log(
+			"A31 告警叠加：角标只挂 join 得上的两台（空 id / 图外 / 已恢复一概不落角标）",
+			alarmCanvas.badges === 2 && alarmCanvas.byNode["10.0.0.1"] === 4 && alarmCanvas.byNode["10.0.0.4"] === 1
+			&& alarmCanvas.events === 5 && alarmCanvas.nodes === 2
+			&& alarmCanvas.badgeText.includes("5") && alarmCanvas.badgeText.includes("2")
+			&& alarmCanvas.stat.includes("5"),
+			`badges=${alarmCanvas.badges} byNode=${JSON.stringify(alarmCanvas.byNode)}`
+			+ ` events=${alarmCanvas.events} nodes=${alarmCanvas.nodes} badge=${alarmCanvas.badgeText}`
+		);
+
+		// A31 续：详情栏列该节点的告警原文（严重度降序，前 3 条 + 「另有 1 条」），
+		// 且**只**列这个节点的事件（把全网 5 条抄给每台设备就是编数据）。
+		await page.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.1");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await page.waitForTimeout(400);
+		const alarmCard = await page.evaluate(() => {
+			const events = Array.from(document.querySelectorAll("[data-testid='topology-alarm-event']"));
+			const card = document.querySelector("[data-testid='topology-alarm-card']");
+			return {
+				card: !!card,
+				count: events.length,
+				severities: events.map((el) => el.getAttribute("data-severity")),
+				severity: document.querySelector("[data-testid='topology-alarm-severity']")?.textContent?.trim() ?? "",
+				text: (card?.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		log(
+			"A31 详情栏列该节点告警原文（严重度降序，前 3 条 + 「另有 1 条」）",
+			alarmCard.card && alarmCard.count === 3 && alarmCard.severities[0] === "critical"
+			&& alarmCard.severity === "严重"
+			&& alarmCard.text.includes("CPU 使用率 92%") && alarmCard.text.includes("另有 1 条")
+			&& !alarmCard.text.includes("干扰严重") && !alarmCard.text.includes("图外设备"),
+			alarmCard.card ? `${alarmCard.count} 条 ${alarmCard.severities.join("/")} badge=${alarmCard.severity}` : "未出现告警卡片"
+		);
+
+		// A32：告警通道失败 ≠ 没有告警。上游回 `code=500` + 原话时，拓扑照常渲染、角标全摘，
+		// 页头读数写「—」（不是 0），详情栏写「告警通道不可用：<上游原话>」而**不写**「该节点没有进行中的告警」。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/alarm-error`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		await page.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.1");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await page.waitForTimeout(400);
+		const alarmDown = await page.evaluate(() => ({
+			canvas: !!document.querySelector("[data-testid='topology-node']"),
+			badges: document.querySelectorAll("[data-testid='topology-node-alarm']").length,
+			badgeVisible: !!document.querySelector("[data-testid='topology-alarm-badge']"),
+			stat: document.querySelector("[data-testid='topology-stat-alarms']")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+			unavailable: document.querySelector("[data-testid='topology-alarm-unavailable']")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+			card: (document.querySelector("[data-testid='topology-alarm-card']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+		}));
+		log(
+			"A32 告警通道失败：拓扑照常、角标摘掉、读数写「—」，写上游原话而不写「无告警」",
+			alarmDown.canvas && alarmDown.badges === 0 && !alarmDown.badgeVisible
+			&& alarmDown.stat.includes("—")
+			&& alarmDown.unavailable.includes("告警通道不可用")
+			&& alarmDown.unavailable.includes("alarm-db: connection timed out")
+			&& !alarmDown.card.includes("该节点没有进行中的告警"),
+			`badges=${alarmDown.badges} stat=${alarmDown.stat} unavailable=${alarmDown.unavailable}`
+		);
+		await fetch(`http://${HOST}:${upstreamPort}/__control/alarm-ok`);
+
+		// A36 / A37：告警读表的两条兜底口径（§6.12 口径 ② 与「角标是读数不是报表」）。
+		// `__control/alarm-flood` 换成一份极端样本：103 条挂在 `10.0.0.1`，其中一条 `severity` 是现网
+		// 从未出现过的取值（`catastrophic`，实测只有 `critical` / `warning`）。两条断言各自钉一件事 ——
+		// 角标数字必截成 `99+`（`data-alarm-count` 仍是真实条数）、未登记取值必须落到最低档 `info`
+		// （`data-severity="info"`，不是 `critical`），且排在 warning 之后而不是插到最前。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/alarm-flood`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		const floodCanvas = await page.evaluate(() => {
+			const badge = document.querySelector("[data-testid='topology-node'][data-node-id='10.0.0.1'] [data-testid='topology-node-alarm']");
+			const pageBadge = document.querySelector("[data-testid='topology-alarm-badge']");
+			return {
+				count: Number(badge?.getAttribute("data-alarm-count") ?? -1),
+				text: badge?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+				events: Number(pageBadge?.getAttribute("data-alarm-events") ?? -1),
+				nodes: Number(pageBadge?.getAttribute("data-alarm-nodes") ?? -1)
+			};
+		});
+		log(
+			"A36 角标数字超 99 写 `99+`，`data-alarm-count` 仍是真实条数",
+			floodCanvas.count === 103 && floodCanvas.text === "99+" && floodCanvas.events === 103 && floodCanvas.nodes === 1,
+			`count=${floodCanvas.count} text=${floodCanvas.text} events=${floodCanvas.events} nodes=${floodCanvas.nodes}`
+		);
+
+		await page.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.1");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await page.waitForTimeout(400);
+		const floodCard = await page.evaluate(() => {
+			const events = Array.from(document.querySelectorAll("[data-testid='topology-alarm-event']"));
+			return {
+				card: !!document.querySelector("[data-testid='topology-alarm-card']"),
+				badge: document.querySelector("[data-testid='topology-alarm-severity']")?.textContent?.trim() ?? "",
+				count: events.length,
+				severities: events.map((el) => el.getAttribute("data-severity") ?? ""),
+				text: events.map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim()),
+				hidden: (document.body.textContent ?? "").includes("另有 100 条未列出")
+			};
+		});
+		log(
+			"A37 未登记严重度落到最低档 `info`（不升级成 critical），排序仍在 warning 之后",
+			floodCard.card && floodCard.badge === "严重" && floodCard.count === 3
+			&& floodCard.severities.join(",") === "critical,warning,info"
+			&& floodCard.text[2].includes("板卡温度异常") && floodCard.hidden,
+			`badge=${floodCard.badge} severities=${floodCard.severities.join("/")} hidden100=${floodCard.hidden}`
+		);
+		await fetch(`http://${HOST}:${upstreamPort}/__control/alarm-flood-off`);
+
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
 		await page.reload({ waitUntil: "networkidle" });
 		await page.waitForTimeout(400);
@@ -2082,6 +2223,62 @@ if (upstreamPort) {
 			`empty=${emptyProbe.empty} canvas=${emptyProbe.canvas}`
 		);
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-full`);
+
+		// A33：只看某个分组（§6.11）。聚焦是「只留」，与折叠的「摘掉」互补：画布只剩该组 3 台 + 组内 2 条链路，
+		// 页头写明「只看 X」并给一键回到全部 —— 聚焦态下不给出口等于把人锁在图里。
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		const focusRead = () => page.evaluate(() => ({
+			nodes: document.querySelectorAll("[data-testid='topology-node']").length,
+			links: document.querySelectorAll("[data-link-key]").length,
+			badge: document.querySelector("[data-testid='topology-focus-badge']")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+			clear: !!document.querySelector("[data-testid='topology-focus-clear']"),
+			active: Array.from(document.querySelectorAll("[data-testid='topology-combo-focus']"))
+				.filter((el) => el.getAttribute("data-focused") === "true")
+				.map((el) => el.getAttribute("data-combo-id"))
+		}));
+		const focusBefore = await focusRead();
+		await page.click("[data-testid='topology-combo-focus'][data-combo-id='combo-edge']");
+		await page.waitForTimeout(400);
+		const focusOn = await focusRead();
+		await page.click("[data-testid='topology-focus-clear']");
+		await page.waitForTimeout(400);
+		const focusOff = await focusRead();
+		log(
+			"A33 只看某个分组：画布只留该组节点与组内链路，页头标明范围并能一键回到全部",
+			focusBefore.nodes === 6 && focusBefore.links === 6 && !focusBefore.clear && focusBefore.badge === ""
+			&& focusOn.nodes === 3 && focusOn.links === 2 && focusOn.clear
+			&& focusOn.badge.includes("只看") && focusOn.active.length === 1 && focusOn.active[0] === "combo-edge"
+			&& focusOff.nodes === 6 && focusOff.links === 6 && !focusOff.clear && focusOff.badge === "",
+			`before=${focusBefore.nodes}/${focusBefore.links} on=${focusOn.nodes}/${focusOn.links}`
+			+ ` badge=${focusOn.badge} active=${focusOn.active.join(",")} off=${focusOff.nodes}/${focusOff.links}`
+		);
+
+		// A34：链路动作按钮在「没有仿真平台」时整组置灰并给原因（本例 BFF 没配仿真上游）。
+		// 三个按钮都要在（一字排开才算「有这条能力」），一条都不许假装能点。
+		await page.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-link-key]"))
+				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-key") ?? ""));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await page.waitForTimeout(400);
+		const linkActions = await page.evaluate(() => {
+			const buttons = Array.from(document.querySelectorAll("[data-testid='topology-link-action']"));
+			return {
+				actions: buttons.map((el) => el.getAttribute("data-action")),
+				disabled: buttons.every((el) => el.hasAttribute("disabled")),
+				labels: buttons.map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim()),
+				card: (document.querySelector("[data-testid='topology-link-card']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		log(
+			"A34 链路动作：三个按钮齐备，仿真平台未配置时整组置灰并写明原因",
+			linkActions.actions.length === 3 && linkActions.actions.join(",") === "down,up,toggle"
+			&& linkActions.disabled
+			&& linkActions.labels.join("|").includes("断开链路")
+			&& linkActions.card.includes("仿真控制未启用"),
+			`actions=${linkActions.actions.join(",")} disabled=${linkActions.disabled} labels=${linkActions.labels.join("|")}`
+		);
 
 		// A5：8888 掉线 → 页面级错误态 + 重试按钮，页面不白屏；恢复后重试能回到拓扑。
 		// 这里**不整页 reload**：掉线时重载会让会话探测也失败、被守卫送回登录页，
@@ -2583,6 +2780,95 @@ if (upstreamPort) {
 			writesReachedUpstream === 0,
 			`写请求命中共 ${writesReachedUpstream} 次`
 		);
+		// A38：LLDP 邻接分区（§6.13 取证 / §6.14 落地）。上游一台设备可以有几个邻居，其中可能指向**画布外**
+		// 设备；`chassis_id` 实测恒为零，join 只能靠 `neighbor_id`。样本里 `n1`（画布 `10.0.0.1`）两个邻居：
+		// `n2` 在画布上（`10.0.0.2`）、`n10` 不在运行态快照里。断言两套身份并存、两端接口分名、on-canvas 计数。
+		await simPage.reload({ waitUntil: "networkidle" });
+		await simPage.waitForTimeout(800);
+		await simPage.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.1");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await simPage.waitForTimeout(600);
+		const lldpProbe = await simPage.evaluate(() => {
+			const card = document.querySelector("[data-testid='topology-lldp-card']");
+			const rows = Array.from(document.querySelectorAll("[data-testid='topology-lldp-neighbor']"));
+			return {
+				state: card?.getAttribute("data-lldp-state") ?? "",
+				count: Number(card?.getAttribute("data-lldp-count") ?? -1),
+				onCanvas: Number(card?.getAttribute("data-lldp-on-canvas") ?? -1),
+				rows: rows.map((el) => ({
+					id: el.getAttribute("data-neighbor-id") ?? "",
+					onCanvas: el.getAttribute("data-on-canvas") ?? "",
+					text: (el.textContent ?? "").replace(/\s+/g, " ").trim()
+				}))
+			};
+		});
+		log(
+			"A38 LLDP 邻接分区：两套身份并存、两端接口分名、画布外对端照实列出",
+			lldpProbe.state === "ok" && lldpProbe.count === 2 && lldpProbe.onCanvas === 1
+			&& lldpProbe.rows[0]?.id === "n2" && lldpProbe.rows[0].onCanvas === "true"
+			&& lldpProbe.rows[0].text.includes("N2") && lldpProbe.rows[0].text.includes("汇聚交换机-1")
+			&& lldpProbe.rows[0].text.includes("n1-eth0 → n2-eth0") && lldpProbe.rows[0].text.includes("10.0.0.2")
+			&& lldpProbe.rows[1]?.id === "n10" && lldpProbe.rows[1].onCanvas === "false"
+			&& lldpProbe.rows[1].text.includes("不在本图上"),
+			`state=${lldpProbe.state} count=${lldpProbe.count} onCanvas=${lldpProbe.onCanvas} rows=${JSON.stringify(lldpProbe.rows)}`
+		);
+
+		// A39：空数组是上游的**真实回答**（不是 404、也不是失败）—— 只有明确拿到 `[]` 之后，页面才允许说
+		// 「这台设备没有邻居」。样本里 `n2`（画布 `10.0.0.2`）回空数组。
+		await simPage.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.2");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await simPage.waitForTimeout(600);
+		const lldpEmpty = await simPage.evaluate(() => {
+			const card = document.querySelector("[data-testid='topology-lldp-card']");
+			const empty = document.querySelector("[data-testid='topology-lldp-empty']");
+			return {
+				state: card?.getAttribute("data-lldp-state") ?? "",
+				count: Number(card?.getAttribute("data-lldp-count") ?? -1),
+				emptyText: (empty?.textContent ?? "").replace(/\s+/g, " ").trim(),
+				errorNode: !!document.querySelector("[data-testid='topology-lldp-error']")
+			};
+		});
+		log(
+			"A39 上游明确回空数组才写「没有邻居」（不是失败、也不是没数据）",
+			lldpEmpty.state === "ok" && lldpEmpty.count === 0 && !lldpEmpty.errorNode
+			&& lldpEmpty.emptyText.includes("空数组") && lldpEmpty.emptyText.includes("没有邻居"),
+			`state=${lldpEmpty.state} count=${lldpEmpty.count} empty=${lldpEmpty.emptyText}`
+		);
+
+		// A40：邻接取数**失败**时只能给上游原话，不能写成「没有邻居」—— 「读不到」与「没有」是两件事
+		// （与 A32 的告警通道同口径）。
+		await fetch(`http://${HOST}:${simPort}/__control/lldp-error`);
+		await simPage.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.0.0.1");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await simPage.waitForTimeout(600);
+		const lldpError = await simPage.evaluate(() => {
+			const card = document.querySelector("[data-testid='topology-lldp-card']");
+			const error = document.querySelector("[data-testid='topology-lldp-error']");
+			const text = document.body.textContent ?? "";
+			return {
+				state: card?.getAttribute("data-lldp-state") ?? "",
+				errorText: (error?.textContent ?? "").replace(/\s+/g, " ").trim(),
+				emptyNode: !!document.querySelector("[data-testid='topology-lldp-empty']"),
+				claimsNone: text.includes("这台设备没有邻居")
+			};
+		});
+		log(
+			"A40 邻接通道失败只写上游原话，不写成「没有邻居」",
+			lldpError.state === "error" && lldpError.errorText.includes("lldp_agent_unreachable")
+			&& !lldpError.emptyNode && !lldpError.claimsNone,
+			`state=${lldpError.state} error=${lldpError.errorText} emptyNode=${lldpError.emptyNode} claimsNone=${lldpError.claimsNone}`
+		);
+		await fetch(`http://${HOST}:${simPort}/__control/lldp-ok`);
+
 		await simContext.close();
 	} finally {
 		await stopBff(simBff);
@@ -2695,6 +2981,56 @@ if (upstreamPort) {
 			afterWriteText.includes("重启已下发")
 			&& (await writePage.locator("[data-testid='sim-confirm']").isVisible().catch(() => false)) === false,
 			afterWriteText.includes("重启已下发") ? "已提示「重启已下发」" : `未见成功提示：${afterWriteText.slice(0, 80)}`
+		);
+
+		// A35：链路动作端到端（§6.2）。选一条仿真里的链路（`10.0.0.1 ↔ 10.0.0.2` 在假仿真里是 `l1`），
+		// 按钮才可点；弹窗写明「链路 + 仿真链路 id + 动作」；确认后写请求打到仿真侧**链路**端点，
+		// 路径里的 id 必须是仿真 id（`l1`），不能是图上的 `source→target`（仿真平台不认那个）。
+		await writePage.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-link-key]"))
+				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-key") ?? ""));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await writePage.waitForTimeout(400);
+		const linkReady = await writePage.evaluate(() => {
+			const buttons = Array.from(document.querySelectorAll("[data-testid='topology-link-action']"));
+			return {
+				actions: buttons.map((el) => el.getAttribute("data-action")),
+				disabled: buttons.filter((el) => el.hasAttribute("disabled")).length,
+				card: (document.querySelector("[data-testid='topology-link-card']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		log(
+			"A35 选中仿真里的链路后三个链路动作按钮都可点（写明端点）",
+			linkReady.actions.join(",") === "down,up,toggle" && linkReady.disabled === 0
+			&& linkReady.card.includes("↔"),
+			`actions=${linkReady.actions.join(",")} disabled=${linkReady.disabled}`
+		);
+
+		const linkHitsBefore = writeSimulator.log.length;
+		await writePage.locator("[data-testid='topology-link-action'][data-action='down']").click();
+		const linkConfirmText = await writePage.locator("[role='dialog']").first().evaluate((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim()).catch(() => "");
+		log(
+			"A35 链路动作也要二次确认并写明仿真链路 id",
+			linkConfirmText.includes("断开链路") && linkConfirmText.includes("仿真链路 id l1"),
+			linkConfirmText.slice(0, 120) || "未出现确认弹窗"
+		);
+
+		await writePage.locator("[data-testid='sim-confirm']").click();
+		await writePage.waitForTimeout(1000);
+		const linkHits = writeSimulator.log.slice(linkHitsBefore).filter((entry) => entry.method !== "GET");
+		const linkHit = linkHits[0];
+		log(
+			"A35 确认后写请求到达仿真平台的链路端点（id 用仿真 id，不用图上 id）",
+			linkHits.length === 1 && linkHit?.method === "POST" && linkHit?.path === "/api/network/links/l1/down",
+			linkHit ? `${linkHit.method} ${linkHit.path}（共 ${linkHits.length} 次）` : `写请求 ${linkHits.length} 次`
+		);
+
+		const linkDoneText = await writePage.evaluate(() => document.body.textContent ?? "");
+		log(
+			"A35 成功后提示「链路已断开」",
+			linkDoneText.includes("链路已断开"),
+			linkDoneText.includes("链路已断开") ? "已提示" : `未见提示：${linkDoneText.slice(0, 80)}`
 		);
 
 		await writeContext.close();
