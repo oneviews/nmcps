@@ -7,7 +7,7 @@
 // 该实例必须自己配好 `NUXT_BFF_UPSTREAM_BASE`，否则登录与「上游就绪」用例必然失败。
 // 环境变量：CHECK_UI_BASE_URL、CHECK_UI_ACCOUNT、CHECK_UI_PASSWORD、CHECK_UI_SCREENSHOT（截图输出路径）。
 import { chromium } from "playwright";
-import { closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { CATALOG_UPSTREAM_FAILURE, closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 const ACCOUNT = process.env.CHECK_UI_ACCOUNT ?? "alice";
 const PASSWORD = process.env.CHECK_UI_PASSWORD ?? "p@ssw0rd";
@@ -2007,6 +2007,58 @@ if (upstreamPort) {
 			&& staleProbe.page.includes("指标通道暂时不可用"),
 			`series=${beforeStale || "无"} → ${staleProbe.seriesCount || "无"} box=${staleProbe.box} stale=${staleProbe.page.includes("指标通道暂时不可用")}`
 		);
+
+		// A17：**目录失败**（§8.4）是第三种失败，和上面两种都不同 —— 失败的是「类型判定依据」，名字清单与
+		// 序列都还好。此时图表必须照常出，页面只多一句「只按名字判断类型」，且**不许**把目录的原话当成
+		// 取数失败展示（`metric-trend-error` 不出现、页面上看不到 `CATALOG_UPSTREAM_FAILURE`）。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/catalog-ok`);
+		await fetch(`http://${HOST}:${upstreamPort}/__control/catalog-error`);
+		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_500);
+		const degradedProbe = await page.evaluate(() => {
+			const alert = document.querySelector("[data-testid='metric-catalog-degraded']");
+			const trend = document.querySelector("[data-testid='metric-trend']");
+			return {
+				alert: !!alert,
+				alertText: alert?.textContent ?? "",
+				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				seriesCount: trend?.getAttribute("data-series-count") ?? "",
+				errorBox: !!document.querySelector("[data-testid='metric-trend-error']"),
+				page: document.body.textContent ?? ""
+			};
+		});
+		log(
+			"A17 目录失败不阻塞出图，也不冒充取数失败",
+			degradedProbe.alert
+			&& degradedProbe.alertText.includes("只按名字判断类型")
+			&& degradedProbe.chart
+			&& degradedProbe.seriesCount !== ""
+			&& !degradedProbe.errorBox
+			&& !degradedProbe.page.includes(CATALOG_UPSTREAM_FAILURE),
+			`alert=${degradedProbe.alert} chart=${degradedProbe.chart} series=${degradedProbe.seriesCount || "无"} errorBox=${degradedProbe.errorBox} 原话外泄=${degradedProbe.page.includes(CATALOG_UPSTREAM_FAILURE)}`
+		);
+
+		// A18：降级的**后果**要如实暴露 —— 只剩名字判据时，`sys_name`（目录里标 `string`）会被当成可绘图指标
+		// 出现在选项里，而且**显示名也没有了**（`en_name` 来自目录），选项只剩编码。三条一起断言，
+		// 正是在断言「提示不是装饰」：如果选择器依旧干净、还带中文/英文名，说明目录其实没失败。
+		// 左栏台账行也是 `role="option"`（同一页面的 listbox），按「不含 `·`」把它们排掉。
+		await page.locator("[data-testid='metric-picker']").click();
+		await page.waitForTimeout(400);
+		const degradedOptions = await page.evaluate(() =>
+			Array.from(document.querySelectorAll("[role='option']")).map((el) => el.textContent?.trim() ?? ""));
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(200);
+		const pickerOnly = degradedOptions.filter((item) => !item.includes("·"));
+		log(
+			"A18 目录失败时选择器退化为「只按名字判断」（文本指标混入、显示名不可得）",
+			pickerOnly.includes("sys_name")
+			&& pickerOnly.includes("if_in_octets")
+			&& !degradedOptions.some((item) => item.includes("System name")),
+			pickerOnly.length ? pickerOnly.join(" | ") : "下拉没有选项"
+		);
+
+		// 目录恢复：后面的断言（以及别的页面）不该被这条开关连坐
+		await fetch(`http://${HOST}:${upstreamPort}/__control/catalog-ok`);
 
 		page.off("request", recordMetric);
 	}

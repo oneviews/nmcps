@@ -12,7 +12,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.5.1
+version: 0.6.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -293,12 +293,14 @@ The §3 taxonomy becomes an **executable decision order** here: `/metric/name` s
 
 A failing `GET /metric/definition` **never blocks the chart**: the whole catalog falls back to `name-only`, the page says "metric catalog unavailable", and the series is still fetched. A text or event metric can then still flatten into a straight line — the gap is registered in `NMCPS-DESIGN-001` §6.6, never papered over by guessing at the name.
 
+Measured (2026-11-06, `check:ui` A17 / A18 make the fake upstream answer `/metric/definition` with `code !== 0`): the chart still renders (`data-series-count=2`), no retrieval-error box appears, and not one word of the upstream failure reaches the page; the picker keeps **codes only** (`if_in_octets | cpu_util_pct | sys_name` — `en_name` comes from the catalog, so it disappears too) and `sys_name`, a text metric, really does slip into the options. The degradation notice is therefore not decoration: its consequence is exactly what it warns about, and the assertions state that it appeared.
+
 ### 8.5 Assertions
 
 | # | Assertion |
 | :---: | :--- |
 | S4 | catalog entries with `metric_type=string` never appear among the metric picker options |
-| S5 | when `/metric/definition` fails the chart still renders, and the catalog failure is not rendered as a retrieval error |
+| S5 | when `/metric/definition` fails the chart still renders (series present, no retrieval-error box), a "metric catalog unavailable" notice appears without leaking the upstream text, and the picker degrades to name-only judgement (display names gone, text metrics mixed in) (`check:ui` A17–A18) |
 
 ---
 
@@ -312,3 +314,4 @@ A failing `GET /metric/definition` **never blocks the chart**: the whole catalog
 | 2026-11-06 | 0.4.0 | **Added "§8 `/metric/definition` catalog join and three-way classification" together with the metric picker**: the request (`page_size=200`, why `metric_group` / `keyword` stay unset, the session-level cache), tolerant entry parsing (code from `code` → `metric_code` → `name`, type only from `METRIC_TYPES`), the fixed decision order (name → collector, catalog → text, everything else → numeric), the three `meta_source` states and the "a missing catalog never blocks the chart" degradation, plus assertions S4 / S5. §7 is reworded accordingly: the list answers names only, the type verdict lives in §8. First consumers: `app/utils/metric/metricCatalog.ts` and `layers/topology/app/composables/useMetricSeries.ts`, landed on `device-metrics` / `link-metrics`. |
 | 2026-11-06 | 0.5.0 | **Measurement overturns "`results` is always one entry"; added "§6.9 Multiple series: the `ifIndex` interface dimension and same-source de-duplication"**: a direct probe of the live upstream (`192.168.1.55:8888`, `10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`) shows a `range` request returning 2 results (device-level metric × two scraping jobs) up to 4 results (interface-level metric × 2 `ifIndex` × 2 `job`); the `ifIndex` label really exists (so the interface dimension is available) and `rate=true` results carry no `__name__`. §5 gained the measured label set; §6.9 fixes the three rules (with `ifIndex` keep only that interface, merge same `ip`+`ifIndex` across `job` by per-timestamp mean, without `ifIndex` take the lowest group key), removes the "take `results[0]`" assumption and adds assertion S6. |
 | 2026-11-06 | 0.5.1 | **§6.7 gains "identical on all three entries, and a pure failure draws no chart"**: the `device-metrics` and `monitor` panes (the latter through the `useNodeTrend` wrapper) used to keep rendering the chart when the upstream envelope failed, so "no collected data in this window" and "metric fetch failed" appeared side by side — reading as "nothing was scraped" when the truth was "the fetch did not succeed". Now a pure failure renders no chart container at all, and only a re-fetch of the same device keeps the polyline with a stale note. Assertion S7 pins the three entries to the same behaviour. |
+| 2026-11-06 | 0.6.0 | **§8.4 / S5 moves from 'stated' to 'measured'**: the catalog failure used to be a sentence with no assertion behind it. The fake upstream now has `__control/catalog-error` (`/metric/definition` answers HTTP 200 + `code !== 0`); A17 asserts the chart still renders (`data-series-count=2`), the "metric catalog unavailable" notice appears, no retrieval-error box shows and nothing of the upstream text reaches the page, while A18 asserts the **consequence** of the degradation: the picker keeps codes only (`en_name` vanishes with the catalog) and `sys_name`, a text metric, really does slip into the options — the notice is not decoration. |

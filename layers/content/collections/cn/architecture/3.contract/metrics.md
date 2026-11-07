@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.5.1
+version: 0.6.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -199,8 +199,8 @@ export interface MetricDatapointResponse {
 | S1 | `results: []` 渲染空态文案，且 DOM 中没有 0 值折线 |
 | S2 | 值全为字符串时，播放的数值序列与 `Number()` 后一致（排序、最大值） |
 | S3 | `code !== 0` 时出现 `UAlert` 且文案等于上游 `message` 原文 |
-| S7 | 三个入口（链路详情 / 设备详情 / 节点详情栏）在 `code !== 0` 时都只出「原话 + 重试」且不渲染图表容器；同设备重取遇网络错误时折线保留并出现 stale 说明（`check:ui` A13 ~ A16） |
 | S6 | 给 `ifIndex` 时只用该接口的序列（同 `ifIndex`、不同 `job` 的两条先合并），与他接口/设备级序列的值可区分；不给 `ifIndex` 时按 §6.9 的确定性规则选组，不再取 `results[0]` |
+| S7 | 三个入口（链路详情 / 设备详情 / 节点详情栏）在 `code !== 0` 时都只出「原话 + 重试」且不渲染图表容器；同设备重取遇网络错误时折线保留并出现 stale 说明（`check:ui` A13 ~ A16） |
 
 ### 6.9 多序列：`ifIndex` 接口维度与同源去重
 
@@ -294,12 +294,14 @@ export interface RawMetricEntry {
 
 `GET /metric/definition` 失败**不阻塞出图**：整份目录落 `name-only`，页面提示「指标目录不可用」，图表照常取数。此时文本 / 事件指标仍可能被当数值画成一条直线 —— 缺口登记在 `NMCPS-DESIGN-001` §6.6，不靠命名猜测掩盖。
 
+实测（2026-11-06，`check:ui` A17 / A18 让假上游对 `/metric/definition` 回 `code !== 0`）：图表照常出（`data-series-count=2`）、不出现取数失败框、目录的失败原话一个字都不上页面；选择器只剩**编码**（`if_in_octets | cpu_util_pct | sys_name` —— `en_name` 来自目录，跟着一起消失），`sys_name` 这种文本指标真的混进选项。降级提示因此不是装饰：后果就是提示里说的那件事，断言据实写它「出现了」。
+
 ### 8.5 断言
 
 | # | 断言 |
 | :---: | :--- |
 | S4 | 目录里 `metric_type=string` 的条目不出现在指标选择器的选项里 |
-| S5 | `/metric/definition` 失败时图表照常出图，且不把目录失败渲染成取数错误 |
+| S5 | `/metric/definition` 失败时图表照常出图（有序列、无取数失败框）、出现「指标目录不可用」提示且不吐出目录原话，选择器同时退化为只按名字判断（显示名消失、文本指标混入）（`check:ui` A17 ~ A18） |
 
 ---
 
@@ -313,3 +315,4 @@ export interface RawMetricEntry {
 | 2026-11-06 | 0.4.0 | **增「§八 `/metric/definition` 目录 join 与三分类判定」并落地指标选择器**：登记请求（`page_size=200`、不传 `metric_group` / `keyword` 的理由、会话级缓存）、条目容错解析（编码 `code` → `metric_code` → `name`，类型只认 `METRIC_TYPES`）、固定判定顺序（名字判 collector → 目录判 text → 其余 numeric）、`meta_source` 三态与「目录不可用不阻塞出图」的降级口径，以及 S4 / S5 两条断言。§七 相应改写：清单只回答名字，类型判定在 §八。首个消费面 `app/utils/metric/metricCatalog.ts` + `layers/topology/app/composables/useMetricSeries.ts`，落在 `device-metrics` / `link-metrics`。 |
 | 2026-11-06 | 0.5.0 | **实测推翻「`results` 恒一条」并增「§6.9 多序列：`ifIndex` 接口维度与同源去重」**：直连上游（`192.168.1.55:8888`，`10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`）取证——`range` 实测返回 2 条（设备级指标 × 两个采集 job）到 4 条（接口级指标 × 2 个 `ifIndex` × 2 个 `job`），`ifIndex` 标签确实存在（接口维度可用），`rate=true` 时无 `__name__`。§五 补齐标签实测清单；§6.9 定死三条规则（给了 `ifIndex` 只取该接口、同 `ip`+`ifIndex` 跨 `job` 逐时间戳取均值、未给 `ifIndex` 时组键升序取第一组），删除「取 `results[0]`」的错误假设，并新增断言 S6。 |
 | 2026-11-06 | 0.5.1 | **§6.7 补充「三个入口一视同仁 + 纯失败态不画图」**：`device-metrics` 与 `monitor` 详情栏（后者经 `useNodeTrend` 薄封装）此前在上游信封失败时仍会渲染图表，「该时间窗内无采集数据」与「指标取数失败」并排出现，等于把「取不到」说成「没采到」；现在纯失败态（没有可保留的旧序列）整个图表容器不渲染，只有同设备重取失败才留图并标 stale。新增断言 S7 锁定三个入口的一致性。 |
+| 2026-11-06 | 0.6.0 | **§8.4 / S5 从「写了」变成「测了」**：目录失败此前只有一句规定（不阻塞出图、不冒充取数失败），`check:ui` 没有对应断言 —— 现在假上游新增 `__control/catalog-error`（`/metric/definition` 回 HTTP 200 + `code !== 0`），A17 断言图表照常出（`data-series-count=2`）、出现「指标目录不可用」提示、无取数失败框、目录原话零上屏；A18 断言降级的**后果**：选择器只剩编码（`en_name` 随目录一起消失）、`sys_name` 这种文本指标真的混进选项 —— 提示不再是装饰。 |

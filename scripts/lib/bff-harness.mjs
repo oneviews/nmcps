@@ -19,6 +19,13 @@ export const HOST = "127.0.0.1";
  */
 export const METRIC_UPSTREAM_FAILURE = "指标库查询超时（tsdb: query timeout after 30s）";
 
+/**
+ * `__control/catalog-error` 打开时 `/metric/definition` 回的失败原话（HTTP 200 + `code !== 0`）。
+ * 目录失败**不是**取数失败（`NMCPS-CONTRACT-002` §8.4）：页面只该提示「只按名字判断类型」，
+ * 既不降级成空态，也不把这句话当成取数失败展示 —— 自查同时比对「出现了什么」与「没出现什么」。
+ */
+export const CATALOG_UPSTREAM_FAILURE = "指标目录服务不可用（catalog: upstream 503 after 3 retries）";
+
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 
@@ -304,7 +311,7 @@ export async function startUpstream(port) {
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
 	 */
-	const control = { down: false, topologyEmpty: false, metricError: false };
+	const control = { down: false, topologyEmpty: false, metricError: false, catalogError: false };
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -333,7 +340,7 @@ export async function startUpstream(port) {
 			return send(200, { down: false });
 		}
 		if (url.pathname === "/__control/state")
-			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, metricError: control.metricError });
+			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, metricError: control.metricError, catalogError: control.catalogError });
 		/**
 		 * 指标取数失败开关：`/metric/datapoint` 回 HTTP 200 + `code !== 0` + 一句上游原话。
 		 * 这不是网络错误（`__control/down` 是），而是「上游回了信封但业务失败」——
@@ -346,6 +353,19 @@ export async function startUpstream(port) {
 		if (url.pathname === "/__control/metric-ok") {
 			control.metricError = false;
 			return send(200, { metricError: false });
+		}
+		/**
+		 * 目录失败开关：`/metric/definition` 回 HTTP 200 + `code !== 0`。
+		 * 与 `metric-error` 的区别是**失败在哪一步**：目录只是「类型判定的依据」，
+		 * 而名字清单与序列都还好 —— 页面必须照常出图，只多一句「只按名字判断类型」（§8.4 / A17）。
+		 */
+		if (url.pathname === "/__control/catalog-error") {
+			control.catalogError = true;
+			return send(200, { catalogError: true });
+		}
+		if (url.pathname === "/__control/catalog-ok") {
+			control.catalogError = false;
+			return send(200, { catalogError: false });
 		}
 		if (url.pathname === "/__control/topology-empty") {
 			control.topologyEmpty = true;
@@ -421,6 +441,11 @@ export async function startUpstream(port) {
 		// `/metric/definition`：指标目录（§八 的 join 依据）。`up` / `scrape_*` 即使登记也不可选（名字判据优先），
 		// `sys_name` 标 `string` + `has_series: false` —— 两条文本判据各留一条样本。
 		if (/^\/(?:api\/v1\/)?metric\/definition$/.test(url.pathname) && req.method === "GET") {
+			// 目录不可用的样本（§8.4 / `__control/catalog-error`）：信封失败，但名字清单与序列照常 ——
+			// 用来证明「目录失败不阻塞出图，也不冒充取数失败」。
+			if (control.catalogError)
+				return send(200, { code: 10503, msg: CATALOG_UPSTREAM_FAILURE, data: null });
+
 			return send(200, {
 				code: 0,
 				msg: "success",
