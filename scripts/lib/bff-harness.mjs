@@ -115,12 +115,13 @@ export async function closeUpstream(server) {
 function nestTopologyGraph(flat) {
 	return {
 		nodes: flat.nodes.map((node, index) => {
-			const { id, ...facts } = node;
+			const { id, combo, ...facts } = node;
 			return {
 				id,
 				data: { deviceName: facts.name, ...facts },
 				style: { x: 80 + index * 60, y: 120 + index * 90 },
-				combo: "combo-access"
+				// 现网每个节点自带 `combo`（分组折叠读它，§6.11）；样本没写归属时落到 `combo-access`
+				combo: combo ?? "combo-access"
 			};
 		}),
 		edges: flat.edges.map((edge, index) => {
@@ -473,7 +474,8 @@ export async function startUpstream(port) {
 							traffic: 12.5,
 							traffic_in: 5,
 							traffic_out: 7.5,
-							uptime: 86400
+							uptime: 86400,
+							combo: "combo-core"
 						},
 						{
 							id: "10.0.0.2",
@@ -486,7 +488,8 @@ export async function startUpstream(port) {
 							memory: 71.4,
 							interfaces: 12,
 							traffic_in: 3,
-							traffic_out: 2
+							traffic_out: 2,
+							combo: "combo-access"
 						},
 						{
 							id: "10.0.0.3",
@@ -498,21 +501,76 @@ export async function startUpstream(port) {
 							cpu: -1,
 							memory: -1,
 							interfaces: 0,
-							trafficTotalKbps: 1500
+							trafficTotalKbps: 1500,
+							combo: "combo-access"
 						},
-						{ id: "10.0.0.4", name: "无线AP-1", category: "ap", type: "access", tier: 3, status: 1 },
-						{ id: "10.0.0.5", name: "单链路终端-1", category: "client", type: "endnode", tier: 4, status: 1 },
-						{ id: "10.0.0.6", name: "单链路终端-2", category: "client", type: "endnode", tier: 4, status: 0 }
+						// 无线事实（§6.11）：A30 钉「带 Wi-Fi 字段的节点才出无线卡」，这台的七项齐全
+						{
+							id: "10.0.0.4",
+							name: "无线AP-1",
+							category: "ap",
+							type: "access",
+							tier: 3,
+							status: 1,
+							ssid: "NMCPS-Lab",
+							band: "5G",
+							channel: 149,
+							dbm: -52,
+							clients: 12,
+							util: 34,
+							tx_power: 20,
+							combo: "combo-edge"
+						},
+						{ id: "10.0.0.5", name: "单链路终端-1", category: "client", type: "endnode", tier: 4, status: 1, combo: "combo-edge" },
+						{ id: "10.0.0.6", name: "单链路终端-2", category: "client", type: "endnode", tier: 4, status: 0, combo: "combo-edge" }
 					],
+					// 链路基础事实（§6.11）：第一条把 `medium` / `relation` / `admin_status` / `telemetry`
+					// 全给齐（A28 用它钉「利用率 0 ⇒ 未计算」），其余保持 `bandwidth: 0`（缺真值口径）。
 					edges: [
-						{ source: "10.0.0.1", target: "10.0.0.2", bandwidth: 0, linkType: "fiber", status: "up" },
-						{ source: "10.0.0.1", target: "10.0.0.3", bandwidth: 0, linkType: "fiber", status: "up" },
-						{ source: "10.0.0.2", target: "10.0.0.4", bandwidth: 0, linkType: "fiber", status: "up" },
-						{ source: "10.0.0.3", target: "10.0.0.4", bandwidth: 0, linkType: "fiber", status: "down" },
-						{ source: "10.0.0.4", target: "10.0.0.5", bandwidth: 0, linkType: "wireless", status: "up" },
-						{ source: "10.0.0.4", target: "10.0.0.6", bandwidth: 0, linkType: "wireless", status: "down" }
+						{
+							source: "10.0.0.1",
+							target: "10.0.0.2",
+							bandwidth: "1 Gbps",
+							linkType: "fiber",
+							status: "up",
+							medium: "optical",
+							relation: "up",
+							admin_status: "enabled",
+							telemetry: {
+								traffic_in: 12.5,
+								traffic_out: 16.18,
+								in_util_pct: 0,
+								out_util_pct: 0,
+								packet_loss: 0,
+								error_rate: 0,
+								metric_updated_at: "2026-11-07T10:00:00Z"
+							}
+						},
+						{ source: "10.0.0.1", target: "10.0.0.3", bandwidth: 0, linkType: "fiber", status: "up", medium: "optical", relation: "up", admin_status: "enabled" },
+						{ source: "10.0.0.2", target: "10.0.0.4", bandwidth: 0, linkType: "fiber", status: "up", medium: "copper1g", relation: "up", admin_status: "enabled" },
+						{ source: "10.0.0.3", target: "10.0.0.4", bandwidth: 0, linkType: "fiber", status: "down", medium: "optical", relation: "down", admin_status: "disabled" },
+						{ source: "10.0.0.4", target: "10.0.0.5", bandwidth: 0, linkType: "wireless", status: "up", medium: "wifi5", relation: "peer", admin_status: "enabled" },
+						{ source: "10.0.0.4", target: "10.0.0.6", bandwidth: 0, linkType: "wireless", status: "down", medium: "wifi5", relation: "down", admin_status: "enabled" }
 					],
-					combos: [{ id: "combo-access", label: "接入区" }]
+					// 区域分组（§6.11）：三组，`children` 与节点 `combo` 归属一致，`counts` 在 `data` 里
+					// （现网形状）—— A29 折 `combo-edge` 后画布少 3 台、计数照旧。
+					combos: [
+						{
+							id: "combo-core",
+							data: { label: "核心区", layer: 1, root: true, counts: { distro: 0, access: 0, terminal: 1 } },
+							children: ["10.0.0.1"]
+						},
+						{
+							id: "combo-access",
+							data: { label: "接入区", layer: 2, root: false, counts: { distro: 1, access: 1, terminal: 0 } },
+							children: ["10.0.0.2", "10.0.0.3"]
+						},
+						{
+							id: "combo-edge",
+							data: { label: "边缘区", layer: 3, root: false, counts: { distro: 0, access: 1, terminal: 2 } },
+							children: ["10.0.0.4", "10.0.0.5", "10.0.0.6"]
+						}
+					]
 				};
 
 			// 默认出站即现网的两层形状（`__control/topology-flat` 才回扁平本体）。

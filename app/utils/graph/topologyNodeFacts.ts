@@ -85,6 +85,54 @@ export function nodeFactsOf(node: TopologyGraphNode | undefined | null): Topolog
 }
 
 /**
+ * 无线事实（AP）：`null` 表示上游没给（没有这组字段的节点不画无线卡）。
+ * 口径同节点事实：缺省即未知，不补 0 —— `clients: 0` 是「一台都没连」，照写。
+ */
+export interface TopologyWifiFacts {
+	ssid: string | null
+	band: string | null
+	channel: number | null
+	dbm: number | null
+	clients: number | null
+	/** 信道利用率（%）：与链路利用率不同，这里 `0` 是可信的真值（节点口径不带「未计算」语义） */
+	util: number | null
+	txPower: number | null
+}
+
+/** 字符串原样（`ssid` / `band` 属数据，不翻译）；空串按未知 */
+function readText(value: unknown): string | null {
+	return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** 数值原样（dBm 可以是负数，所以不复用 `readCount` 的「负数即未知」） */
+function readNumber(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 无线事实读表（复刻 1.0 的 AP 卡口径；2026-11-07 复测 27/36 节点带这组字段）。
+ *
+ * 一个字段都没有时返回 `null`：页面据此**不画**无线区块 —— 画一排「—」等于告诉用户
+ * 「这台 AP 的 SSID 取不到」，而实际上它根本不是 AP。
+ */
+export function wifiFactsOf(node: TopologyGraphNode | undefined | null): TopologyWifiFacts | null {
+	if (!node)
+		return null;
+
+	const facts: TopologyWifiFacts = {
+		ssid: readText(node.ssid),
+		band: readText(node.band),
+		channel: readNumber(node.channel),
+		dbm: readNumber(node.dbm),
+		clients: readNumber(node.clients),
+		util: readPercent(node.util),
+		txPower: readNumber(node.tx_power)
+	};
+
+	return Object.values(facts).some((value) => value !== null) ? facts : null;
+}
+
+/**
  * 从画布链路推导某节点的邻居（含链路状态与对端节点状态）。
  *
  * 只认**两端都在画布上**的链路：端点被裁剪掉的链路画不出来，也就不该出现在邻居列表里

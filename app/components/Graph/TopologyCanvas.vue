@@ -23,16 +23,28 @@
 		>
 			<g :transform="transform">
 				<!-- 链路先画：节点永远盖在线上，避免端点被截断 -->
+				<!--
+					链路可点：点中后页面在详情栏展示该链路的事实（`linkFactsOf()`，§6.11）。
+					`<title>` 是给鼠标悬停的原生提示 —— SVG 自带的无障碍语义，不加浮层、不加弹出库。
+				-->
 				<path
 					v-for="(link, index) in links"
 					:key="`${link.source}-${link.target}-${index}`"
 					data-testid="topology-link"
+					:data-link-key="topologyLinkKey(link, index)"
 					:d="linkPath(link)"
 					fill="none"
 					stroke-width="1.5"
 					stroke-linecap="round"
-					:class="linkStrokeClass(normalizeLinkStatus(link.status))"
-				/>
+					:class="[
+						linkStrokeClass(normalizeLinkStatus(link.status)),
+						selectedLinkKey && selectedLinkKey === topologyLinkKey(link, index) ? 'stroke-(--ui-primary)' : '',
+					]"
+					@pointerdown.stop
+					@click.stop="emit('selectLink', topologyLinkKey(link, index))"
+				>
+					<title v-if="linkTitle?.(link)">{{ linkTitle(link) }}</title>
+				</path>
 
 				<g
 					v-for="item in viewNodes"
@@ -127,7 +139,7 @@
 	import type { NodeOffset, NodeOffsetMap, Point2D } from "~~/app/utils/graph/topologyNodeOffsets";
 	import type { TopologyGraphLink } from "~~/shared/types/topology";
 	import { applyNodeOffsets } from "~~/app/utils/graph/topologyNodeOffsets";
-	import { normalizeLinkStatus, normalizeNodeStatus } from "~~/app/utils/graph/topologyNormalize";
+	import { normalizeLinkStatus, normalizeNodeStatus, topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
 	import { linkStrokeClass, nodeFillClass } from "~~/app/utils/graph/topologyStatusStyle";
 
 	const props = defineProps<{
@@ -136,6 +148,10 @@
 		width: number
 		height: number
 		selectedId?: string | null
+		/** 选中链路的 key（`topologyLinkKey()`）：页面据此高亮，跨轮询按 key 认人 */
+		selectedLinkKey?: string | null
+		/** 链路悬停提示文本（页面按 `linkFactsOf()` 拼，画布只管渲染成 SVG `<title>`） */
+		linkTitle?: (link: TopologyGraphLink) => string
 		/** 节点 id → 仿真标记（8001 运行态对齐结果） */
 		markers?: Record<string, SimulatorNodeMarker>
 		/** 节点手动位移层（§6.9）：几何坐标 + 增量 = 最终落点，本组件只合成、不改表 */
@@ -146,6 +162,8 @@
 
 	const emit = defineEmits<{
 		select: [id: string]
+		/** 点中一条链路（§6.11）：页面在详情栏展示该链路事实 */
+		selectLink: [key: string]
 		/** 拖拽结束：`offset` 是**累计**增量（相对几何坐标），页面交给 `setNodeOffset()` 去重 / 落表 */
 		offsetChange: [id: string, offset: NodeOffset]
 		/** 视口是否已偏离初始状态（缩放 / 平移）：「恢复默认配置」的禁用态要诚实反映它 */

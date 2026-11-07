@@ -171,25 +171,38 @@
 					:width="layout.width"
 					:height="layout.height"
 					:selected-id="selectedId"
+					:selected-link-key="selectedLinkKey"
+					:link-title="linkTitle"
 					:markers="markers"
 					:offsets="nodeOffsets"
 					:label="$t('pages.topology-monitor.canvasLabel')"
 					@select="selectNode"
+					@select-link="selectLink"
 					@offset-change="moveNode"
 					@viewport-change="(dirty: boolean) => (viewportDirty = dirty)"
 				/>
 
-				<!-- 裁剪角标（§八）：超出 400 节点 / 1,200 链路时说明裁了多少 -->
-				<UBadge
-					v-if="layout.croppedNodes > 0 || layout.croppedLinks > 0"
-					data-testid="topology-cropped"
-					size="sm"
-					color="warning"
-					variant="subtle"
-					class="absolute top-2 left-2"
-				>
-					{{ $t("pages.topology-monitor.cropped", { nodes: layout.croppedNodes, links: layout.croppedLinks }) }}
-				</UBadge>
+				<!-- 角标列：裁剪（§八）与被收起的区域分组（§6.11）都只说明「眼前这张图少了什么」 -->
+				<div class="pointer-events-none absolute top-2 left-2 flex flex-col items-start gap-1">
+					<UBadge
+						v-if="layout.croppedNodes > 0 || layout.croppedLinks > 0"
+						data-testid="topology-cropped"
+						size="sm"
+						color="warning"
+						variant="subtle"
+					>
+						{{ $t("pages.topology-monitor.cropped", { nodes: layout.croppedNodes, links: layout.croppedLinks }) }}
+					</UBadge>
+					<UBadge
+						v-if="collapsedNodeCount > 0"
+						data-testid="topology-collapsed"
+						size="sm"
+						color="neutral"
+						variant="subtle"
+					>
+						{{ $t("pages.topology-monitor.groups.collapsedBadge", { count: collapsedNodeCount, groups: collapsedCombos.length }) }}
+					</UBadge>
+				</div>
 
 				<!-- 径向扇旋转控件（§6.8，1.0 v0.28 同款）：只在 `radial` 布局出现 ——
 					其它布局不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」 -->
@@ -395,6 +408,115 @@
 					</p>
 				</div>
 
+				<!--
+					链路事实（§6.11，click 画布上的一条链路）：基础事实来自 `data`（48/48 齐全），
+					利用率 / 丢包 / 误码四项在现网恒为 0（＝没算），因此**整块写「未计算」**而不是列 4 行 0%。
+				-->
+				<div v-if="selectedLink && linkFacts" data-testid="topology-link-card" class="rounded-lg border border-(--ui-border) p-3">
+					<div class="mb-1 flex items-start justify-between gap-2">
+						<h2 class="text-sm font-semibold">
+							{{ $t("pages.topology-monitor.link.title") }}
+						</h2>
+						<UButton
+							data-testid="topology-link-close"
+							size="xs"
+							color="neutral"
+							variant="ghost"
+							icon="carbon:close"
+							:aria-label="$t('pages.topology-monitor.link.close')"
+							@click="closeLink"
+						/>
+					</div>
+					<p class="mb-2 truncate text-xs text-(--ui-text-muted)" :title="linkEndpoints">
+						{{ linkEndpoints }}
+					</p>
+					<dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+						<template v-for="row in linkRows" :key="row.key">
+							<dt class="truncate text-(--ui-text-muted)">
+								{{ row.label }}
+							</dt>
+							<dd :data-testid="`topology-link-fact-${row.key}`" class="truncate" :class="row.unknown ? 'text-(--ui-text-muted)' : ''">
+								{{ row.text }}
+							</dd>
+						</template>
+					</dl>
+					<p v-if="!linkHasUtilization(linkFacts)" class="mt-2 text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.link.utilNotComputedBody") }}
+					</p>
+				</div>
+
+				<!-- 无线事实（AP，§6.11）：字段一个都没有就不画这块（否则等于宣称「这台 AP 的 SSID 取不到」） -->
+				<div v-if="wifiFacts" data-testid="topology-wifi-card" class="rounded-lg border border-(--ui-border) p-3">
+					<h2 class="mb-2 text-sm font-semibold">
+						{{ $t("pages.topology-monitor.wifi.title") }}
+					</h2>
+					<dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+						<template v-for="row in wifiRows" :key="row.key">
+							<dt class="truncate text-(--ui-text-muted)">
+								{{ row.label }}
+							</dt>
+							<dd :data-testid="`topology-wifi-${row.key}`" class="truncate">
+								{{ row.text }}
+							</dd>
+						</template>
+					</dl>
+				</div>
+
+				<!-- 区域分组（§6.11）：`counts` 是上游自报，`visible` 是画布真实成员；折叠只摘画布，不改计数 -->
+				<div v-if="comboGroups.length" data-testid="topology-groups" class="rounded-lg border border-(--ui-border) p-3">
+					<div class="mb-2 flex items-baseline justify-between gap-2">
+						<h2 class="text-sm font-semibold">
+							{{ $t("pages.topology-monitor.groups.title") }}
+						</h2>
+						<UButton
+							v-if="collapsedCombos.length"
+							data-testid="topology-groups-expand"
+							size="xs"
+							color="neutral"
+							variant="ghost"
+							:label="$t('pages.topology-monitor.groups.expandAll')"
+							@click="expandAllCombos()"
+						/>
+					</div>
+					<ul class="flex flex-col gap-1 text-xs">
+						<li v-for="group in comboGroups" :key="group.id" class="flex items-start justify-between gap-2">
+							<div class="min-w-0 flex-1">
+								<div class="flex items-center gap-1">
+									<span class="truncate font-medium">{{ group.label }}</span>
+									<UBadge v-if="group.collapsed" size="sm" variant="subtle" color="neutral">
+										{{ $t("pages.topology-monitor.groups.collapsed") }}
+									</UBadge>
+								</div>
+								<p
+									:data-testid="`topology-group-counts-${group.id}`"
+									class="text-(--ui-text-muted)"
+								>
+									{{ countsText(group.counts) }}
+								</p>
+								<p class="text-(--ui-text-muted)">
+									{{ $t("pages.topology-monitor.groups.members", { visible: group.visible, declared: group.declared ?? group.visible }) }}
+								</p>
+							</div>
+							<UTooltip :text="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')">
+								<UButton
+									data-testid="topology-combo-toggle"
+									:data-combo-id="group.id"
+									:data-collapsed="group.collapsed"
+									size="xs"
+									color="neutral"
+									variant="ghost"
+									:icon="group.collapsed ? 'carbon:view' : 'carbon:view-off'"
+									:aria-label="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')"
+									@click="toggleCombo(group.id)"
+								/>
+							</UTooltip>
+						</li>
+					</ul>
+					<p class="mt-2 text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.groups.hint") }}
+					</p>
+				</div>
+
 				<!-- 节点趋势（NMCPS-DESIGN-001 §6.5 / A3）：选中节点 → `/api/metric/name` 挑编码 →
 					`/api/metric/datapoint` 取近 1 小时序列 → `TrendChart` 自绘折线 -->
 				<div class="rounded-lg border border-(--ui-border) p-3">
@@ -526,7 +648,7 @@
 	// 仿真通道未配置 / 不可达时页面照常只读：拓扑与统计继续渲染，仿真区块单独降级。
 	import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
 	import type { SimulatorChannelState, SimulatorNodeAction } from "~~/layers/topology/app/composables/useTopologyMonitor";
-	import type { TopologyNodeStatus } from "~~/shared/types/topology";
+	import type { TopologyCombo, TopologyGraphLink, TopologyNodeStatus } from "~~/shared/types/topology";
 	import {
 		RADIAL_ROTATE_DEG,
 		TOPOLOGY_LAYOUT_MODES,
@@ -534,13 +656,15 @@
 		TOPOLOGY_ROTATE_MIN,
 		TOPOLOGY_ROTATE_STEP
 	} from "~~/app/utils/graph/topologyLayout";
-	import { nodeFactsOf, topologyNeighborsOf } from "~~/app/utils/graph/topologyNodeFacts";
+	import { linkFactsOf, linkHasUtilization } from "~~/app/utils/graph/topologyLinkFacts";
+	import { nodeFactsOf, topologyNeighborsOf, wifiFactsOf } from "~~/app/utils/graph/topologyNodeFacts";
+	import { topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
 	import { linkStatusColor, nodeFillClass, nodeStatusColor, statusI18nKey } from "~~/app/utils/graph/topologyStatusStyle";
 	import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 	definePageMeta({ sort: 1, icon: "carbon:network-3" });
 
-	const { t } = useI18n();
+	const { t, te } = useI18n();
 	const toast = useToast();
 
 	const {
@@ -575,7 +699,12 @@
 		nodeOffsets,
 		moveNode,
 		resetNodeOffsets,
-		nodeOffsetCount
+		nodeOffsetCount,
+		comboGroups,
+		collapsedCombos,
+		collapsedNodeCount,
+		toggleCombo,
+		expandAllCombos
 	} = useTopologyMonitor();
 
 	/** 画布组件实例：只为「恢复默认配置」的视口复位（`resetViewport()`）暴露 */
@@ -648,6 +777,123 @@
 	const selectedNeighbors = computed(() => (selected.value
 		? topologyNeighborsOf(layout.value, selected.value.id)
 		: []));
+
+	// ── 链路事实（§6.11）：点中画布上的一条链路 → 详情栏给基础事实 + 两个方向的流量 ──────────────
+	// 利用率 / 丢包 / 误码四项现网恒为 0（`traffic_out: 16.18` 而 `out_util_pct: 0`）＝没算，
+	// 因此这四格既不出 `0%` 也不出 `—`，统一写「未计算」（口径在 `topologyLinkFacts.ts` 文件头）。
+	/** 选中链路的 key：用 `topologyLinkKey()` 记，跨轮询按 key 认人，上游换序不会认错 */
+	const selectedLinkKey = ref<string | null>(null);
+
+	/** 选中链路本身：从**当前布局**的链路里按 key 解析（刷新后不残留上一轮的对象） */
+	const selectedLink = computed<TopologyGraphLink | null>(() => {
+		if (!selectedLinkKey.value)
+			return null;
+		return layout.value.links.find((link, index) => topologyLinkKey(link, index) === selectedLinkKey.value) ?? null;
+	});
+
+	const linkFacts = computed(() => (selectedLink.value ? linkFactsOf(selectedLink.value) : null));
+
+	/** 两端名称：图上叫得出来的名字优先，退回管理 IP（`id` 本身就是管理 IP，见 §6.10） */
+	const linkEndpoints = computed(() => {
+		const link = selectedLink.value;
+		if (!link)
+			return "";
+		const labels = new Map(layout.value.nodes.map((item) => [item.id, item.label]));
+		return `${labels.get(link.source) ?? link.source} ↔ ${labels.get(link.target) ?? link.target}`;
+	});
+
+	/** 点链路：再点同一条即取消（链路上没有别的出口，鼠标用户得有回头路） */
+	function selectLink(key: string): void {
+		selectedLinkKey.value = selectedLinkKey.value === key ? null : key;
+	}
+
+	function closeLink(): void {
+		selectedLinkKey.value = null;
+	}
+
+	/** 未知 → 「—」；「未计算」单独一档，两者在同一个格子里绝不混着写 */
+	function linkValue(value: string | number | null, suffix = ""): string {
+		return value === null ? "—" : `${value}${suffix}`;
+	}
+
+	function linkPercent(value: number | null): string {
+		return value === null
+			? t("pages.topology-monitor.link.notComputed")
+			: `${Math.round(value * 10) / 10}%`;
+	}
+
+	/** 链路事实行（顺序 = 卡片上的阅读顺序：先「这条链路是什么」，再「跑了多少」） */
+	const linkRows = computed(() => {
+		const facts = linkFacts.value;
+		if (!facts)
+			return [];
+		return [
+			{ key: "type", label: t("pages.topology-monitor.link.type"), text: linkValue(facts.linkType), unknown: facts.linkType === null },
+			{ key: "medium", label: t("pages.topology-monitor.link.medium"), text: linkValue(facts.medium), unknown: facts.medium === null },
+			{ key: "relation", label: t("pages.topology-monitor.link.relation"), text: linkValue(facts.relation), unknown: facts.relation === null },
+			{ key: "admin", label: t("pages.topology-monitor.link.adminStatus"), text: linkValue(facts.adminStatus), unknown: facts.adminStatus === null },
+			{ key: "bandwidth", label: t("pages.topology-monitor.link.bandwidth"), text: linkValue(facts.bandwidth), unknown: facts.bandwidth === null },
+			{ key: "traffic-in", label: t("pages.topology-monitor.link.trafficIn"), text: linkValue(facts.trafficIn, " Mbps"), unknown: facts.trafficIn === null },
+			{ key: "traffic-out", label: t("pages.topology-monitor.link.trafficOut"), text: linkValue(facts.trafficOut, " Mbps"), unknown: facts.trafficOut === null },
+			{ key: "util-in", label: t("pages.topology-monitor.link.utilIn"), text: linkPercent(facts.utilIn), unknown: facts.utilIn === null },
+			{ key: "util-out", label: t("pages.topology-monitor.link.utilOut"), text: linkPercent(facts.utilOut), unknown: facts.utilOut === null },
+			{ key: "packet-loss", label: t("pages.topology-monitor.link.packetLoss"), text: linkPercent(facts.packetLoss), unknown: facts.packetLoss === null },
+			{ key: "error-rate", label: t("pages.topology-monitor.link.errorRate"), text: linkPercent(facts.errorRate), unknown: facts.errorRate === null }
+		];
+	});
+
+	/** 画布 `<title>` 文本（原生悬停提示）：基础事实 + 两个方向的流量，利用率只在真有值时出现 */
+	function linkTitle(link: TopologyGraphLink): string {
+		const facts = linkFactsOf(link);
+		const parts = [facts.linkType, facts.medium, facts.relation, facts.bandwidth]
+			.filter((item): item is string => !!item);
+
+		if (facts.trafficIn !== null || facts.trafficOut !== null) {
+			parts.push(t("pages.topology-monitor.link.trafficLine", {
+				in: formatTraffic(facts.trafficIn),
+				out: formatTraffic(facts.trafficOut)
+			}));
+		}
+
+		if (!linkHasUtilization(facts))
+			parts.push(t("pages.topology-monitor.link.utilNotComputed"));
+		else if (facts.utilIn !== null || facts.utilOut !== null)
+			parts.push(t("pages.topology-monitor.link.utilLine", { in: linkPercent(facts.utilIn), out: linkPercent(facts.utilOut) }));
+
+		return parts.join(" · ");
+	}
+
+	// ── 无线事实（§6.11）：只有带 Wi-Fi 字段的节点才出这块，一个字段都没有就不画 ────────────────
+	const wifiFacts = computed(() => wifiFactsOf(selected.value?.node));
+
+	const wifiRows = computed(() => {
+		const facts = wifiFacts.value;
+		if (!facts)
+			return [];
+		return [
+			{ key: "ssid", label: t("pages.topology-monitor.wifi.ssid"), text: linkValue(facts.ssid) },
+			{ key: "band", label: t("pages.topology-monitor.wifi.band"), text: linkValue(facts.band) },
+			{ key: "channel", label: t("pages.topology-monitor.wifi.channel"), text: linkValue(facts.channel) },
+			{ key: "dbm", label: t("pages.topology-monitor.wifi.dbm"), text: linkValue(facts.dbm, " dBm") },
+			{ key: "clients", label: t("pages.topology-monitor.wifi.clients"), text: linkValue(facts.clients) },
+			{ key: "util", label: t("pages.topology-monitor.wifi.util"), text: linkValue(facts.util, "%") },
+			{ key: "tx-power", label: t("pages.topology-monitor.wifi.txPower"), text: linkValue(facts.txPower, " dBm") }
+		];
+	});
+
+	// ── 区域分组（§6.11）：`counts` 是上游自报的分层计数，`visible` 是画布上的真实成员 ─────────────
+	/** 计数键是上游口径（`distro` / `access` / `terminal`）：词表里有就翻，没有就原样给（数据，不翻译） */
+	function countKeyLabel(key: string): string {
+		const path = `pages.topology-monitor.groups.counts.${key}`;
+		return te(path) ? t(path) : key;
+	}
+
+	function countsText(counts: TopologyCombo["counts"]): string {
+		const entries = Object.entries(counts ?? {}).filter(([, value]) => typeof value === "number");
+		if (entries.length === 0)
+			return t("pages.topology-monitor.groups.countsUnknown");
+		return entries.map(([key, value]) => `${countKeyLabel(key)} ${value}`).join(" · ");
+	}
 
 	/** CPU / 内存两条进度条：`value === null` 时只留「—」，不画空进度条（空条会读成 0%） */
 	const percentMeters = computed(() => [

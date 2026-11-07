@@ -72,12 +72,77 @@ export function useTopologyMonitor() {
 
 	let timer: ReturnType<typeof setInterval> | undefined;
 
+	/**
+	 * 已收起的区域分组（combo id，§6.11）：折叠 = 把该组节点从**布局输入**里摘掉。
+	 *
+	 * 不做「合成一个簇节点」：簇节点要有几何、层级、事实，全是编出来的 —— 而这里的数据是真的。
+	 * 摘掉之后 `layoutTopology()` 的裁剪逻辑自然把两端不全的链路也丢掉，画布不会留悬空边；
+	 * 组自身的 `counts` / `children` 仍原样显示在分组卡片上（收起不等于看不见这台设备存在）。
+	 */
+	const collapsedCombos = ref<string[]>([]);
+
 	/** 归一链路 + 布局（纯函数，同一份数据 + 同一组选项恒得同一张图） */
-	const layout = computed(() => layoutTopology(
-		graph.value?.nodes ?? [],
-		topologyLinksOf(graph.value),
-		{ mode: layoutMode.value, rotateDeg: rotationDeg.value }
-	));
+	const layout = computed(() => {
+		const all = graph.value?.nodes ?? [];
+		const links = topologyLinksOf(graph.value);
+		const collapsed = new Set(collapsedCombos.value);
+		const nodes = collapsed.size === 0
+			? all
+			: all.filter((node) => !(node.combo && collapsed.has(node.combo)));
+
+		return layoutTopology(nodes, links, { mode: layoutMode.value, rotateDeg: rotationDeg.value });
+	});
+
+	/**
+	 * 区域分组（§6.11）：每个 combo 的标签、计数与**当前在图上的成员数**。
+	 *
+	 * `members` 取画布真实成员（`node.combo === id`），`children` 是上游自报清单 —— 两者不一致时
+	 * 以上游清单为准展示（它是上游的说法），但折叠影响的是画布，所以 `visible` 只数真实成员。
+	 */
+	const comboGroups = computed(() => {
+		const nodes = graph.value?.nodes ?? [];
+		return (graph.value?.combos ?? []).map((combo) => {
+			const members = nodes.filter((node) => node.combo === combo.id);
+			const counts = combo.counts ?? null;
+			return {
+				id: combo.id,
+				label: combo.label?.trim() || combo.id,
+				/** 上游自报的组内分层计数（`distro` / `access` / `terminal`），缺省为 `null` */
+				counts,
+				/** 上游自报的子节点清单长度（没有清单时为 `null`） */
+				declared: combo.children?.length ?? null,
+				/** 画布上真实的成员数（折叠影响的就是这些） */
+				visible: members.length,
+				collapsed: collapsedCombos.value.includes(combo.id)
+			};
+		});
+	});
+
+	/** 当前被折叠遮住的节点数（画布角标与分组卡片共用这一个数） */
+	const collapsedNodeCount = computed(() => {
+		const collapsed = new Set(collapsedCombos.value);
+		if (collapsed.size === 0)
+			return 0;
+		return (graph.value?.nodes ?? []).filter((node) => node.combo && collapsed.has(node.combo)).length;
+	});
+
+	/** 折叠 / 展开一个分组：只改视图输入，不动数据、不发请求 */
+	function toggleCombo(id: string): void {
+		collapsedCombos.value = collapsedCombos.value.includes(id)
+			? collapsedCombos.value.filter((item) => item !== id)
+			: [...collapsedCombos.value, id];
+		// 位移是叠在几何上的增量：成员一变，同组其它节点的带内位置会重排，旧增量一律作废
+		// （与切布局同一条理由 —— 留着会既不在几何位、也不在用户放下的位置）。
+		nodeOffsets.value = clearNodeOffsets();
+	}
+
+	/** 全部展开（「恢复默认配置」之外的独立动作，分组卡片上的那一枚按钮用） */
+	function expandAllCombos(): void {
+		if (collapsedCombos.value.length === 0)
+			return;
+		collapsedCombos.value = [];
+		nodeOffsets.value = clearNodeOffsets();
+	}
 
 	/** 旋转控件只在径向扇下有意义：其它布局不读这个角度，控件因此不渲染（不是「渲染但禁用」） */
 	const canRotate = computed(() => layoutMode.value === "radial");
@@ -309,6 +374,12 @@ export function useTopologyMonitor() {
 		moveNode,
 		resetNodeOffsets,
 		nodeOffsetCount,
+		/** 区域分组折叠（§6.11）：分组卡片 / 折叠开关 / 被遮住的节点数 */
+		comboGroups,
+		collapsedCombos,
+		collapsedNodeCount,
+		toggleCombo,
+		expandAllCombos,
 		inventory,
 		stats,
 		/** 通道能力位（`configured` / `writeEnabled` / `timeoutMs` / `readinessPath`） */

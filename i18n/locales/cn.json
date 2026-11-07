@@ -237,6 +237,52 @@
 				"simName": "仿真名称",
 				"simStatus": "仿真状态"
 			},
+			"link": {
+				"title": "链路详情",
+				"close": "关闭链路详情",
+				"type": "链路类型",
+				"medium": "介质",
+				"relation": "关系",
+				"adminStatus": "管理状态",
+				"bandwidth": "带宽",
+				"trafficIn": "入流量",
+				"trafficOut": "出流量",
+				"utilIn": "入向利用率",
+				"utilOut": "出向利用率",
+				"packetLoss": "丢包率",
+				"errorRate": "误码率",
+				"notComputed": "未计算",
+				"utilNotComputed": "利用率未计算",
+				"utilNotComputedBody": "上游这四项（利用率 / 丢包 / 误码）实测恒为 0，与流量数据不自洽：按「未计算」处理，不写成 0%。",
+				"trafficLine": "入 {in} / 出 {out} Mbps",
+				"utilLine": "利用率 入 {in} / 出 {out}"
+			},
+			"wifi": {
+				"title": "无线",
+				"ssid": "SSID",
+				"band": "频段",
+				"channel": "信道",
+				"dbm": "信号强度",
+				"clients": "终端数",
+				"util": "信道利用率",
+				"txPower": "发射功率"
+			},
+			"groups": {
+				"title": "区域分组",
+				"hint": "折叠只影响这张图：组的计数与成员清单照原样保留，数据不增不减。",
+				"collapse": "收起该组",
+				"expand": "展开该组",
+				"expandAll": "全部展开",
+				"collapsed": "已收起",
+				"collapsedBadge": "已收起 {count} 台（{groups} 组）",
+				"members": "{visible} / {declared} 台在图上",
+				"countsUnknown": "上游未给分层计数",
+				"counts": {
+					"distro": "汇聚",
+					"access": "接入",
+					"terminal": "终端"
+				}
+			},
 			"legend": {
 				"title": "图例",
 				"simulatedHint": "虚线外环表示该节点来自仿真运行态（8001）。"

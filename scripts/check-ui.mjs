@@ -1955,6 +1955,119 @@ if (upstreamPort) {
 			+ ` labels=${nestedLabels.join("|")} cpu=${nestedFacts.cpu} if=${nestedFacts.interfaces} flatSame=${shapeSame}`
 		);
 
+		// A28：链路事实（§6.11）。现网 48/48 链路的 `in|out_util_pct` / `packet_loss` / `error_rate`
+		// 全是 0，而 21/48 的 `traffic_in|out` 非零（`traffic_out: 16.18` 配 `out_util_pct: 0`）——
+		// 这四个 0 是「没算」。断言钉两件事：点链路出卡片且基础事实照实（介质 / 关系 / 管理状态 /
+		// 带宽原文 / 双向流量），四个利用率维度写「未计算」而**绝不出现 `0%`**。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-nested`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		const clickedLink = await page.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-link-key]"))
+				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-key") ?? ""));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return link?.getAttribute("data-link-key") ?? null;
+		});
+		await page.waitForTimeout(400);
+		const linkCard = await page.evaluate((linkKey) => {
+			const read = (key) => document.querySelector(`[data-testid='topology-link-fact-${key}']`)?.textContent?.trim() ?? "";
+			return {
+				card: !!document.querySelector("[data-testid='topology-link-card']"),
+				type: read("type"),
+				medium: read("medium"),
+				relation: read("relation"),
+				admin: read("admin"),
+				bandwidth: read("bandwidth"),
+				trafficIn: read("traffic-in"),
+				trafficOut: read("traffic-out"),
+				utilIn: read("util-in"),
+				utilOut: read("util-out"),
+				packetLoss: read("packet-loss"),
+				errorRate: read("error-rate"),
+				// 卡片上所有事实格的读数：`0%` 一个都不许出现（四个 0 是「没算」，见 §6.11）
+				cells: Array.from(document.querySelectorAll("[data-testid^='topology-link-fact-']"))
+					.map((el) => (el.textContent ?? "").trim()),
+				title: document.querySelector(`[data-link-key='${linkKey}'] title`)?.textContent ?? ""
+			};
+		}, clickedLink);
+		const linkFactsOk = linkCard.type === "fiber" && linkCard.medium === "optical"
+			&& linkCard.relation === "up" && linkCard.admin === "enabled"
+			&& linkCard.bandwidth === "1 Gbps"
+			&& linkCard.trafficIn === "12.5 Mbps" && linkCard.trafficOut === "16.18 Mbps";
+		const utilNotComputed = ["utilIn", "utilOut", "packetLoss", "errorRate"]
+			.every((key) => linkCard[key] === "未计算");
+		log(
+			"A28 点链路出事实卡：基础事实 + 双向流量照实，利用率四项写「未计算」（不出 0%）",
+			!!clickedLink && linkCard.card && linkFactsOk && utilNotComputed
+			&& !linkCard.cells.includes("0%") && linkCard.title.includes("未计算"),
+			`key=${clickedLink} type=${linkCard.type} medium=${linkCard.medium} bw=${linkCard.bandwidth}`
+			+ ` in=${linkCard.trafficIn} out=${linkCard.trafficOut} util=${linkCard.utilIn}/${linkCard.utilOut}`
+			+ `/pl=${linkCard.packetLoss}/er=${linkCard.errorRate} cells=${linkCard.cells.join(",")}`
+			+ ` title=${linkCard.title}`
+		);
+
+		// A29：区域分组折叠（§6.11）。`combo-edge` 折起来后画布上少了它的 3 台与挂在上面的 4 条链路，
+		// 但**组计数一个字都不变**（`counts` 是上游自报，不是画布统计）——「全部展开」复原。
+		const groupRead = () => page.evaluate(() => ({
+			nodes: document.querySelectorAll("[data-testid='topology-node']").length,
+			links: document.querySelectorAll("[data-link-key]").length,
+			badge: document.querySelector("[data-testid='topology-collapsed']")?.textContent?.trim() ?? "",
+			counts: document.querySelector("[data-testid='topology-group-counts-combo-edge']")?.textContent?.trim() ?? "",
+			members: document.querySelector("[data-testid='topology-groups-expand']") ? "expand" : "collapsed-none"
+		}));
+		const groupsBefore = await groupRead();
+		await page.click("[data-testid='topology-combo-toggle'][data-combo-id='combo-edge']");
+		await page.waitForTimeout(400);
+		const groupsCollapsed = await groupRead();
+		await page.click("[data-testid='topology-groups-expand']");
+		await page.waitForTimeout(400);
+		const groupsRestored = await groupRead();
+		log(
+			"A29 折叠区域分组：画布摘掉该组节点与挂边，组计数不变，「全部展开」复原",
+			groupsBefore.nodes === 6 && groupsBefore.links === 6
+			&& groupsCollapsed.nodes === 3 && groupsCollapsed.links === 2
+			&& groupsCollapsed.counts === groupsBefore.counts && groupsCollapsed.counts.includes("终端 2")
+			&& groupsCollapsed.badge.includes("3") && groupsCollapsed.members === "expand"
+			&& groupsRestored.nodes === 6 && groupsRestored.links === 6 && groupsRestored.badge === "",
+			`before=${groupsBefore.nodes}/${groupsBefore.links} collapsed=${groupsCollapsed.nodes}/${groupsCollapsed.links}`
+			+ ` counts=${groupsBefore.counts}→${groupsCollapsed.counts} badge=${groupsCollapsed.badge}`
+			+ ` restored=${groupsRestored.nodes}/${groupsRestored.links}`
+		);
+
+		// A30：无线事实卡（§6.11）。带 Wi-Fi 字段的节点（实测 27/36）才画这块，七项照实不换算；
+		// 一个字段都没有的节点（核心路由器）**不画**——画一排「—」等于说「这台 AP 的 SSID 取不到」。
+		const wifiOf = async (nodeId) => {
+			await page.evaluate((id) => {
+				const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+					.find((el) => el.getAttribute("data-node-id") === id);
+				node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			}, nodeId);
+			await page.waitForTimeout(400);
+			return page.evaluate(() => {
+				const read = (key) => document.querySelector(`[data-testid='topology-wifi-${key}']`)?.textContent?.trim() ?? "";
+				return {
+					card: !!document.querySelector("[data-testid='topology-wifi-card']"),
+					ssid: read("ssid"),
+					band: read("band"),
+					channel: read("channel"),
+					dbm: read("dbm"),
+					clients: read("clients"),
+					util: read("util"),
+					txPower: read("tx-power")
+				};
+			});
+		};
+		const apWifi = await wifiOf("10.0.0.4");
+		const coreWifi = await wifiOf("10.0.0.1");
+		log(
+			"A30 无线事实卡：AP 七项照实（SSID / 频段 / 信道 / 信号 / 终端 / 利用率 / 发射功率），非 AP 不画",
+			apWifi.card && apWifi.ssid === "NMCPS-Lab" && apWifi.band === "5G" && apWifi.channel === "149"
+			&& apWifi.dbm === "-52 dBm" && apWifi.clients === "12" && apWifi.util === "34%" && apWifi.txPower === "20 dBm"
+			&& !coreWifi.card,
+			`ap=${apWifi.ssid}/${apWifi.band}/${apWifi.channel}/${apWifi.dbm}/${apWifi.clients}/${apWifi.util}/${apWifi.txPower}`
+			+ ` card=${apWifi.card} coreCard=${coreWifi.card}`
+		);
+
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
 		await page.reload({ waitUntil: "networkidle" });
 		await page.waitForTimeout(400);

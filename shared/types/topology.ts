@@ -10,8 +10,9 @@
 //     链路 `data.bandwidth` 是 `"100 Mbps"`）—— `NMCPS-DESIGN-001` §6.10；
 //   · 节点 `id` 是**管理 IP**（如 `10.0.0.2`），展示名在 `data.deviceName` / `data.label`；
 //   · 节点 `status` 数值口径 `1=在线 / 2=告警 / 0=离线`，也会直接给字符串；
-//   · 链路 `bandwidth` 实测**全为 0**（真值缺失），因此页面不得把 `0` 当带宽展示；
-//   · 链路另有 `linkType` / `bandwidth_util_pct` / `sourcePort` / `targetPort`，`medium` 上游没有。
+//   · 链路 `bandwidth` 实测是**字符串**（`"100 Mbps"` / `"1 Gbps"` / `"4 Gbps"`，数字 0 也出现过，
+//     0 = 真值缺失，页面不得把 0 当带宽）；`medium` / `relation` / `admin_status` / `telemetry`
+//     2026-11-07 复测 48/48 齐全，形态见 `TopologyLinkTelemetry`；
 //
 // 形状可能被信封包一层（`{ code, data: { nodes, edges } }`）或直接平铺；BFF 网关统一包成
 // `ApiResponse` 后 `data` 即本文件描述的对象，解包与状态归一由 `app/utils/graph/topologyNormalize.ts` 完成。
@@ -94,6 +95,46 @@ export interface TopologyGraphNode {
 	/** 运行时长（秒） */
 	uptime?: number | null
 	location?: string | null
+	// ── 无线事实（AP；2026-11-07 复测：27/36 节点带这组字段，`bssid` / `temperature` 各 9/36）──
+	// 缺省即未知（同 §6.3 铁律）：没有这组字段的节点不画无线卡，而不是画一排「—」。
+	/** SSID（上游原样，属数据不翻译） */
+	ssid?: string | null
+	/** 频段（实测 `2.4G` / `5G` 这种写法，原样展示，不做单位换算） */
+	band?: string | null
+	/** 信道号 */
+	channel?: number | null
+	/** 信号强度（dBm，负值正常） */
+	dbm?: number | null
+	/** 关联终端数 */
+	clients?: number | null
+	/** 信道利用率（%） */
+	util?: number | null
+	/** 发射功率（dBm） */
+	tx_power?: number | null
+}
+
+/**
+ * 链路遥测（`data.telemetry`；2026-11-07 复测 48/48 链路都带，字段固定为下表七项）。
+ *
+ * 口径警告：`in_util_pct` / `out_util_pct` / `packet_loss` / `error_rate` 实测**全为 0**，
+ * 而同一批链路的 `traffic_in` / `traffic_out` 有 21/48 非零 —— 说明这四个 0 是「没算」不是「空闲」。
+ * 展示层因此只在 `> 0` 时才认这四个维度，否则写「未计算」，绝不写 `0%`（`NMCPS-DESIGN-001` §6.11）。
+ */
+export interface TopologyLinkTelemetry {
+	/** 入流量（Mbps） */
+	traffic_in?: number | null
+	/** 出流量（Mbps） */
+	traffic_out?: number | null
+	/** 入向利用率（%）；实测恒 0 = 未计算 */
+	in_util_pct?: number | null
+	/** 出向利用率（%）；同上 */
+	out_util_pct?: number | null
+	/** 丢包率（%）；同上 */
+	packet_loss?: number | null
+	/** 误码率（%）；同上 */
+	error_rate?: number | null
+	/** 遥测采集时间（上游原样字符串） */
+	metric_updated_at?: string | null
 }
 
 /** 图链路（线格式；`bandwidth` 实测为字符串 `"100 Mbps"` 或 0） */
@@ -114,12 +155,30 @@ export interface TopologyGraphLink {
 	bandwidthUtilPct?: number | null
 	sourcePort?: string | null
 	targetPort?: string | null
+	// ── 链路基础事实（2026-11-07 复测：48/48 链路齐全，拆自 `data.*`）──
+	/** 介质（实测 `wifi24` / `eth100m` / `copper1g` / `optical`，上游原样，属数据不翻译） */
+	medium?: string | null
+	/** 上下游关系（实测 `up` / `peer` / `down`） */
+	relation?: string | null
+	/** 管理状态（上游原样，如 `enabled` / `disabled`） */
+	admin_status?: string | null
+	/** 遥测（环境 / 流量；利用率口径见 `TopologyLinkTelemetry` 的口径警告） */
+	telemetry?: TopologyLinkTelemetry | null
 }
 
-/** 组合（上游 3 个；字段未逐项取证，页面只按 `id` 去重计数） */
+/**
+ * 组合（上游实测 3 组、每组 `children` 11 个）：`{ id, data: { label, layer, root, counts }, children }`。
+ * `counts` 实测形如 `{ distro, access, terminal }` —— 折叠角标与分组卡片都只读它（`NMCPS-DESIGN-001` §6.11）。
+ */
 export interface TopologyCombo {
 	id: string
 	label?: string | null
+	/** 上游 `data` 外壳（`label` / `layer` / `root` / `counts` 都在里面） */
+	data?: Record<string, unknown> | null
+	/** 组内节点 id 清单（`flattenTopologyCombo()` 已把 `data.children` 抬到这里） */
+	children?: string[] | null
+	/** 组内分层计数（`distro` / `access` / `terminal`）；缺省时页面按 `children` 长度兜底 */
+	counts?: Record<string, number> | null
 	[key: string]: unknown
 }
 

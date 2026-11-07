@@ -4,6 +4,7 @@
 // 设计基准：NMCPS-DESIGN-001 §6.1 / §七（图形形态）、NMCPS-ADR-0019 D1（图形自绘、布局走纯函数）。
 // 字段口径见 `shared/types/topology.ts` 顶部注记（2026-10-14 只读实测）。
 import type {
+	TopologyCombo,
 	TopologyGraph,
 	TopologyGraphLink,
 	TopologyGraphNode,
@@ -179,7 +180,15 @@ export function flattenTopologyNode(raw: TopologyGraphNode): TopologyGraphNode {
 		trafficOutKbps: lifted("trafficOutKbps"),
 		trafficTotalKbps: lifted("trafficTotalKbps"),
 		uptime: lifted("uptime"),
-		location: lifted("location")
+		location: lifted("location"),
+		// 无线事实（AP）：字符串 / 数字各自收窄，缺省保持 `undefined`（= 未知，不补 0）
+		ssid: firstString(raw.ssid, data.ssid),
+		band: firstString(raw.band, data.band),
+		channel: (data.channel ?? raw.channel) as number | null | undefined,
+		dbm: (data.dbm ?? raw.dbm) as number | null | undefined,
+		clients: (data.clients ?? raw.clients) as number | null | undefined,
+		util: (data.util ?? raw.util) as number | null | undefined,
+		tx_power: (data.tx_power ?? raw.tx_power) as number | null | undefined
 	};
 }
 
@@ -200,12 +209,41 @@ export function flattenTopologyLink(raw: TopologyGraphLink): TopologyGraphLink {
 		bandwidth_util_pct: (data.bandwidth_util_pct ?? raw.bandwidth_util_pct) as number | null | undefined,
 		bandwidthUtilPct: (data.bandwidth_util_pct ?? raw.bandwidthUtilPct) as number | null | undefined,
 		sourcePort: firstString(raw.sourcePort, data.sourcePort),
-		targetPort: firstString(raw.targetPort, data.targetPort)
+		targetPort: firstString(raw.targetPort, data.targetPort),
+		// 基础事实（2026-11-07 复测 48/48 齐全）：介质 / 关系 / 管理状态在上游 `data` 里，
+		// 都是**字符串原样**（`wifi24` / `optical`、`up` / `peer`、`enabled`），不做词表映射 —— 映射会丢真值。
+		medium: firstString(raw.medium, data.medium),
+		relation: firstString(raw.relation, data.relation),
+		admin_status: firstString(raw.admin_status, data.admin_status),
+		// 遥测：整个对象原样抬上来（嵌套字段的口径收窄归 `linkFactsOf()`，这里不做默认值）
+		telemetry: asRecord(data.telemetry) ?? asRecord(raw.telemetry)
 	};
 }
 
 /**
- * 整张图归一（节点 + 链路都拍平；`edges` / `links` 两种键名各自保留，解包仍由 `topologyLinksOf()` 决定）。
+ * 组合线格式 → 读模型：`data.label` / `data.children` / `data.counts` 抬到扁平槽位。
+ *
+ * 上游实测（§6.11）：`{ id, data: { label, layer, root, counts: { distro, access, terminal } }, children: [...] }`。
+ * `children` 实测在顶层，`counts` 在 `data` 里 —— 两处都收，谁在就认谁；`ids` 只保留字符串项。
+ */
+export function flattenTopologyCombo(raw: TopologyCombo): TopologyCombo {
+	const data = dataOf(raw);
+	const children = data.children ?? raw.children;
+	const counts = data.counts ?? raw.counts;
+
+	return {
+		...raw,
+		id: firstString(raw.id, data.id) ?? "",
+		label: firstString(data.label, raw.label),
+		children: Array.isArray(children)
+			? children.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+			: null,
+		counts: asRecord(counts) as Record<string, number> | null
+	};
+}
+
+/**
+ * 整张图归一（节点 + 链路 + 组合都拍平；`edges` / `links` 两种键名各自保留，解包仍由 `topologyLinksOf()` 决定）。
  *
  * 这是**唯一**把线格式变成读模型的地方：布局（`layoutTopology()`）、事实层（`nodeFactsOf()`）、
  * 画布都只吃它的产物，同一份上游数据因此只有一套字段口径。
@@ -215,6 +253,17 @@ export function normalizeTopologyGraph(graph: TopologyGraph): TopologyGraph {
 		...graph,
 		nodes: (graph.nodes ?? []).map(flattenTopologyNode),
 		...(graph.edges ? { edges: graph.edges.map(flattenTopologyLink) } : {}),
-		...(graph.links ? { links: graph.links.map(flattenTopologyLink) } : {})
+		...(graph.links ? { links: graph.links.map(flattenTopologyLink) } : {}),
+		...(graph.combos ? { combos: graph.combos.map(flattenTopologyCombo) } : {})
 	};
+}
+
+/**
+ * 链路的稳定标识（画布与页面**同一套算法**，用于「选中的那条链路」跨轮询不丢）。
+ *
+ * 上游实测链路带 `id`；没有 `id` 时退回 `source|target|index` —— 加 `index` 是为了平行链路
+ * （同一对端点多条边是真实存在的，去重会掩盖它，见 `topologyNeighborsOf()` 的口径）各自可选。
+ */
+export function topologyLinkKey(link: TopologyGraphLink, index = 0): string {
+	return link.id?.trim() ? link.id.trim() : `${link.source}|${link.target}|${index}`;
 }

@@ -237,6 +237,52 @@
 				"simName": "Simulator name",
 				"simStatus": "Simulator status"
 			},
+			"link": {
+				"title": "Link facts",
+				"close": "Close link details",
+				"type": "Link type",
+				"medium": "Medium",
+				"relation": "Relation",
+				"adminStatus": "Admin status",
+				"bandwidth": "Bandwidth",
+				"trafficIn": "Ingress",
+				"trafficOut": "Egress",
+				"utilIn": "Ingress utilization",
+				"utilOut": "Egress utilization",
+				"packetLoss": "Packet loss",
+				"errorRate": "Error rate",
+				"notComputed": "not computed",
+				"utilNotComputed": "utilization not computed",
+				"utilNotComputedBody": "Upstream returns 0 for these four (utilization / packet loss / error rate) while traffic is non-zero — read-only measurement shows the value is not computed, so it is never shown as 0%.",
+				"trafficLine": "in {in} / out {out} Mbps",
+				"utilLine": "utilization in {in} / out {out}"
+			},
+			"wifi": {
+				"title": "Wireless",
+				"ssid": "SSID",
+				"band": "Band",
+				"channel": "Channel",
+				"dbm": "Signal",
+				"clients": "Clients",
+				"util": "Channel utilization",
+				"txPower": "Tx power"
+			},
+			"groups": {
+				"title": "Area groups",
+				"hint": "Folding only affects this drawing: group counts and member lists stay exactly as upstream reports them.",
+				"collapse": "Fold this group",
+				"expand": "Unfold this group",
+				"expandAll": "Unfold all",
+				"collapsed": "folded",
+				"collapsedBadge": "{count} nodes folded ({groups} groups)",
+				"members": "{visible} / {declared} on canvas",
+				"countsUnknown": "Upstream reports no per-layer counts",
+				"counts": {
+					"distro": "distro",
+					"access": "access",
+					"terminal": "terminal"
+				}
+			},
 			"legend": {
 				"title": "Legend",
 				"simulatedHint": "A dashed outer ring marks a node coming from the simulator runtime (8001)."
