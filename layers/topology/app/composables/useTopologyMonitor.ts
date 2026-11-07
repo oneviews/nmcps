@@ -7,10 +7,13 @@
 // 两路数据的失败语义刻意不同：主上游失败 → 页面级错误；仿真通道失败 → 只读降级 + 一行说明
 // （DESIGN-001 §八「不允许把可选上游的抖动升级成整页错误」）。
 import type { SimulatorNodeMarker } from "~~/app/utils/graph/simulatorOverlay";
+import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
+import type { NodeOffset, NodeOffsetMap } from "~~/app/utils/graph/topologyNodeOffsets";
 import type { SimulatorChannelInfo, SimulatorNetworkStats, SimulatorRuntimeInventory } from "~~/shared/types/simulator";
 import type { TopologyGraph } from "~~/shared/types/topology";
 import { buildSimulatorIndex, simulatorMarkerOf } from "~~/app/utils/graph/simulatorOverlay";
-import { layoutTopology } from "~~/app/utils/graph/topologyLayout";
+import { layoutTopology, RADIAL_ROTATE_DEG, TOPOLOGY_ROTATE_MAX, TOPOLOGY_ROTATE_MIN } from "~~/app/utils/graph/topologyLayout";
+import { clearNodeOffsets, countNodeOffsets, setNodeOffset } from "~~/app/utils/graph/topologyNodeOffsets";
 import { normalizeNodeStatus, topologyLinksOf, topologyNodeIp } from "~~/app/utils/graph/topologyNormalize";
 import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
@@ -56,11 +59,67 @@ export function useTopologyMonitor() {
 	const lastLoadedAt = ref<Date | null>(null);
 	/** 正在下发的动作（按钮 `loading` 与重复提交的门闩） */
 	const acting = ref<SimulatorNodeAction | null>(null);
+	/** 2D 布局形态（§6.8）：默认分层网格，与 1.0 的默认 radial 不同 —— 2.0 的径向扇是可选视图 */
+	const layoutMode = ref<TopologyLayoutMode>("layered");
+	/** 径向扇整体旋转（度，视觉逆时针为正；仅 `radial` 布局读取） */
+	const rotationDeg = ref<number>(RADIAL_ROTATE_DEG);
+	/**
+	 * 节点手动位移（§6.9，1.0 v0.36 用户规格）：**独立增量层**，几何坐标仍由 `layoutTopology()` 唯一产生。
+	 * 放在这里而不是画布组件里，是因为「恢复默认配置」要知道有没有可复位的位移，
+	 * 而且它必须与旋转角 / 视口同源受 `useTopologyMonitor()` 管理。
+	 */
+	const nodeOffsets = ref<NodeOffsetMap>(clearNodeOffsets());
 
 	let timer: ReturnType<typeof setInterval> | undefined;
 
-	/** 归一链路 + 布局（纯函数，同一份数据恒得同一张图） */
-	const layout = computed(() => layoutTopology(graph.value?.nodes ?? [], topologyLinksOf(graph.value)));
+	/** 归一链路 + 布局（纯函数，同一份数据 + 同一组选项恒得同一张图） */
+	const layout = computed(() => layoutTopology(
+		graph.value?.nodes ?? [],
+		topologyLinksOf(graph.value),
+		{ mode: layoutMode.value, rotateDeg: rotationDeg.value }
+	));
+
+	/** 旋转控件只在径向扇下有意义：其它布局不读这个角度，控件因此不渲染（不是「渲染但禁用」） */
+	const canRotate = computed(() => layoutMode.value === "radial");
+
+	/** 切换布局：只改坐标，不改选中与裁剪结果 */
+	function setLayoutMode(mode: TopologyLayoutMode): void {
+		if (layoutMode.value === mode)
+			return;
+		layoutMode.value = mode;
+		// 位移是「相对**当前**几何」的增量：换一套几何还叠着旧增量，节点会既不在新几何位、
+		// 又不在用户当初放下的位置（层级树尤其明显：整行会被推离画布中心）。
+		// 所以切布局 = 清位移层（1.0 语义：位移层只叠在预设几何上，引擎布局天然丢弃）。
+		nodeOffsets.value = clearNodeOffsets();
+	}
+
+	/** 记录单台节点的拖拽落点（画布 `offsetChange` → 这里；容差见 `topologyNodeOffsets`） */
+	function moveNode(id: string, offset: NodeOffset): void {
+		nodeOffsets.value = setNodeOffset(nodeOffsets.value, id, offset);
+	}
+
+	/** 清空位移表（= 「恢复默认配置」的位移部分） */
+	function resetNodeOffsets(): void {
+		nodeOffsets.value = clearNodeOffsets();
+	}
+
+	/** 位移条目数（供「恢复默认配置」的禁用态判定，与 1.0 的 `offsetsChange` 同源语义） */
+	const nodeOffsetCount = computed(() => countNodeOffsets(nodeOffsets.value));
+
+	/** 旋转角写入前钳到 [-90, 90]（滑块 / 步进 / 复位共用一条通道） */
+	function rotateTo(deg: number): void {
+		rotationDeg.value = Math.max(TOPOLOGY_ROTATE_MIN, Math.min(TOPOLOGY_ROTATE_MAX, deg));
+	}
+
+	/** ±步进（按钮）：视觉逆时针为正 */
+	function nudgeRotation(delta: number): void {
+		rotateTo(rotationDeg.value + delta);
+	}
+
+	/** 复位回几何库的默认角（1.0 同源常量，页面不写死数字） */
+	function resetRotation(): void {
+		rotationDeg.value = RADIAL_ROTATE_DEG;
+	}
 
 	/** 节点 id → 仿真标记；通道没起来时为空表，画布因此不带虚线外环 */
 	const markers = computed<Record<string, SimulatorNodeMarker>>(() => {
@@ -98,6 +157,8 @@ export function useTopologyMonitor() {
 		return {
 			id: item.id,
 			label: item.label,
+			/** 线格式原始节点：详情栏的 CPU / 内存 / 流量等事实由 `nodeFactsOf()` 从这里读 */
+			node: item.node,
 			ip: topologyNodeIp(item.node),
 			tier: item.tier,
 			status: normalizeNodeStatus(item.node.status),
@@ -232,6 +293,20 @@ export function useTopologyMonitor() {
 	return {
 		graph,
 		layout,
+		/** 2D 布局形态（§6.8）+ 切换入口 */
+		layoutMode,
+		setLayoutMode,
+		/** 径向扇旋转：角度 / 是否可旋转 / 步进 / 复位 */
+		rotationDeg,
+		canRotate,
+		rotateTo,
+		nudgeRotation,
+		resetRotation,
+		/** 节点手动位移层（§6.9）：表 / 记录 / 清空 / 条目数 */
+		nodeOffsets,
+		moveNode,
+		resetNodeOffsets,
+		nodeOffsetCount,
 		inventory,
 		stats,
 		/** 通道能力位（`configured` / `writeEnabled` / `timeoutMs` / `readinessPath`） */

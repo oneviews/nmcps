@@ -53,6 +53,32 @@ export interface TopologyGraphNode {
 	brand?: string | null
 	color?: string | null
 	sysDescr?: string | null
+	// ── 节点指标事实（1.0 对同一端点的消费口径见 `_reference/nmcps-v1/shared/types/topology.ts`
+	//    的 `TopologyNodeData`：`cpu` / `memory` 是百分比，`traffic*` 是 Mbps）──
+	//
+	// 口径铁律（NMCPS-CONTRACT-002 §6.3）：**缺省即未知，不当 0**。1.0 用 `-1` 表示「取不到」，
+	// 这里两者都收（`-1` 与缺省等价），展示层统一成「—」而不是 `0%`。
+	/** CPU 使用率（%）；`-1` / 缺省 = 未知 */
+	cpu?: number | null
+	/** 内存使用率（%）；`-1` / 缺省 = 未知 */
+	memory?: number | null
+	/** 接口总数；缺省 = 未知（0 是真实值，不与之混淆） */
+	interfaces?: number | null
+	/** 邻居数（上游口径；画布上的邻居数另由链路推导，见 `topologyNeighborsOf()`） */
+	neighbors?: number | null
+	/** 总流量（Mbps，1.0 口径 = `traffic_in + traffic_out`） */
+	traffic?: number | null
+	/** 入流量（Mbps） */
+	traffic_in?: number | null
+	/** 出流量（Mbps） */
+	traffic_out?: number | null
+	/** 旧口径（Kbps）：1.0 的 `trafficInKbps` 等，归一为 Mbps 时 /1000 */
+	trafficInKbps?: number | null
+	trafficOutKbps?: number | null
+	trafficTotalKbps?: number | null
+	/** 运行时长（秒） */
+	uptime?: number | null
+	location?: string | null
 }
 
 /** 图链路（线格式；`bandwidth` 实测全为 0） */

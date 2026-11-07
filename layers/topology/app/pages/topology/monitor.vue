@@ -4,6 +4,7 @@
 		<Teleport to="#app-toolbar-left">
 			<UTooltip :text="$t('pages.topology-monitor.refresh')">
 				<UButton
+					data-testid="topology-refresh"
 					size="sm"
 					color="neutral"
 					variant="ghost"
@@ -13,6 +14,20 @@
 					@click="refresh()"
 				/>
 			</UTooltip>
+
+			<!-- 2D 布局切换（§6.8）：词表只有三种，都是 2.0 自己算得出来的几何 -->
+			<UDropdownMenu :items="layoutItems" :content="{ align: 'start' }">
+				<UButton
+					data-testid="topology-layout-switcher"
+					:data-layout="layoutMode"
+					size="sm"
+					color="neutral"
+					variant="ghost"
+					icon="carbon:flow"
+					trailing-icon="carbon:chevron-down"
+					:label="$t(`pages.topology-monitor.layouts.${layoutMode}`)"
+				/>
+			</UDropdownMenu>
 		</Teleport>
 
 		<Teleport to="#app-toolbar-right">
@@ -150,14 +165,18 @@
 			<!-- 画布：布局由纯函数注入，交互收敛在 `useGraphInteraction()` -->
 			<div class="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-(--ui-border) bg-(--ui-bg)">
 				<GraphTopologyCanvas
+					ref="canvasRef"
 					:nodes="layout.nodes"
 					:links="layout.links"
 					:width="layout.width"
 					:height="layout.height"
 					:selected-id="selectedId"
 					:markers="markers"
+					:offsets="nodeOffsets"
 					:label="$t('pages.topology-monitor.canvasLabel')"
 					@select="selectNode"
+					@offset-change="moveNode"
+					@viewport-change="(dirty: boolean) => (viewportDirty = dirty)"
 				/>
 
 				<!-- 裁剪角标（§八）：超出 400 节点 / 1,200 链路时说明裁了多少 -->
@@ -171,6 +190,82 @@
 				>
 					{{ $t("pages.topology-monitor.cropped", { nodes: layout.croppedNodes, links: layout.croppedLinks }) }}
 				</UBadge>
+
+				<!-- 径向扇旋转控件（§6.8，1.0 v0.28 同款）：只在 `radial` 布局出现 ——
+					其它布局不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」 -->
+				<div
+					v-if="canRotate"
+					data-testid="topology-rotate"
+					class="absolute top-2 right-2 flex items-center gap-1 rounded-md border border-(--ui-border) bg-(--ui-bg)/90 px-1.5 py-1"
+				>
+					<USlider
+						:model-value="rotationDeg"
+						:min="TOPOLOGY_ROTATE_MIN"
+						:max="TOPOLOGY_ROTATE_MAX"
+						:step="1"
+						size="sm"
+						class="w-24"
+						:aria-label="$t('pages.topology-monitor.rotate.label')"
+						@update:model-value="onRotate"
+					/>
+					<UBadge size="sm" variant="outline" color="neutral" class="min-w-10 justify-center tabular-nums">
+						{{ rotationDeg }}°
+					</UBadge>
+					<UFieldGroup size="sm">
+						<UButton
+							data-testid="topology-rotate-ccw"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							icon="carbon:rotate-ccw"
+							:aria-label="$t('pages.topology-monitor.rotate.ccw')"
+							@click="nudgeRotation(TOPOLOGY_ROTATE_STEP)"
+						/>
+						<UButton
+							data-testid="topology-rotate-cw"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							icon="carbon:rotate-cw"
+							:aria-label="$t('pages.topology-monitor.rotate.cw')"
+							@click="nudgeRotation(-TOPOLOGY_ROTATE_STEP)"
+						/>
+					</UFieldGroup>
+					<UTooltip :text="$t('pages.topology-monitor.rotate.reset')">
+						<UButton
+							data-testid="topology-rotate-reset"
+							size="xs"
+							color="neutral"
+							variant="ghost"
+							icon="carbon:reset"
+							:disabled="rotationDeg === RADIAL_ROTATE_DEG"
+							:aria-label="$t('pages.topology-monitor.rotate.reset')"
+							@click="resetRotation()"
+						/>
+					</UTooltip>
+				</div>
+
+				<!-- 恢复默认配置（§6.9，1.0 v0.36 同款三合一）：清位移 → 旋转角回默认 → 视口复位。
+					放在画布左下角而不是顶栏：它只作用于这张画布，顶栏左区留给「刷新 + 布局」两个集合域动作。 -->
+				<div class="absolute bottom-2 left-2">
+					<UTooltip
+						:text="canResetView
+							? $t('pages.topology-monitor.resetView.label')
+							: $t('pages.topology-monitor.resetView.hint')"
+					>
+						<UButton
+							data-testid="topology-reset-view"
+							:data-offsets="nodeOffsetCount"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							icon="carbon:reset"
+							:label="$t('pages.topology-monitor.resetView.label')"
+							:disabled="!canResetView"
+							@click="resetViewConfig()"
+						/>
+					</UTooltip>
+				</div>
 			</div>
 
 			<!-- 详情栏：选中节点 → 现网口径 + 仿真标记；未选中给图例 -->
@@ -205,6 +300,70 @@
 								{{ selected.category || "—" }}
 							</dd>
 						</dl>
+
+						<!-- 节点事实（NMCPS-DESIGN-001 §6.5）：CPU / 内存进度条 + 接口·邻居·流量 KPI。
+						未知（上游没给 / 1.0 的 `-1` 哨兵）一律写「—」且不画空进度条 —— 空条读成 0%。 -->
+						<div class="mt-3 flex flex-col gap-2 border-t border-(--ui-border) pt-2 text-xs">
+							<div v-for="meter in percentMeters" :key="meter.key">
+								<div class="mb-1 flex items-baseline justify-between gap-2">
+									<span class="text-(--ui-text-muted)">{{ $t(meter.label) }}</span>
+									<span
+										:data-testid="`topology-fact-${meter.key}`"
+										class="font-medium tabular-nums"
+										:class="meter.value === null ? 'text-(--ui-text-muted)' : 'text-(--ui-text)'"
+									>{{ formatPercent(meter.value) }}</span>
+								</div>
+								<UProgress
+									v-if="meter.value !== null"
+									data-testid="topology-meter"
+									:model-value="meter.value"
+									:color="percentColor(meter.value)"
+									size="xs"
+								/>
+							</div>
+
+							<dl class="grid grid-cols-3 gap-1.5 pt-1 text-center">
+								<div v-for="card in factCards" :key="card.key" class="rounded-md bg-(--ui-bg-elevated) py-1">
+									<dt class="text-[11px] text-(--ui-text-muted)">
+										{{ card.label }}
+									</dt>
+									<dd :data-testid="`topology-fact-${card.key}`" class="text-sm font-semibold tabular-nums">
+										{{ card.text }}<span v-if="card.unit" class="ml-0.5 text-[10px] font-normal text-(--ui-text-muted)">{{ card.unit }}</span>
+									</dd>
+								</div>
+							</dl>
+						</div>
+
+						<!-- 邻居列表（1.0 的「邻居情况」）：只列**当前画布**上真实存在的链路，点一条跳过去 -->
+						<div class="mt-3 border-t border-(--ui-border) pt-2 text-xs">
+							<h3 class="mb-1 flex items-baseline justify-between gap-2 font-medium">
+								<span>{{ $t("pages.topology-monitor.detail.neighborsTitle") }}</span>
+								<span class="text-(--ui-text-muted)">{{ selectedNeighbors.length }}</span>
+							</h3>
+							<ul v-if="selectedNeighbors.length" class="flex flex-col gap-0.5">
+								<li v-for="(neighbor, index) in selectedNeighbors" :key="`${neighbor.id}-${index}`">
+									<UButton
+										data-testid="topology-neighbor"
+										:data-node-id="neighbor.id"
+										size="xs"
+										color="neutral"
+										variant="ghost"
+										block
+										class="justify-start gap-1.5"
+										@click="selectNode(neighbor.id)"
+									>
+										<span class="size-2 shrink-0 rounded-full" :class="nodeFillClass(neighbor.status)" />
+										<span class="truncate">{{ neighbor.label }}</span>
+										<UBadge size="sm" variant="subtle" :color="linkStatusColor(neighbor.linkStatus)" class="ml-auto">
+											{{ $t(statusI18nKey(neighbor.linkStatus)) }}
+										</UBadge>
+									</UButton>
+								</li>
+							</ul>
+							<p v-else class="text-(--ui-text-muted)">
+								{{ $t("pages.topology-monitor.detail.neighborsEmpty") }}
+							</p>
+						</div>
 
 						<div class="mt-3 border-t border-(--ui-border) pt-2 text-xs">
 							<template v-if="selected.marker">
@@ -365,9 +524,18 @@
 	// `/topology/monitor` 网络拓扑总览（NMCPS-DESIGN-001 §二 / §七 / §八）。
 	// 主数据源 8888 `/api/topology/graph`，第二数据源 8001 `runtime-inventory`（只读叠加）。
 	// 仿真通道未配置 / 不可达时页面照常只读：拓扑与统计继续渲染，仿真区块单独降级。
+	import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
 	import type { SimulatorChannelState, SimulatorNodeAction } from "~~/layers/topology/app/composables/useTopologyMonitor";
 	import type { TopologyNodeStatus } from "~~/shared/types/topology";
-	import { nodeFillClass, nodeStatusColor, statusI18nKey } from "~~/app/utils/graph/topologyStatusStyle";
+	import {
+		RADIAL_ROTATE_DEG,
+		TOPOLOGY_LAYOUT_MODES,
+		TOPOLOGY_ROTATE_MAX,
+		TOPOLOGY_ROTATE_MIN,
+		TOPOLOGY_ROTATE_STEP
+	} from "~~/app/utils/graph/topologyLayout";
+	import { nodeFactsOf, topologyNeighborsOf } from "~~/app/utils/graph/topologyNodeFacts";
+	import { linkStatusColor, nodeFillClass, nodeStatusColor, statusI18nKey } from "~~/app/utils/graph/topologyStatusStyle";
 	import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 	definePageMeta({ sort: 1, icon: "carbon:network-3" });
@@ -396,8 +564,59 @@
 		performNodeAction,
 		nodeCount,
 		linkCount,
-		comboCount
+		comboCount,
+		layoutMode,
+		setLayoutMode,
+		rotationDeg,
+		canRotate,
+		rotateTo,
+		nudgeRotation,
+		resetRotation,
+		nodeOffsets,
+		moveNode,
+		resetNodeOffsets,
+		nodeOffsetCount
 	} = useTopologyMonitor();
+
+	/** 画布组件实例：只为「恢复默认配置」的视口复位（`resetViewport()`）暴露 */
+	const canvasRef = ref<{ resetViewport: () => void } | null>(null);
+	/** 视口是否已被缩放 / 平移（画布 `viewportChange` 上报）：复位按钮的禁用态要诚实反映它 */
+	const viewportDirty = ref(false);
+
+	/** 是否还有可复位的用户改动（位移 / 旋转角偏离默认 / 视口被动过）—— 三者在同一处判定 */
+	const canResetView = computed(() =>
+		nodeOffsetCount.value > 0 || rotationDeg.value !== RADIAL_ROTATE_DEG || viewportDirty.value
+	);
+
+	/**
+	 * 「恢复默认配置」（1.0 v0.36 同款三合一）：清位移 → 旋转角回默认 → 视口复位。
+	 * 三步都只是**清增量**，几何基准不动；顺序无关，但一起做完用户才看得到「真的回去了」。
+	 */
+	function resetViewConfig(): void {
+		resetNodeOffsets();
+		resetRotation();
+		canvasRef.value?.resetViewport();
+	}
+
+	/**
+	 * 布局下拉项（§6.8）：一项一个 `checked`，当前布局打勾 —— 下拉本身就是「当前在哪一档」的读数。
+	 * 词表来自 `TOPOLOGY_LAYOUT_MODES`（页面不自己列），未复刻的 force / grid / circular 不出现在这里。
+	 */
+	const layoutItems = computed(() => [
+		TOPOLOGY_LAYOUT_MODES.map((mode: TopologyLayoutMode) => ({
+			label: t(`pages.topology-monitor.layouts.${mode}`),
+			type: "checkbox" as const,
+			checked: layoutMode.value === mode,
+			onSelect: () => setLayoutMode(mode)
+		}))
+	]);
+
+	/** 滑块回调（`USlider` 的 modelValue 可能是 `undefined` ⇒ 忽略，别把角度写成 NaN） */
+	function onRotate(value: number | number[] | undefined): void {
+		if (typeof value !== "number")
+			return;
+		rotateTo(value);
+	}
 
 	/** 图例固定四档 + 未知：与 `TopologyNodeStatus` 同集合，新增档位必须同时改这里与 i18n */
 	const legendStatuses: readonly TopologyNodeStatus[] = ["online", "warning", "critical", "offline"];
@@ -418,6 +637,68 @@
 	const trendEmptyText = computed(() => (trendReason.value === "no_metric_names"
 		? t("pages.topology-monitor.trend.noMetricNames")
 		: t("pages.topology-monitor.trend.empty")));
+
+	// ── 节点事实（NMCPS-DESIGN-001 §6.5，复刻 1.0 的详情栏口径）─────────────────────────────
+	// 1.0 把 `cpu / memory / interfaces / traffic` 直接铺在节点 `data` 上、用 `-1` 表示取不到，
+	// 详情栏据此画进度条与三张 KPI 卡。2.0 把读表收进 `nodeFactsOf()`：**未知一律 `null`**，
+	// 展示成「—」而不是 `0%`（CONTRACT-002 §6.3 不补 0）。
+	const selectedFacts = computed(() => nodeFactsOf(selected.value?.node));
+
+	/** 邻居从**当前画布**的链路推导（与 1.0 的「邻居数」同源），不是上游自报的 `neighbors` */
+	const selectedNeighbors = computed(() => (selected.value
+		? topologyNeighborsOf(layout.value, selected.value.id)
+		: []));
+
+	/** CPU / 内存两条进度条：`value === null` 时只留「—」，不画空进度条（空条会读成 0%） */
+	const percentMeters = computed(() => [
+		{ key: "cpu", label: "pages.topology-monitor.detail.cpu", value: selectedFacts.value.cpu },
+		{ key: "memory", label: "pages.topology-monitor.detail.memory", value: selectedFacts.value.memory }
+	]);
+
+	/** 三张 KPI 卡：接口数 / 邻居数 / 流量（流量单位 Mbps，与 1.0 同口径） */
+	const factCards = computed(() => [
+		{
+			key: "interfaces",
+			label: t("pages.topology-monitor.detail.interfaces"),
+			text: formatCount(selectedFacts.value.interfaces),
+			unit: ""
+		},
+		{
+			key: "neighbors",
+			label: t("pages.topology-monitor.detail.neighbors"),
+			text: `${selectedNeighbors.value.length}`,
+			unit: ""
+		},
+		{
+			key: "traffic",
+			label: t("pages.topology-monitor.detail.traffic"),
+			text: formatTraffic(selectedFacts.value.traffic),
+			// 未知时不带单位：`— Mbps` 会被读成「0 Mbps 只是没写小数点」
+			unit: selectedFacts.value.traffic === null ? "" : t("pages.topology-monitor.detail.trafficUnit")
+		}
+	]);
+
+	/** 百分比：未知写「—」，已知保留一位小数 */
+	function formatPercent(value: number | null): string {
+		return value === null ? "—" : `${Math.round(value * 10) / 10}%`;
+	}
+
+	/** 计数：未知写「—」；`0` 是真实值，照写 */
+	function formatCount(value: number | null): string {
+		return value === null ? "—" : `${value}`;
+	}
+
+	/** 流量（Mbps）：1.0 口径保留两位小数；未知写「—」 */
+	function formatTraffic(value: number | null): string {
+		return value === null ? "—" : `${Math.round(value * 100) / 100}`;
+	}
+
+	/** 百分比阈值色：>80 错误、>60 警告、其余主色；未知不画进度条，颜色无意义 */
+	function percentColor(value: number | null): "primary" | "warning" | "error" {
+		if (value === null)
+			return "primary";
+		return value > 80 ? "error" : value > 60 ? "warning" : "primary";
+	}
 
 	/** 动作目标：选中节点在仿真侧的那一条（没有就说明这个节点不在仿真里，写不了） */
 	const actionTarget = computed(() => selected.value?.marker ?? null);

@@ -223,6 +223,14 @@
 				"ip": "Management IP",
 				"tier": "Tier",
 				"category": "Category",
+				"cpu": "CPU usage",
+				"memory": "Memory usage",
+				"interfaces": "Interfaces",
+				"neighbors": "Neighbors",
+				"traffic": "Traffic",
+				"trafficUnit": "Mbps",
+				"neighborsTitle": "Neighbors",
+				"neighborsEmpty": "No other node on this graph links to it directly",
 				"simulated": "Simulated",
 				"notSimulated": "This node is not part of the simulator runtime",
 				"simUnavailable": "Simulator channel unavailable, cannot tell whether it is simulated",
@@ -232,6 +240,21 @@
 			"legend": {
 				"title": "Legend",
 				"simulatedHint": "A dashed outer ring marks a node coming from the simulator runtime (8001)."
+			},
+			"layouts": {
+				"layered": "Layered",
+				"radial": "Radial fan",
+				"tree": "Tier tree"
+			},
+			"rotate": {
+				"label": "Radial fan rotation",
+				"ccw": "Rotate 5° counter-clockwise",
+				"cw": "Rotate 5° clockwise",
+				"reset": "Reset rotation"
+			},
+			"resetView": {
+				"label": "Reset view",
+				"hint": "Nothing to reset — node offsets, rotation and viewport are all at their defaults"
 			},
 			"trend": {
 				"title": "Node metric trend",

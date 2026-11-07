@@ -1686,7 +1686,239 @@ if (upstreamPort) {
 			trendProbe.text.includes("已忽略 2 个非法采样点") ? "计数 2" : `未见丢弃提示：${trendProbe.text.slice(0, 100)}`
 		);
 
-		// A4：上游回空节点集 → 空态而不是空白画布
+		// A21：节点详情的事实层（复刻 1.0 的 CPU / 内存进度条 + 接口·邻居·流量 KPI + 邻居列表）。
+		// 假上游刻意给了四种节点（全给 / 只给方向流量 / 1.0 的 `-1` 哨兵 + 真实 0 / 一个都不给），
+		// 这里逐个把「已知照实、未知写『—』」钉住 —— 失败时把三个节点的读数原样打出来，别让人猜。
+		const factsOf = async (nodeId) => {
+			await page.evaluate((id) => {
+				const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+					.find((el) => el.getAttribute("data-node-id") === id);
+				node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			}, nodeId);
+			await page.waitForTimeout(500);
+			return page.evaluate(() => {
+				const read = (key) => document.querySelector(`[data-testid='topology-fact-${key}']`)?.textContent?.trim() ?? "";
+				return {
+					cpu: read("cpu"),
+					memory: read("memory"),
+					interfaces: read("interfaces"),
+					neighbors: read("neighbors"),
+					traffic: read("traffic"),
+					neighborRows: document.querySelectorAll("[data-testid='topology-neighbor']").length,
+					bars: document.querySelectorAll("[data-testid='topology-meter']").length
+				};
+			});
+		};
+		const summarizeFacts = (probe) => `cpu=${probe.cpu} mem=${probe.memory} if=${probe.interfaces} nb=${probe.neighbors} traffic=${probe.traffic} rows=${probe.neighborRows}`;
+
+		const fullFacts = await factsOf("10.0.0.1");
+		log(
+			"A21 节点详情展示事实层（CPU / 内存 / 接口 / 邻居 / 流量 + 邻居列表）",
+			fullFacts.cpu === "21.5%" && fullFacts.memory === "48%" && fullFacts.interfaces === "24"
+			&& fullFacts.neighbors === "2" && fullFacts.traffic.startsWith("12.5") && fullFacts.neighborRows === 2,
+			summarizeFacts(fullFacts)
+		);
+
+		// 未知（上游一个字段都不给）不许落成 `0%` / `0 Mbps`：两边都要是「—」，进度条一条都不画。
+		const unknownFacts = await factsOf("10.0.0.4");
+		log(
+			"A22 上游没给的事实写「—」而不是 0（不画空进度条）",
+			unknownFacts.cpu === "—" && unknownFacts.memory === "—" && unknownFacts.interfaces === "—"
+			&& unknownFacts.traffic === "—" && unknownFacts.bars === 0,
+			`${summarizeFacts(unknownFacts)} bars=${unknownFacts.bars}`
+		);
+
+		// 1.0 的 `-1` 哨兵 = 取不到（按「—」处理），而 `interfaces: 0` 是真实值（照写 0），
+		// 旧 Kbps 字段要归一成 Mbps（1500 Kbps → 1.5 Mbps）。三种口径在同一条断言里分开钉。
+		const sentinelFacts = await factsOf("10.0.0.3");
+		log(
+			"A23 1.0 的 -1 哨兵按未知处理，真实 0 与旧 Kbps 字段照实归一",
+			sentinelFacts.cpu === "—" && sentinelFacts.memory === "—" && sentinelFacts.interfaces === "0"
+			&& sentinelFacts.traffic.startsWith("1.5"),
+			summarizeFacts(sentinelFacts)
+		);
+
+		// A24 / A25：2D 布局切换与径向扇旋转（§6.8，复刻 1.0 顶栏的布局下拉 + 旋转控件）。
+		// 断言的是**几何真的换了**而不是「按钮点了没报错」：读每个节点的 `circle` 中心坐标，
+		// 三种布局必须两两不同；层级树再验「每层均值 = 画布中心」（居中分层的数学保证）。
+		const readGeometry = () => page.evaluate(() => {
+			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']")).map((el) => {
+				const circle = el.querySelector("circle:last-of-type");
+				return {
+					id: el.getAttribute("data-node-id") ?? "",
+					x: Number(circle?.getAttribute("cx") ?? NaN),
+					y: Number(circle?.getAttribute("cy") ?? NaN)
+				};
+			});
+			const rows = new Map();
+			for (const node of nodes) {
+				const row = rows.get(node.y) ?? [];
+				row.push(node.x);
+				rows.set(node.y, row);
+			}
+			return {
+				layout: document.querySelector("[data-testid='topology-layout-switcher']")?.getAttribute("data-layout") ?? "",
+				rotate: !!document.querySelector("[data-testid='topology-rotate']"),
+				badge: document.querySelector("[data-testid='topology-rotate'] .tabular-nums")?.textContent?.trim() ?? "",
+				nodes,
+				rowMeans: [...rows.values()].map((xs) => Math.round(xs.reduce((sum, x) => sum + x, 0) / xs.length)),
+				inside: nodes.every((node) => node.x >= 0 && node.x <= 1000 && node.y >= 0 && node.y <= 660)
+			};
+		});
+
+		/** 两次读数是否真的换了坐标（任一节点任一分量变化即算） */
+		const sameGeometry = (a, b) => a.nodes.length === b.nodes.length
+			&& a.nodes.every((node) => {
+				const other = b.nodes.find((item) => item.id === node.id);
+				return other && other.x === node.x && other.y === node.y;
+			});
+
+		/** 通过下拉切到某个布局：点开按钮 → 点标签匹配的菜单项（标签是 i18n 文案，页面默认中文） */
+		const switchLayout = async (label) => {
+			await page.click("[data-testid='topology-layout-switcher']");
+			await page.waitForTimeout(250);
+			const items = page.locator("[role='menuitemcheckbox']");
+			const count = await items.count();
+			for (let index = 0; index < count; index++) {
+				const text = (await items.nth(index).textContent() ?? "").trim();
+				if (text === label) {
+					await items.nth(index).click();
+					await page.waitForTimeout(250);
+					return true;
+				}
+			}
+			return false;
+		};
+
+		const layeredGeometry = await readGeometry();
+		const radialClicked = await switchLayout("径向扇");
+		const radialGeometry = await readGeometry();
+		const treeClicked = await switchLayout("层级树");
+		const treeGeometry = await readGeometry();
+		const backClicked = await switchLayout("分层");
+		const backGeometry = await readGeometry();
+
+		log(
+			"A24 三种布局可切换且真的换了坐标（层级树每层居中，节点不越画布）",
+			radialClicked && treeClicked && backClicked
+			&& layeredGeometry.layout === "layered" && radialGeometry.layout === "radial" && treeGeometry.layout === "tree"
+			&& !sameGeometry(layeredGeometry, radialGeometry) && !sameGeometry(radialGeometry, treeGeometry)
+			&& sameGeometry(backGeometry, layeredGeometry)
+			&& radialGeometry.inside && treeGeometry.inside
+			&& treeGeometry.rowMeans.length >= 2
+			&& treeGeometry.rowMeans.every((mean) => Math.abs(mean - 500) <= 1),
+			`switch=${radialClicked}/${treeClicked}/${backClicked} layout=${layeredGeometry.layout}→${radialGeometry.layout}→${treeGeometry.layout}`
+			+ ` rows=${treeGeometry.rowMeans.join(",")} inside=${radialGeometry.inside}/${treeGeometry.inside}`
+		);
+
+		// 旋转控件只在径向扇出现：其它布局不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」。
+		// A25 同时钉住步进 +5°、复位回默认 25°、以及「复位后坐标回到未旋转那一版」。
+		await switchLayout("径向扇");
+		const rotateBefore = await readGeometry();
+		await page.click("[data-testid='topology-rotate-ccw']");
+		await page.waitForTimeout(250);
+		const rotateAfter = await readGeometry();
+		await page.click("[data-testid='topology-rotate-reset']");
+		await page.waitForTimeout(250);
+		const rotateReset = await readGeometry();
+		await switchLayout("分层");
+		const afterLayered = await readGeometry();
+
+		log(
+			"A25 径向扇旋转：仅 radial 出现控件、步进 +5°、复位回 25°",
+			layeredGeometry.layout === "layered" && !layeredGeometry.rotate
+			&& rotateBefore.rotate && rotateBefore.badge === "25°"
+			&& rotateAfter.badge === "30°" && !sameGeometry(rotateBefore, rotateAfter)
+			&& rotateReset.badge === "25°" && sameGeometry(rotateReset, rotateBefore)
+			&& !afterLayered.rotate,
+			`layered.rotate=${layeredGeometry.rotate} badge=${rotateBefore.badge}→${rotateAfter.badge}→${rotateReset.badge}`
+			+ ` moved=${!sameGeometry(rotateBefore, rotateAfter)} restored=${sameGeometry(rotateReset, rotateBefore)}`
+		);
+
+		// A26：节点拖拽位移保持 + 「恢复默认配置」三合一复位（§6.9，1.0 v0.36 用户规格）。
+		// 拖的是**真指针**（pointerdown → 多次 pointermove → pointerup），断言四件事：
+		//   ① 落点真的动了（且只有被拖的那台动）；② 30s 轮询 / 手动刷新的重渲染**不弹回**；
+		//   ③ 「恢复默认配置」把位移 / 旋转角 / 视角三项一起归零；④ 切布局 = 换几何基准 ⇒ 位移层清空。
+		const readViewState = () => page.evaluate(() => {
+			const resetButton = document.querySelector("[data-testid='topology-reset-view']");
+			return {
+				offsets: resetButton?.getAttribute("data-offsets") ?? "",
+				zoom: document.querySelector("[data-testid='topology-zoom']")?.textContent?.trim() ?? "",
+				resetDisabled: resetButton?.hasAttribute("disabled") === true
+			};
+		});
+
+		/** 按住节点圆心拖到 (+dx, +dy) 像素处松手（拖的是 `<circle>`，不是整个 `<g>` 的外框） */
+		const dragNode = async (id, dx, dy) => {
+			const box = await page.locator(`[data-testid='topology-node'][data-node-id='${id}'] circle:last-of-type`).boundingBox();
+			if (!box)
+				return false;
+			const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+			await page.mouse.move(from.x, from.y);
+			await page.mouse.down();
+			await page.mouse.move(from.x + dx, from.y + dy, { steps: 6 });
+			await page.mouse.up();
+			await page.waitForTimeout(250);
+			return true;
+		};
+
+		await switchLayout("径向扇");
+		const viewBaseline = await readGeometry();
+		const viewBaselineState = await readViewState();
+		const dragTargetId = viewBaseline.nodes[0]?.id ?? "";
+		const dragged = await dragNode(dragTargetId, 90, 50);
+		const afterDrag = await readGeometry();
+		const afterDragState = await readViewState();
+		const movedIds = afterDrag.nodes
+			.filter((node) => {
+				const base = viewBaseline.nodes.find((item) => item.id === node.id);
+				return !base || base.x !== node.x || base.y !== node.y;
+			})
+			.map((node) => node.id);
+
+		// 手动刷新 = 一次完整重渲染（轮询走同一条 `refresh()`）：位移必须留在原处，不能弹回几何位。
+		await page.click("[data-testid='topology-refresh']");
+		await page.waitForTimeout(700);
+		const afterRefresh = await readGeometry();
+
+		// 叠加旋转角与缩放，然后一键复位：三项都要回到默认，且坐标逐点等于拖拽前的那一版。
+		await page.click("[data-testid='topology-zoom-in']");
+		await page.waitForTimeout(150);
+		const zoomedState = await readViewState();
+		await page.click("[data-testid='topology-rotate-ccw']");
+		await page.waitForTimeout(250);
+		const rotatedView = await readGeometry();
+		await page.click("[data-testid='topology-reset-view']");
+		await page.waitForTimeout(300);
+		const afterReset = await readGeometry();
+		const afterResetState = await readViewState();
+
+		// 切布局 = 换一套几何基准：位移层跟着清空（否则节点既不在新几何位、也不在用户放下的位置）。
+		const draggedAgain = await dragNode(dragTargetId, 60, 30);
+		const beforeSwitchState = await readViewState();
+		await switchLayout("层级树");
+		const afterSwitchState = await readViewState();
+		await switchLayout("分层");
+
+		log(
+			"A26 节点拖拽位移保持 + 恢复默认配置（三合一复位，切布局清位移）",
+			dragged && draggedAgain
+			&& movedIds.length === 1 && movedIds[0] === dragTargetId
+			&& afterDragState.offsets === "1" && !afterDragState.resetDisabled
+			&& viewBaselineState.offsets === "0" && viewBaselineState.resetDisabled
+			&& sameGeometry(afterRefresh, afterDrag)
+			&& zoomedState.zoom === "125%" && !zoomedState.resetDisabled
+			&& rotatedView.badge === "30°"
+			&& sameGeometry(afterReset, viewBaseline) && afterReset.badge === "25°"
+			&& afterResetState.zoom === "100%" && afterResetState.offsets === "0" && afterResetState.resetDisabled
+			&& beforeSwitchState.offsets === "1"
+			&& afterSwitchState.offsets === "0" && afterSwitchState.resetDisabled,
+			`drag=${dragged}/${draggedAgain} moved=${movedIds.length}`
+			+ ` offsets=${viewBaselineState.offsets}→${afterDragState.offsets}→${afterResetState.offsets}→${afterSwitchState.offsets}`
+			+ ` keep=${sameGeometry(afterRefresh, afterDrag)} zoom=${afterResetState.zoom}`
+			+ ` rotation=${rotatedView.badge}→${afterReset.badge} back=${sameGeometry(afterReset, viewBaseline)}`
+		);
+
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
 		await page.reload({ waitUntil: "networkidle" });
 		await page.waitForTimeout(400);

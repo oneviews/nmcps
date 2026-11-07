@@ -223,6 +223,14 @@
 				"ip": "管理 IP",
 				"tier": "层级",
 				"category": "类别",
+				"cpu": "CPU 使用率",
+				"memory": "内存使用率",
+				"interfaces": "接口数",
+				"neighbors": "邻居数",
+				"traffic": "流量",
+				"trafficUnit": "Mbps",
+				"neighborsTitle": "邻居",
+				"neighborsEmpty": "当前图示里没有其他节点与它直连",
 				"simulated": "仿真中",
 				"notSimulated": "该节点不在仿真运行态里",
 				"simUnavailable": "仿真通道不可用，无法判断是否在仿真中",
@@ -232,6 +240,21 @@
 			"legend": {
 				"title": "图例",
 				"simulatedHint": "虚线外环表示该节点来自仿真运行态（8001）。"
+			},
+			"layouts": {
+				"layered": "分层",
+				"radial": "径向扇",
+				"tree": "层级树"
+			},
+			"rotate": {
+				"label": "径向扇旋转角度",
+				"ccw": "逆时针旋转 5°",
+				"cw": "顺时针旋转 5°",
+				"reset": "复位旋转角度"
+			},
+			"resetView": {
+				"label": "恢复默认配置",
+				"hint": "没有可复位的改动（拖拽位移 / 旋转角度 / 画布视角都在默认值）"
 			},
 			"trend": {
 				"title": "节点指标趋势",

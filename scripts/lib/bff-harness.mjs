@@ -399,10 +399,53 @@ export async function startUpstream(port) {
 			const graph = control.topologyEmpty
 				? { nodes: [], edges: [], combos: [] }
 				: {
+					// 指标事实（`cpu` / `memory` / `interfaces` / `traffic*`）刻意留四种形态，详情栏
+					// 必须把后两种显示成「—」、绝不许把未知当 0（NMCPS-CONTRACT-002 §6.3）：
+					//   ① 全都给（10.0.0.1）—— 21.5% / 48% / 24 接口 / 12.5 Mbps；
+					//   ② 只给 `traffic_in|out`（10.0.0.2）—— 总流量由前端求和（3 + 2 = 5 Mbps）；
+					//   ③ 1.0 的 `-1` 哨兵 + 真实 `0` 接口 + 旧 Kbps 字段（10.0.0.3）—— 1500 Kbps → 1.5 Mbps；
+					//   ④ 一个都不给（10.0.0.4 ~ 10.0.0.6）—— 全部未知。
 					nodes: [
-						{ id: "10.0.0.1", name: "核心路由器-1", category: "network-device", type: "core", tier: 1, status: 1 },
-						{ id: "10.0.0.2", name: "汇聚交换机-1", category: "network-device", type: "distribution", tier: 2, status: 1 },
-						{ id: "10.0.0.3", name: "接入交换机-1", category: "network-device", type: "access", tier: 2, status: 2 },
+						{
+							id: "10.0.0.1",
+							name: "核心路由器-1",
+							category: "network-device",
+							type: "core",
+							tier: 1,
+							status: 1,
+							cpu: 21.5,
+							memory: 48,
+							interfaces: 24,
+							traffic: 12.5,
+							traffic_in: 5,
+							traffic_out: 7.5,
+							uptime: 86400
+						},
+						{
+							id: "10.0.0.2",
+							name: "汇聚交换机-1",
+							category: "network-device",
+							type: "distribution",
+							tier: 2,
+							status: 1,
+							cpu: 63.2,
+							memory: 71.4,
+							interfaces: 12,
+							traffic_in: 3,
+							traffic_out: 2
+						},
+						{
+							id: "10.0.0.3",
+							name: "接入交换机-1",
+							category: "network-device",
+							type: "access",
+							tier: 2,
+							status: 2,
+							cpu: -1,
+							memory: -1,
+							interfaces: 0,
+							trafficTotalKbps: 1500
+						},
 						{ id: "10.0.0.4", name: "无线AP-1", category: "ap", type: "access", tier: 3, status: 1 },
 						{ id: "10.0.0.5", name: "单链路终端-1", category: "client", type: "endnode", tier: 4, status: 1 },
 						{ id: "10.0.0.6", name: "单链路终端-2", category: "client", type: "endnode", tier: 4, status: 0 }
