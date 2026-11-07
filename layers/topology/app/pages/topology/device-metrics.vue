@@ -56,7 +56,8 @@
 					<USkeleton v-for="index in 5" :key="index" class="h-10 w-full" />
 				</div>
 
-				<div v-else-if="rows.length === 0" class="flex flex-col items-center gap-2 p-6 text-center">
+				<!-- 空态与错误互斥（`NMCPS-ARCH-006` §3.4）：加载失败时再说「当前租户下没有设备事实」等于把「没拿到」讲成「一台都没有」 -->
+				<div v-else-if="rows.length === 0 && !error" class="flex flex-col items-center gap-2 p-6 text-center">
 					<UIcon name="carbon:chip" class="size-7 text-(--ui-text-muted)" />
 					<p class="text-sm">
 						{{ $t("pages.topology-device-metrics.empty") }}
@@ -110,29 +111,33 @@
 			</template>
 
 			<template #list-footer>
-				<LayoutListFooter v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading">
-					{{ $t("pages.topology-device-metrics.total", { total }) }}
+				<!-- 计数同样不许冒充：失败时写「共 0 台设备」等于断言「一台都没有」（§3.4） -->
+				<LayoutListFooter v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading || !!error">
+					{{ error ? $t("pages.topology-device-metrics.totalUnknown") : $t("pages.topology-device-metrics.total", { total }) }}
 				</LayoutListFooter>
 			</template>
 
 			<template #detail>
 				<div class="flex min-h-full flex-col">
-					<!-- `?id` 不在当前页结果集：零详情请求 + 一次提示，不清空 URL（D6） -->
+					<!-- `?id` 不在当前页结果集：零详情请求 + 一次提示，不清空 URL（D6）。
+						但「没加载出来」不等于「不存在」（`NMCPS-ARCH-006` §3.4）：台账失败时只能说「无法确认」 -->
 					<div v-if="isMissing" class="p-4">
 						<UAlert
 							color="warning"
 							variant="subtle"
 							icon="carbon:unlink"
-							:title="$t('pages.topology-device-metrics.selectionMissingTitle')"
-							:description="$t('pages.topology-device-metrics.selectionMissing', { id: selectedId, size: pageSize })"
+							:title="error ? $t('pages.topology-device-metrics.selectionUnknownTitle') : $t('pages.topology-device-metrics.selectionMissingTitle')"
+							:description="error
+								? $t('pages.topology-device-metrics.selectionUnknown', { id: selectedId })
+								: $t('pages.topology-device-metrics.selectionMissing', { id: selectedId, size: pageSize })"
 						>
 							<template #actions>
 								<UButton
 									size="sm"
 									color="neutral"
 									variant="subtle"
-									:label="$t('pages.topology-device-metrics.selectionClear')"
-									@click="clearSelection()"
+									:label="error ? $t('pages.topology-device-metrics.retry') : $t('pages.topology-device-metrics.selectionClear')"
+									@click="error ? reload() : clearSelection()"
 								/>
 							</template>
 						</UAlert>

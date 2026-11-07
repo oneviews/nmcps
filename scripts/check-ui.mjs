@@ -2057,7 +2057,56 @@ if (upstreamPort) {
 			pickerOnly.length ? pickerOnly.join(" | ") : "下拉没有选项"
 		);
 
+		// A19：**台账失败 ≠ 空态**（`NMCPS-ARCH-006` §3.4）。断言什么都没覆盖这条，是 2026-11-06 的视觉自查
+		// 用肉眼抓到的：上游掉线时左栏除了错误提示，还并排写着「当前租户下没有设备事实」、页脚「共 0 台设备」，
+		// 右栏再把「没加载出来」讲成「该设备不在当前分页结果内」—— 四句话互相打架。这里三条否定判据一起钉。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/down`);
+		await page.goto(`${BASE_URL}/topology/device-metrics?id=DEV-CORE-1`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_500);
+		const ledgerFailProbe = await page.evaluate(() => {
+			const split = "[data-split='device-metrics']";
+			const body = document.body.textContent ?? "";
+			return {
+				body,
+				list: document.querySelector(`${split} [data-pane='list']`)?.textContent ?? "",
+				detail: document.querySelector(`${split} [data-pane='detail']`)?.textContent ?? ""
+			};
+		});
+		log(
+			"A19 台账失败不出空态、不写「共 0 台设备」、不断言「不在当前分页」",
+			ledgerFailProbe.list.includes("加载设备台账失败")
+			&& ledgerFailProbe.list.includes("bff_upstream_unreachable")
+			&& ledgerFailProbe.detail.includes("无法确认这台设备")
+			&& !ledgerFailProbe.body.includes("当前租户下没有设备事实")
+			&& !ledgerFailProbe.body.includes("共 0 台设备")
+			&& !ledgerFailProbe.body.includes("不在当前分页结果内"),
+			`错误=${ledgerFailProbe.list.includes("加载设备台账失败")} 空态=${ledgerFailProbe.body.includes("当前租户下没有设备事实")} 计数=${ledgerFailProbe.body.includes("共 0 台设备")} 不在本页=${ledgerFailProbe.body.includes("不在当前分页结果内")}`
+		);
+
+		// A20：同一套模板在链路页也必须一致 —— 只钉一页等于没钉（两页各有一份列表 / 详情模板）。
+		await page.goto(`${BASE_URL}/topology/link-metrics?id=LNK-0001`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_500);
+		const linkLedgerFailProbe = await page.evaluate(() => {
+			const split = "[data-split='link-metrics']";
+			const body = document.body.textContent ?? "";
+			return {
+				body,
+				list: document.querySelector(`${split} [data-pane='list']`)?.textContent ?? "",
+				detail: document.querySelector(`${split} [data-pane='detail']`)?.textContent ?? ""
+			};
+		});
+		log(
+			"A20 链路页台账失败同样不冒充空态",
+			linkLedgerFailProbe.list.includes("加载链路台账失败")
+			&& linkLedgerFailProbe.detail.includes("无法确认这条链路")
+			&& !linkLedgerFailProbe.body.includes("当前租户下没有链路事实")
+			&& !linkLedgerFailProbe.body.includes("共 0 条链路")
+			&& !linkLedgerFailProbe.body.includes("不在当前分页结果内"),
+			`错误=${linkLedgerFailProbe.list.includes("加载链路台账失败")} 空态=${linkLedgerFailProbe.body.includes("当前租户下没有链路事实")} 计数=${linkLedgerFailProbe.body.includes("共 0 条链路")} 不在本页=${linkLedgerFailProbe.body.includes("不在当前分页结果内")}`
+		);
+
 		// 目录恢复：后面的断言（以及别的页面）不该被这条开关连坐
+		await fetch(`http://${HOST}:${upstreamPort}/__control/up`);
 		await fetch(`http://${HOST}:${upstreamPort}/__control/catalog-ok`);
 
 		page.off("request", recordMetric);

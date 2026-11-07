@@ -57,7 +57,8 @@
 					<USkeleton v-for="index in 5" :key="index" class="h-10 w-full" />
 				</div>
 
-				<div v-else-if="rows.length === 0" class="flex flex-col items-center gap-2 p-6 text-center">
+				<!-- 空态与错误互斥（`NMCPS-ARCH-006` §3.4）：加载失败时再说「没有链路事实」等于把「没拿到」讲成「一条都没有」 -->
+				<div v-else-if="rows.length === 0 && !error" class="flex flex-col items-center gap-2 p-6 text-center">
 					<UIcon name="carbon:link" class="size-7 text-(--ui-text-muted)" />
 					<p class="text-sm">
 						{{ $t("pages.topology-link-metrics.empty") }}
@@ -109,28 +110,32 @@
 			</template>
 
 			<template #list-footer>
-				<LayoutListFooter v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading">
-					{{ $t("pages.topology-link-metrics.total", { total }) }}
+				<!-- 计数同样不许冒充：失败时写「共 0 条链路」等于断言「一条都没有」（§3.4） -->
+				<LayoutListFooter v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading || !!error">
+					{{ error ? $t("pages.topology-link-metrics.totalUnknown") : $t("pages.topology-link-metrics.total", { total }) }}
 				</LayoutListFooter>
 			</template>
 
 			<template #detail>
 				<div class="flex min-h-full flex-col">
 					<div v-if="isMissing" class="p-4">
+						<!-- 「没加载出来」不等于「不存在」（`NMCPS-ARCH-006` §3.4）：台账失败时只能说「无法确认」 -->
 						<UAlert
 							color="warning"
 							variant="subtle"
 							icon="carbon:unlink"
-							:title="$t('pages.topology-link-metrics.selectionMissingTitle')"
-							:description="$t('pages.topology-link-metrics.selectionMissing', { id: selectedId, size: pageSize })"
+							:title="error ? $t('pages.topology-link-metrics.selectionUnknownTitle') : $t('pages.topology-link-metrics.selectionMissingTitle')"
+							:description="error
+								? $t('pages.topology-link-metrics.selectionUnknown', { id: selectedId })
+								: $t('pages.topology-link-metrics.selectionMissing', { id: selectedId, size: pageSize })"
 						>
 							<template #actions>
 								<UButton
 									size="sm"
 									color="neutral"
 									variant="subtle"
-									:label="$t('pages.topology-link-metrics.selectionClear')"
-									@click="clearSelection()"
+									:label="error ? $t('pages.topology-link-metrics.retry') : $t('pages.topology-link-metrics.selectionClear')"
+									@click="error ? reload() : clearSelection()"
 								/>
 							</template>
 						</UAlert>
