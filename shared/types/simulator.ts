@@ -136,21 +136,69 @@ export interface SimulatorNetworkStats {
 	links_up: number
 }
 
-/** LLDP 邻接发现邻居项（`discovered_at` 是上游本地时间字符串，**不带时区**） */
+/**
+ * LLDP 邻接发现的**邻居项**（`GET /api/lldp/neighbors/{node_id}` 的 `neighbors[]`）。
+ *
+ * 字段口径是 2026-11-07 对 8001 的**实测原样**（`/tmp/lldp-probe.out`，探针 `n1` / `n4` / `n5` / `n10`）：
+ * 一条记录 = 本端一台设备的一个邻接，两端接口分成 `local_interface` / `remote_interface`；对端身份有两套
+ * ——`neighbor_id` / `neighbor_name` 是平台内部台账（`n1` / `N1`），`chassis_id` / `port_id` / `sys_name`
+ * 是 LLDP MIB 字段（实测 `chassis_id` 恒为 `00:00:00:00:00:00`，**不能**拿它当唯一键）；`mib_oids` 是
+ * 「字段名 → OID」的对照表，不是值。旧契约（`{ id, name, local_port, remote_port }`）与实测不符，已取缔。
+ */
 export interface SimulatorLldpNeighbor {
-	id: string
-	name: string
-	local_port: string
-	remote_port: string
+	/** 对端仿真节点 id（`n1`），与 `runtime-inventory` 的 `nodes[].id` 同源 */
+	neighbor_id: string
+	/** 对端类型原样（`router` / `switch` / `ap` / `station`），属数据不翻译 */
+	neighbor_type: string
+	/** 对端台账名（`N1`），通常与 `sys_name`（`核心路由器-1`）不同：两个都照实展示 */
+	neighbor_name: string
+	/** 本端接口（`n4-eth1`） */
+	local_interface: string
+	/** 对端接口（`n1-eth2`） */
+	remote_interface: string
+	chassis_id: string
+	/** `mac` / … 原样 */
+	chassis_id_subtype: string
+	/** 对端端口 id（实测与 `remote_interface` 同值） */
+	port_id: string
+	/** `ifname` / … 原样 */
+	port_id_subtype: string
+	port_descr: string
+	/** 对端自报系统名（`核心路由器-1`） */
+	sys_name: string
+	sys_desc: string
+	/** LLDP TTL（秒），实测 120 */
 	ttl: number
+	/** `wired` / `wireless` */
+	link_type: string
+	/** `up` / `down` */
+	link_status: string
+	/** 上游本地时间字符串，**不带时区**（`2026-11-05T10:38:56.863667`）：展示不做时区换算 */
+	discovered_at: string
+	/** 字段名 → OID（`lldpRemChassisId` → `1.0.8802.1.1.2.1.4.1.1.5`），不是取值 */
 	mib_oids: Record<string, string>
-	discovered_at?: string
 }
 
-/** `GET /api/lldp/summary` */
+/**
+ * `GET /api/lldp/summary`：实测是「本轮扫描的规模 + 一个示例端点」，**不是**按交换机分组的邻居计数。
+ *
+ * `local_*` 三项是**某一台**设备的自报身份（实测为首个被扫描节点 `n1`），把它读成「全网汇总」就是编数据；
+ * 页面若要「哪台有邻居」必须逐节点请求 `neighbors/{node_id}`，summary 只配当页头规模读数。
+ */
 export interface SimulatorLldpSummary {
-	neighbor_count: number
-	switches: string[]
+	/** 参与扫描的节点数（实测 36） */
+	node_count: number
+	/** 邻居条目总数（实测 96） */
+	neighbor_entry_count: number
+	/** 采集模式（实测 `native`） */
+	mode: string
+	/** 实测 `IEEE 802.1AB` */
+	mib_standard: string
+	/** 实测 `1.0.8802.1.1.2.1.4.1.1`（`lldpRemTable`） */
+	lldp_mib_oid: string
+	local_sys_name: string
+	local_sys_desc: string
+	local_chassis_id: string
 }
 
 /** `GET /api/lldp/neighbors/{node_id}` */

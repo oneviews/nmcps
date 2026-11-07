@@ -180,7 +180,8 @@
 				"nodes": "节点",
 				"links": "链路",
 				"combos": "组合",
-				"simulated": "仿真中节点"
+				"simulated": "仿真中节点",
+				"alarms": "告警设备"
 			},
 			"empty": {
 				"title": "当前租户下暂无拓扑数据",
@@ -215,7 +216,18 @@
 				"irreversibleTitle": "这一步不可撤销",
 				"irreversibleBody": "动作直接作用在正在运行的仿真上，BFF 不保留副本，也不会自动回滚。",
 				"cancel": "取消",
-				"confirmSubmit": "确认下发"
+				"confirmSubmit": "确认下发",
+				"linkActions": "链路动作",
+				"linkDown": "断开链路",
+				"linkUp": "恢复链路",
+				"linkToggle": "翻转链路状态",
+				"selectLink": "先在画布上选中一条链路，链路动作只对仿真中的链路生效",
+				"linkNotSimulated": "该链路不在仿真运行态里，无法下发动作",
+				"linkReady": "对 {name} 下发链路动作，会先弹二次确认",
+				"linkConfirmDescription": "将向 {name}（仿真链路 id {id}）下发「{action}」",
+				"linkDownDone": "链路已断开",
+				"linkUpDone": "链路已恢复",
+				"linkToggleDone": "链路状态已翻转"
 			},
 			"detail": {
 				"title": "节点详情",
@@ -257,6 +269,32 @@
 				"trafficLine": "入 {in} / 出 {out} Mbps",
 				"utilLine": "利用率 入 {in} / 出 {out}"
 			},
+			"alarms": {
+				"title": "告警",
+				"cardTitle": "当前告警",
+				"badge": "{events} 条告警 · {nodes} 台设备",
+				"badgeAria": "{count} 条告警",
+				"eventCount": "触发 {count} 次",
+				"more": "另有 {count} 条未列出",
+				"empty": "该节点没有进行中的告警",
+				"unavailable": "告警通道不可用：{reason}",
+				"severity": {
+					"critical": "严重",
+					"warning": "警告",
+					"info": "提示"
+				}
+			},
+			"lldp": {
+				"title": "LLDP 邻接",
+				"counts": "{total} 条 · {onCanvas} 台在图上",
+				"loading": "正在读取邻接台账…",
+				"notSimulated": "该节点不在仿真运行态里：没有邻接台账可读，这不等于它没有邻居。",
+				"unavailable": "仿真通道不可用，邻接台账读不到。",
+				"error": "邻接通道不可用：{reason}",
+				"empty": "上游明确回了空数组：这台设备没有邻居。",
+				"onCanvas": "对端在图上的 {id}",
+				"offCanvas": "对端不在本图上（画布外设备）"
+			},
 			"wifi": {
 				"title": "无线",
 				"ssid": "SSID",
@@ -281,7 +319,11 @@
 					"distro": "汇聚",
 					"access": "接入",
 					"terminal": "终端"
-				}
+				},
+				"focus": "只看该组",
+				"focusClear": "看全部区域",
+				"focusBadge": "只看 {label}",
+				"focused": "只看此处"
 			},
 			"legend": {
 				"title": "图例",

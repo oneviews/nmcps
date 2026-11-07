@@ -180,7 +180,8 @@
 				"nodes": "Nodes",
 				"links": "Links",
 				"combos": "Groups",
-				"simulated": "Simulated nodes"
+				"simulated": "Simulated nodes",
+				"alarms": "Alarmed devices"
 			},
 			"empty": {
 				"title": "No topology data for this tenant",
@@ -215,7 +216,18 @@
 				"irreversibleTitle": "This cannot be undone",
 				"irreversibleBody": "The action applies straight to the running simulation; the BFF keeps no copy and performs no rollback.",
 				"cancel": "Cancel",
-				"confirmSubmit": "Send action"
+				"confirmSubmit": "Send action",
+				"linkActions": "Link actions",
+				"linkDown": "Bring link down",
+				"linkUp": "Bring link up",
+				"linkToggle": "Toggle link state",
+				"selectLink": "Select a link on the canvas first — link actions apply only to simulated links",
+				"linkNotSimulated": "This link is not part of the simulator runtime, so no action can be sent",
+				"linkReady": "Send a link action to {name}, after a second confirmation",
+				"linkConfirmDescription": "This sends \"{action}\" to {name} (simulator link id {id})",
+				"linkDownDone": "Link brought down",
+				"linkUpDone": "Link brought up",
+				"linkToggleDone": "Link state toggled"
 			},
 			"detail": {
 				"title": "Node detail",
@@ -257,6 +269,32 @@
 				"trafficLine": "in {in} / out {out} Mbps",
 				"utilLine": "utilization in {in} / out {out}"
 			},
+			"alarms": {
+				"title": "Alarms",
+				"cardTitle": "Active alarms",
+				"badge": "{events} alarms · {nodes} devices",
+				"badgeAria": "{count} alarms",
+				"eventCount": "fired {count} times",
+				"more": "{count} more not listed",
+				"empty": "No active alarm on this node",
+				"unavailable": "Alarm channel unavailable: {reason}",
+				"severity": {
+					"critical": "critical",
+					"warning": "warning",
+					"info": "info"
+				}
+			},
+			"lldp": {
+				"title": "LLDP neighbors",
+				"counts": "{total} entries · {onCanvas} on canvas",
+				"loading": "Reading the neighbor table…",
+				"notSimulated": "This node is not in the simulator runtime, so there is no neighbor table to read — that is not the same as having no neighbors.",
+				"unavailable": "Simulator channel unavailable, neighbor table unreadable.",
+				"error": "Neighbor channel unavailable: {reason}",
+				"empty": "Upstream returned an explicit empty array: this device has no neighbors.",
+				"onCanvas": "Peer on canvas: {id}",
+				"offCanvas": "Peer not on this canvas (off-canvas device)"
+			},
 			"wifi": {
 				"title": "Wireless",
 				"ssid": "SSID",
@@ -281,7 +319,11 @@
 					"distro": "distro",
 					"access": "access",
 					"terminal": "terminal"
-				}
+				},
+				"focus": "Show only this group",
+				"focusClear": "Show all areas",
+				"focusBadge": "Only {label}",
+				"focused": "focused"
 			},
 			"legend": {
 				"title": "Legend",

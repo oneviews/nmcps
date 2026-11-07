@@ -89,6 +89,15 @@
 				:color="running ? 'success' : 'neutral'"
 				icon="carbon:simulation"
 			/>
+			<!-- 告警读数（§6.1）：通道没起来时显示「—」，不显示 0（0 条告警是结论，不是缺省） -->
+			<div data-testid="topology-stat-alarms">
+				<GraphSparkStat
+					:label="$t('pages.topology-monitor.stats.alarms')"
+					:value="alarmState === 'ok' ? alarmFiringCount : null"
+					:color="alarmFiringCount > 0 ? 'error' : 'neutral'"
+					icon="carbon:warning-alt"
+				/>
+			</div>
 		</div>
 
 		<!-- 仿真通道降级：讲清「缺哪一路、影响哪些区块、能否重试」（§八 硬性要求） -->
@@ -174,6 +183,7 @@
 					:selected-link-key="selectedLinkKey"
 					:link-title="linkTitle"
 					:markers="markers"
+					:alarms="alarmIndex"
 					:offsets="nodeOffsets"
 					:label="$t('pages.topology-monitor.canvasLabel')"
 					@select="selectNode"
@@ -202,6 +212,34 @@
 					>
 						{{ $t("pages.topology-monitor.groups.collapsedBadge", { count: collapsedNodeCount, groups: collapsedCombos.length }) }}
 					</UBadge>
+					<!-- 告警叠加读数（§6.1）：条数 + 设备数，两个数不可互换，所以并排写出来 -->
+					<UBadge
+						v-if="hasAlarms"
+						data-testid="topology-alarm-badge"
+						:data-alarm-events="alarmFiringCount"
+						:data-alarm-nodes="alarmNodeCount"
+						size="sm"
+						:color="alarmBadgeColor"
+						variant="subtle"
+					>
+						{{ $t("pages.topology-monitor.alarms.badge", { events: alarmFiringCount, nodes: alarmNodeCount }) }}
+					</UBadge>
+					<!-- 只看某个分组（§6.11）：画布上标明「这不是全部」，并给一键回到全部 -->
+					<UBadge v-if="focusedComboLabel" data-testid="topology-focus-badge" size="sm" color="primary" variant="subtle">
+						{{ $t("pages.topology-monitor.groups.focusBadge", { label: focusedComboLabel }) }}
+					</UBadge>
+					<!-- 「回到全部」跟着徽标走（left 列）：右侧 top-2 已被旋转控件占着，不抢位置 -->
+					<UButton
+						v-if="focusedCombo"
+						data-testid="topology-focus-clear"
+						size="xs"
+						color="neutral"
+						variant="subtle"
+						icon="carbon:close"
+						:label="$t('pages.topology-monitor.groups.focusClear')"
+						class="pointer-events-auto"
+						@click="clearComboFocus()"
+					/>
 				</div>
 
 				<!-- 径向扇旋转控件（§6.8，1.0 v0.28 同款）：只在 `radial` 布局出现 ——
@@ -443,6 +481,37 @@
 					<p v-if="!linkHasUtilization(linkFacts)" class="mt-2 text-xs text-(--ui-text-muted)">
 						{{ $t("pages.topology-monitor.link.utilNotComputedBody") }}
 					</p>
+					<!--
+						链路动作（§6.2）：三个按钮改的是「这条线通不通」，都要二次确认。
+						不在仿真里的链路整组置灰并给原因（`linkActionHint`），不假装能点。
+					-->
+					<div class="mt-3 border-t border-(--ui-border) pt-2">
+						<div class="mb-1 flex items-center gap-1 text-xs font-medium">
+							<UIcon name="carbon:simulation" class="size-3.5 text-(--ui-info)" />
+							{{ $t("pages.topology-monitor.simControls.linkActions") }}
+						</div>
+						<UTooltip :text="linkActionHint">
+							<span class="flex flex-wrap gap-1">
+								<UButton
+									v-for="action in SIMULATOR_LINK_ACTIONS"
+									:key="action"
+									data-testid="topology-link-action"
+									:data-action="action"
+									size="xs"
+									color="neutral"
+									variant="outline"
+									:icon="linkActionIcon(action)"
+									:label="$t(ACTION_LABEL_KEY[action])"
+									:disabled="!canOperateLink"
+									:loading="acting === action"
+									@click="askLinkAction(action)"
+								/>
+							</span>
+						</UTooltip>
+						<p class="mt-1 text-[11px] text-(--ui-text-muted)">
+							{{ linkActionHint }}
+						</p>
+					</div>
 				</div>
 
 				<!-- 无线事实（AP，§6.11）：字段一个都没有就不画这块（否则等于宣称「这台 AP 的 SSID 取不到」） -->
@@ -460,6 +529,132 @@
 							</dd>
 						</template>
 					</dl>
+				</div>
+
+				<!--
+					当前告警（§6.1）：只列**能 join 到这台设备**的 firing 事件。
+					告警通道不可用时写原因（`alarmReason` 是上游原话），不写「无告警」—— 那是结论，不是缺省。
+				-->
+				<div v-if="selected" data-testid="topology-alarm-card" class="rounded-lg border border-(--ui-border) p-3">
+					<div class="mb-2 flex items-center justify-between gap-2">
+						<h2 class="text-sm font-semibold">
+							{{ $t("pages.topology-monitor.alarms.cardTitle") }}
+						</h2>
+						<UBadge
+							v-if="selectedAlarm"
+							data-testid="topology-alarm-severity"
+							size="sm"
+							variant="subtle"
+							:color="alarmSeverityColor(selectedAlarm.severity)"
+						>
+							{{ $t(`pages.topology-monitor.alarms.severity.${selectedAlarm.severity}`) }}
+						</UBadge>
+					</div>
+
+					<p v-if="alarmState === 'error'" data-testid="topology-alarm-unavailable" class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.alarms.unavailable", { reason: alarmReason }) }}
+					</p>
+
+					<template v-else-if="selectedAlarm">
+						<ul class="flex flex-col gap-2">
+							<li
+								v-for="event in selectedAlarmEvents"
+								:key="event.id"
+								data-testid="topology-alarm-event"
+								:data-severity="event.severity"
+								class="flex flex-col gap-0.5"
+							>
+								<div class="flex items-start gap-1.5">
+									<span class="mt-1 size-1.5 shrink-0 rounded-full" :class="alarmBadgeFillClass(event.severity)" />
+									<!-- 上游原话，逐字展示：告警描述是数据，不翻译也不改写 -->
+									<span class="text-xs">{{ event.message }}</span>
+								</div>
+								<p class="pl-3 text-[11px] text-(--ui-text-muted)">
+									<span v-if="event.eventType">{{ event.eventType }}</span>
+									<span v-if="event.eventType"> · </span>{{ alarmTimeText(event.lastTriggeredAt) }}
+									<span v-if="event.triggerCount !== null">
+										· {{ $t("pages.topology-monitor.alarms.eventCount", { count: event.triggerCount }) }}
+									</span>
+								</p>
+							</li>
+						</ul>
+						<p v-if="hiddenAlarmCount > 0" class="mt-2 text-xs text-(--ui-text-muted)">
+							{{ $t("pages.topology-monitor.alarms.more", { count: hiddenAlarmCount }) }}
+						</p>
+					</template>
+
+					<p v-else class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.alarms.empty") }}
+					</p>
+				</div>
+
+				<!--
+					LLDP 邻接（§6.13 取证 / §6.14 落地）：上游逐节点的邻接台账，与上面「邻居」不是同一件事 ——
+					那一块是**本图画布**上的边，这一块是设备自报（可能指向画布外设备）。
+					四种状态分开写，因为它们不是同一个结论：`idle`（不在仿真里，读不到台账）/ `loading` /
+					`ok` 且空数组（上游明确说没有邻居）/ `error`（只给原因，不写「没有邻居」）。
+				-->
+				<div
+					v-if="selected"
+					data-testid="topology-lldp-card"
+					:data-lldp-state="neighborState"
+					:data-lldp-count="neighborRows.length"
+					:data-lldp-on-canvas="neighborCanvasNodeCount"
+					class="rounded-lg border border-(--ui-border) p-3"
+				>
+					<div class="mb-2 flex items-baseline justify-between gap-2">
+						<h2 class="text-sm font-semibold">
+							{{ $t("pages.topology-monitor.lldp.title") }}
+						</h2>
+						<span v-if="neighborState === 'ok'" class="text-xs text-(--ui-text-muted)">
+							{{ $t("pages.topology-monitor.lldp.counts", { total: neighborRows.length, onCanvas: neighborCanvasNodeCount }) }}
+						</span>
+					</div>
+
+					<p v-if="neighborState === 'idle'" data-testid="topology-lldp-idle" class="text-xs text-(--ui-text-muted)">
+						{{ simState === "ok" ? $t("pages.topology-monitor.lldp.notSimulated") : $t("pages.topology-monitor.lldp.unavailable") }}
+					</p>
+					<p v-else-if="neighborState === 'loading'" data-testid="topology-lldp-loading" class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.lldp.loading") }}
+					</p>
+					<p v-else-if="neighborState === 'error'" data-testid="topology-lldp-error" class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.lldp.error", { reason: neighborReason }) }}
+					</p>
+					<ul v-else-if="neighborRows.length" class="flex flex-col gap-2 text-xs">
+						<li
+							v-for="(row, index) in neighborRows"
+							:key="`${row.simId}-${index}`"
+							data-testid="topology-lldp-neighbor"
+							:data-neighbor-id="row.simId"
+							:data-on-canvas="row.canvasId !== null"
+							class="flex flex-col gap-0.5"
+						>
+							<div class="flex items-center gap-1.5">
+								<!-- 两套身份并列：台账名（`N2`）与 MIB 自报名（`汇聚交换机-1`），谁也不顶替谁 -->
+								<span class="truncate font-medium">{{ row.name }}</span>
+								<span v-if="row.sysName && row.sysName !== row.name" class="truncate text-(--ui-text-muted)">
+									{{ row.sysName }}
+								</span>
+								<UBadge size="sm" variant="subtle" :color="row.linkStatus === 'up' ? 'success' : 'neutral'" class="ml-auto">
+									{{ row.linkStatus || "—" }}
+								</UBadge>
+							</div>
+							<p class="text-[11px] text-(--ui-text-muted)">
+								{{ row.localInterface || "—" }} → {{ row.remoteInterface || "—" }}
+								<span v-if="row.type"> · {{ row.type }}</span>
+								<span v-if="row.ttl !== null"> · TTL {{ row.ttl }}s</span>
+							</p>
+							<p class="text-[11px] text-(--ui-text-muted)">
+								<span v-if="row.canvasId">{{ $t("pages.topology-monitor.lldp.onCanvas", { id: row.canvasId }) }}</span>
+								<span v-else>{{ $t("pages.topology-monitor.lldp.offCanvas") }}</span>
+								<!-- 上游本地时间字符串不带时区：原样展示，不做时区换算 -->
+								· {{ row.discoveredAt || "—" }}
+							</p>
+						</li>
+					</ul>
+					<p v-else data-testid="topology-lldp-empty" class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.lldp.empty") }}
+					</p>
 				</div>
 
 				<!-- 区域分组（§6.11）：`counts` 是上游自报，`visible` 是画布真实成员；折叠只摘画布，不改计数 -->
@@ -486,6 +681,9 @@
 									<UBadge v-if="group.collapsed" size="sm" variant="subtle" color="neutral">
 										{{ $t("pages.topology-monitor.groups.collapsed") }}
 									</UBadge>
+									<UBadge v-if="focusedCombo === group.id" size="sm" variant="subtle" color="primary">
+										{{ $t("pages.topology-monitor.groups.focused") }}
+									</UBadge>
 								</div>
 								<p
 									:data-testid="`topology-group-counts-${group.id}`"
@@ -508,6 +706,20 @@
 									:icon="group.collapsed ? 'carbon:view' : 'carbon:view-off'"
 									:aria-label="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')"
 									@click="toggleCombo(group.id)"
+								/>
+							</UTooltip>
+							<!-- 「只看该组」：折叠是「摘掉」，聚焦是「只留」，两个方向都要有入口 -->
+							<UTooltip :text="$t('pages.topology-monitor.groups.focus')">
+								<UButton
+									data-testid="topology-combo-focus"
+									:data-combo-id="group.id"
+									:data-focused="focusedCombo === group.id"
+									size="xs"
+									color="neutral"
+									variant="ghost"
+									icon="carbon:center-circle"
+									:aria-label="$t('pages.topology-monitor.groups.focus')"
+									@click="focusCombo(group.id)"
 								/>
 							</UTooltip>
 						</li>
@@ -647,8 +859,15 @@
 	// 主数据源 8888 `/api/topology/graph`，第二数据源 8001 `runtime-inventory`（只读叠加）。
 	// 仿真通道未配置 / 不可达时页面照常只读：拓扑与统计继续渲染，仿真区块单独降级。
 	import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
-	import type { SimulatorChannelState, SimulatorNodeAction } from "~~/layers/topology/app/composables/useTopologyMonitor";
+	import type {
+		SimulatorAction,
+		SimulatorActionResult,
+		SimulatorChannelState,
+		SimulatorLinkAction,
+		SimulatorNodeAction
+	} from "~~/layers/topology/app/composables/useTopologyMonitor";
 	import type { TopologyCombo, TopologyGraphLink, TopologyNodeStatus } from "~~/shared/types/topology";
+	import { alarmBadgeFillClass, alarmEventsShown, alarmSeverityColor, alarmsOfNode, alarmTimeText } from "~~/app/utils/graph/topologyAlarms";
 	import {
 		RADIAL_ROTATE_DEG,
 		TOPOLOGY_LAYOUT_MODES,
@@ -704,7 +923,23 @@
 		collapsedCombos,
 		collapsedNodeCount,
 		toggleCombo,
-		expandAllCombos
+		expandAllCombos,
+		focusedCombo,
+		focusCombo,
+		clearComboFocus,
+		alarmIndex,
+		alarmState,
+		alarmReason,
+		alarmNodeCount,
+		alarmFiringCount,
+		hasAlarms,
+		neighborRows,
+		neighborState,
+		neighborReason,
+		neighborCanvasNodeCount,
+		simulatorLinkFor,
+		performLinkAction,
+		SIMULATOR_LINK_ACTIONS
 	} = useTopologyMonitor();
 
 	/** 画布组件实例：只为「恢复默认配置」的视口复位（`resetViewport()`）暴露 */
@@ -777,6 +1012,30 @@
 	const selectedNeighbors = computed(() => (selected.value
 		? topologyNeighborsOf(layout.value, selected.value.id)
 		: []));
+
+	// ── 告警叠加（§6.1）：画布角标与详情栏读同一张表（`alarmIndex`）────────────────────────
+	/** 选中节点的告警读数；`null` = 这台设备没有进行中的告警 */
+	const selectedAlarm = computed(() => alarmsOfNode(alarmIndex.value, selected.value?.id));
+
+	/** 详情栏列前 3 条，其余归到「另有 N 条」（不把卡片撑成一页日志） */
+	const selectedAlarmEvents = computed(() => alarmEventsShown(selectedAlarm.value).shown);
+	const hiddenAlarmCount = computed(() => alarmEventsShown(selectedAlarm.value).hidden);
+
+	/** 画布角标徽标色：取全图最高档（`critical` 一旦出现就是红，不因多数是 warning 而变橙） */
+	const alarmBadgeColor = computed(() => {
+		const severities = Object.values(alarmIndex.value).map((item) => item.severity);
+		if (severities.includes("critical"))
+			return "error";
+		return severities.includes("warning") ? "warning" : "neutral";
+	});
+
+	/** 聚焦分组的标签（`null` = 看全部）：徽标文案用上游自报的名字，不自己造 */
+	const focusedComboLabel = computed(() => {
+		const id = focusedCombo.value;
+		if (!id)
+			return null;
+		return comboGroups.value.find((group) => group.id === id)?.label ?? id;
+	});
 
 	// ── 链路事实（§6.11）：点中画布上的一条链路 → 详情栏给基础事实 + 两个方向的流量 ──────────────
 	// 利用率 / 丢包 / 误码四项现网恒为 0（`traffic_out: 16.18` 而 `out_util_pct: 0`）＝没算，
@@ -946,22 +1205,62 @@
 		return value > 80 ? "error" : value > 60 ? "warning" : "primary";
 	}
 
-	/** 动作目标：选中节点在仿真侧的那一条（没有就说明这个节点不在仿真里，写不了） */
+	// ── 写入口（§6.2）：节点动作与链路动作共用「选中 → 二次确认 → 下发」这一条流程 ──────────────
+	/** 动作作用域：端点、确认文案、结果提示三处都不同，用一个字段分流 */
+	type ActionScope = "node" | "link";
+
+	/** 动作文案（键表放在一处：模板、提示、弹窗标题都从这里取，避免同一动作三种叫法） */
+	const ACTION_LABEL_KEY: Record<SimulatorAction, string> = {
+		stop: "pages.topology-monitor.simControls.nodeStop",
+		restart: "pages.topology-monitor.simControls.nodeRestart",
+		down: "pages.topology-monitor.simControls.linkDown",
+		up: "pages.topology-monitor.simControls.linkUp",
+		toggle: "pages.topology-monitor.simControls.linkToggle"
+	};
+
+	/** 下发成功的结果提示 */
+	const ACTION_DONE_KEY: Record<SimulatorAction, string> = {
+		stop: "pages.topology-monitor.simControls.stopped",
+		restart: "pages.topology-monitor.simControls.restarted",
+		down: "pages.topology-monitor.simControls.linkDownDone",
+		up: "pages.topology-monitor.simControls.linkUpDone",
+		toggle: "pages.topology-monitor.simControls.linkToggleDone"
+	};
+
+	/** 节点动作目标：选中节点在仿真侧的那一条（没有就说明这个节点不在仿真里，写不了） */
 	const actionTarget = computed(() => selected.value?.marker ?? null);
 
-	const pendingAction = ref<SimulatorNodeAction | null>(null);
+	/** 链路动作目标：选中链路在仿真侧的那一条（`undefined` = 这条线不在仿真里） */
+	const linkTarget = computed(() => simulatorLinkFor(selectedLink.value));
+
+	const pendingAction = ref<SimulatorAction | null>(null);
+	const pendingScope = ref<ActionScope>("node");
 	const confirmOpen = ref(false);
 	const actionError = ref("");
 
-	/** 两个条件缺一不可：通道 + 写开关（`canWrite`），以及一个可下发的仿真节点 */
+	/** 两个条件缺一不可：通道 + 写开关（`canWrite`），以及一个可下发的目标 */
 	const canOperate = computed(() => canWrite.value && !!actionTarget.value && !acting.value);
+	const canOperateLink = computed(() => canWrite.value && !!linkTarget.value && !acting.value);
 
-	const pendingLabel = computed(() => (pendingAction.value === "stop"
-		? t("pages.topology-monitor.simControls.nodeStop")
-		: t("pages.topology-monitor.simControls.nodeRestart")));
+	const pendingLabel = computed(() => (pendingAction.value ? t(ACTION_LABEL_KEY[pendingAction.value]) : ""));
 
-	/** 确认弹窗的正文：目标（仿真名 + 仿真 id）+ 动作，缺一样都别让人按下去 */
+	/** 确认弹窗的正文：目标（名字 + 仿真 id）+ 动作，缺一样都别让人按下去 */
 	const confirmDescription = computed(() => {
+		const action = pendingAction.value;
+		if (!action)
+			return "";
+
+		if (pendingScope.value === "link") {
+			const target = linkTarget.value;
+			if (!target)
+				return "";
+			return t("pages.topology-monitor.simControls.linkConfirmDescription", {
+				action: pendingLabel.value,
+				name: linkEndpoints.value,
+				id: target.simId
+			});
+		}
+
 		const target = actionTarget.value;
 		if (!target)
 			return "";
@@ -993,6 +1292,34 @@
 		return t("pages.topology-monitor.simControls.ready", { name: actionTarget.value.name });
 	});
 
+	/** 链路动作图标：`up` / `down` 是方向，`toggle` 是来回（图标只画语义，不画结果） */
+	function linkActionIcon(action: SimulatorLinkAction): string {
+		if (action === "down")
+			return "carbon:arrow-down";
+		return action === "up" ? "carbon:arrow-up" : "carbon:arrows-horizontal";
+	}
+
+	/**
+	 * 链路按钮的禁用原因：与节点同一套优先级（通道 → 写开关 → 选中 → 是否在仿真里），
+	 * 只说缺的那一层 —— 用户才知道该找运维开开关，还是先去点一条链路。
+	 */
+	const linkActionHint = computed(() => {
+		const state: SimulatorChannelState = simState.value;
+		if (state === "loading")
+			return t("pages.topology-monitor.simControls.loading");
+		if (state === "disabled")
+			return t("pages.topology-monitor.simControls.disabled");
+		if (state === "unreachable")
+			return t("pages.topology-monitor.simControls.unreachable");
+		if (!writeEnabled.value)
+			return t("pages.topology-monitor.simControls.writeDisabled");
+		if (!selectedLink.value)
+			return t("pages.topology-monitor.simControls.selectLink");
+		if (!linkTarget.value)
+			return t("pages.topology-monitor.simControls.linkNotSimulated");
+		return t("pages.topology-monitor.simControls.linkReady", { name: linkEndpoints.value });
+	});
+
 	/** 失败原因：本方词汇（未开写 / 不可达 / 超时）翻成文案，其余是上游原话，照原样展示 */
 	function describeActionError(message: string): string {
 		if (message === SIMULATOR_MESSAGES.writeDisabled)
@@ -1009,17 +1336,39 @@
 			return;
 
 		actionError.value = "";
+		pendingScope.value = "node";
+		pendingAction.value = action;
+		confirmOpen.value = true;
+	}
+
+	/** 链路动作同样先弹二次确认：动作直接作用在正在跑的仿真上（§6.2 / A9） */
+	function askLinkAction(action: SimulatorLinkAction): void {
+		if (!canOperateLink.value)
+			return;
+
+		actionError.value = "";
+		pendingScope.value = "link";
 		pendingAction.value = action;
 		confirmOpen.value = true;
 	}
 
 	async function submitAction(): Promise<void> {
-		const target = actionTarget.value;
 		const action = pendingAction.value;
-		if (!target || !action || acting.value)
+		if (!action || acting.value)
 			return;
 
-		const result = await performNodeAction(action, target.simId);
+		let result: SimulatorActionResult;
+		if (pendingScope.value === "link") {
+			const target = linkTarget.value;
+			if (!target)
+				return;
+			result = await performLinkAction(action as SimulatorLinkAction, target.simId);
+		} else {
+			const target = actionTarget.value;
+			if (!target)
+				return;
+			result = await performNodeAction(action as SimulatorNodeAction, target.simId);
+		}
 
 		if (!result.ok) {
 			actionError.value = describeActionError(result.message);
@@ -1027,10 +1376,8 @@
 		}
 
 		toast.add({
-			title: t(action === "stop"
-				? "pages.topology-monitor.simControls.stopped"
-				: "pages.topology-monitor.simControls.restarted"),
-			description: target.name,
+			title: t(ACTION_DONE_KEY[action]),
+			description: pendingScope.value === "link" ? linkEndpoints.value : actionTarget.value?.name ?? "",
 			color: "success"
 		});
 		confirmOpen.value = false;

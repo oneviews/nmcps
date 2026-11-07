@@ -76,6 +76,7 @@
 						class="stroke-(--ui-info)"
 					/>
 					<circle
+						data-testid="topology-node-shape"
 						:cx="item.x"
 						:cy="item.y"
 						r="13"
@@ -93,6 +94,28 @@
 					>
 						{{ item.label }}
 					</text>
+					<!--
+						告警角标（§6.1）：firing 事件数 + 最高严重度色。只在能 join 到本节点时出现
+						（`alarmIndexOf()` 已按画布节点 id 过滤，这里不再判断 target_type）。
+					-->
+					<g v-if="alarmOf(item)" data-testid="topology-node-alarm" :data-alarm-count="alarmOf(item)?.count">
+						<circle
+							:cx="item.x + 11"
+							:cy="item.y - 11"
+							r="6.5"
+							stroke-width="1.5"
+							class="stroke-(--ui-bg)"
+							:class="alarmOf(item)?.fillClass"
+						/>
+						<text
+							:x="item.x + 11"
+							:y="item.y - 8"
+							text-anchor="middle"
+							class="fill-(--ui-bg) text-[8px] font-semibold"
+						>
+							{{ alarmBadgeText(alarmOf(item)?.count ?? 0) }}
+						</text>
+					</g>
 				</g>
 			</g>
 		</svg>
@@ -135,9 +158,11 @@
 
 <script setup lang="ts">
 	import type { SimulatorNodeMarker } from "~~/app/utils/graph/simulatorOverlay";
+	import type { TopologyAlarmIndex } from "~~/app/utils/graph/topologyAlarms";
 	import type { PositionedTopologyNode } from "~~/app/utils/graph/topologyLayout";
 	import type { NodeOffset, NodeOffsetMap, Point2D } from "~~/app/utils/graph/topologyNodeOffsets";
 	import type { TopologyGraphLink } from "~~/shared/types/topology";
+	import { alarmBadgeFillClass, alarmBadgeText } from "~~/app/utils/graph/topologyAlarms";
 	import { applyNodeOffsets } from "~~/app/utils/graph/topologyNodeOffsets";
 	import { normalizeLinkStatus, normalizeNodeStatus, topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
 	import { linkStrokeClass, nodeFillClass } from "~~/app/utils/graph/topologyStatusStyle";
@@ -154,6 +179,8 @@
 		linkTitle?: (link: TopologyGraphLink) => string
 		/** 节点 id → 仿真标记（8001 运行态对齐结果） */
 		markers?: Record<string, SimulatorNodeMarker>
+		/** 节点 id → 告警角标读数（`alarmIndexOf()` 的结果；缺省 = 不画角标） */
+		alarms?: TopologyAlarmIndex
 		/** 节点手动位移层（§6.9）：几何坐标 + 增量 = 最终落点，本组件只合成、不改表 */
 		offsets?: NodeOffsetMap
 		/** 无障碍名称（`<svg>` 的 `aria-label`）：屏幕阅读器念的就是这一句 */
@@ -291,8 +318,19 @@
 		return `M ${from.x} ${from.y} C ${midX} ${from.y} ${midX} ${to.y} ${to.x} ${to.y}`;
 	}
 
+	/**
+	 * 节点告警角标读数：`null` = 这台设备没有 firing 告警（模板据此决定画不画角标）。
+	 * 颜色在这里一次算好，模板不再对 `alarms` 做二次索引（`strict` 下会报「可能 undefined」）。
+	 */
+	function alarmOf(item: PositionedTopologyNode): { count: number, fillClass: string } | null {
+		const alarm = props.alarms?.[item.id];
+		return alarm ? { count: alarm.count, fillClass: alarmBadgeFillClass(alarm.severity) } : null;
+	}
+
 	function nodeAriaLabel(item: PositionedTopologyNode): string {
 		const status = normalizeNodeStatus(item.node.status);
-		return `${item.label} · ${t(`pages.topology-monitor.status.${status}`)}`;
+		const base = `${item.label} · ${t(`pages.topology-monitor.status.${status}`)}`;
+		const alarm = props.alarms?.[item.id];
+		return alarm ? `${base} · ${t("pages.topology-monitor.alarms.badgeAria", { count: alarm.count })}` : base;
 	}
 </script>
