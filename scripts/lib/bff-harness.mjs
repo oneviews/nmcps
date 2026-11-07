@@ -100,6 +100,38 @@ export async function closeUpstream(server) {
 }
 
 /**
+ * 把扁平拓扑样本包成现网的两层形状（G6 元素形态，`NMCPS-DESIGN-001` §6.10）：
+ * `{ id, data: { deviceName, tier, status, cpu… }, style: { x, y }, combo }`，链路同样把事实塞进 `data`。
+ *
+ * 为什么假上游要默认回这个形状：2026-11-07 之前自检一直只回扁平样本，比现网「干净」，
+ * 于是「`data.tier` 读不到 ⇒ 36 个节点排成一条水平线」这类**形状缺口**没有任何断言能发现
+ * （A27 落地前的实测：`rows = 1`）。包一层之后，A21 ~ A26 这些事实 / 布局 / 交互用例
+ * 默认就走「线格式 → 拍平」这条路；`__control/topology-flat` 切回扁平形状，
+ * A27 再用它证明两种形状的渲染结果**逐点一致**。
+ *
+ * `style.x|y` 给的是与布局无关的坐标：页面**不复用**它（几何只来自 `layoutTopology()`），
+ * 这份样本的坐标因此可以随便编 —— 正好用来证明「上游坐标没被误当成布局结果」。
+ */
+function nestTopologyGraph(flat) {
+	return {
+		nodes: flat.nodes.map((node, index) => {
+			const { id, ...facts } = node;
+			return {
+				id,
+				data: { deviceName: facts.name, ...facts },
+				style: { x: 80 + index * 60, y: 120 + index * 90 },
+				combo: "combo-access"
+			};
+		}),
+		edges: flat.edges.map((edge, index) => {
+			const { source, target, ...facts } = edge;
+			return { id: `e-${index}-${source}-${target}`, source, target, data: facts };
+		}),
+		combos: flat.combos
+	};
+}
+
+/**
  * 假上游：覆盖裸 JSON、已是信封、业务错误、慢响应、Header 回显、健康探针与 SSE 流。
  * `/auth/*` 模拟新建 iam 服务（信封为 `{ code, msg, data }`）：登录签发 `at-N` / `rt-N`，
  * `whoami` 只认签发过的访问令牌 —— 浏览器自查靠它走完「登录 → 会话 → 自助安全设置」全流程。
@@ -311,7 +343,12 @@ export async function startUpstream(port) {
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
 	 */
-	const control = { down: false, topologyEmpty: false, topologyNested: false, metricError: false, catalogError: false };
+	/**
+	 * `topologyNested` **默认 true**：假上游默认回现网的两层形状（`nestTopologyGraph()`，§6.10），
+	 * 自检因此默认就覆盖「线格式 → 拍平」这条路，而不是比现网更干净。
+	 * `__control/topology-flat` 切回扁平形状（A27 用它证明两种形状渲染结果一致）。
+	 */
+	const control = { down: false, topologyEmpty: false, topologyNested: true, metricError: false, catalogError: false };
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -376,11 +413,12 @@ export async function startUpstream(port) {
 			return send(200, { topologyEmpty: false });
 		}
 		/**
-		 * 两层形状开关：真实上游（8888 `/api/v1/topology/graph`，2026-11-07 复测）的节点 / 链路是
-		 * **G6 元素形态** `{ id, data: { deviceName, tier, status, cpu… }, style, combo }`，
-		 * 事实字段全在 `data` 里。`topology-nested` 就是按这个形状回的样本 ——
-		 * 用来钉住「线格式 → 读模型」的拍平（`NMCPS-DESIGN-001` §6.10 / A27）：
+		 * 形状开关：真实上游（8888 `/api/v1/topology/graph`，2026-11-07 复测）的节点 / 链路是
+		 * **G6 元素形态** `{ id, data: { deviceName, tier, status, cpu… }, style, combo }`，事实全在 `data` 里。
+		 * 假上游**默认**回这个形状（`control.topologyNested` 初值 true），自检因此默认覆盖
+		 * 「线格式 → 读模型」的拍平（`NMCPS-DESIGN-001` §6.10 / A27）：
 		 * 少了这一步，`data.tier` 读不到 ⇒ 全部节点落到同一个兜底档 ⇒ 分层布局排成一条水平线。
+		 * `topology-flat` 切回扁平本体，A27 用它钉「两种形状渲染结果逐点一致」。
 		 */
 		if (url.pathname === "/__control/topology-nested") {
 			control.topologyNested = true;
@@ -407,54 +445,11 @@ export async function startUpstream(port) {
 		}
 
 		// ── /topology*：拓扑图（`/topology/monitor`；网关透传路径带 `/api/v1` 前缀） ──
-		// 形状对齐 `shared/types/topology.ts`（2026-10-14 只读实测：`id` 是管理 IP、`status` 数值口径
-		// 1=在线 / 2=告警 / 0=离线、链路 `bandwidth` 实测全为 0）。`__control/topology-empty`
-		// 用于「空拓扑渲染空态而不是空白画布」的断言（NMCPS-DESIGN-001 A4）。
+		// 形状对齐 `shared/types/topology.ts`（2026-11-07 只读实测：`id` 是管理 IP、`status` 实测为字符串
+		// `online/warning/offline`（数值 1/2/0 的老口径仍兼容）、链路 `bandwidth` 是字符串 `"100 Mbps"`）。
+		// 下表是**扁平**样本本体；出站时默认经 `nestTopologyGraph()` 包成现网的两层形状（§6.10 / A27），
+		// `__control/topology-empty` 用于「空拓扑渲染空态而不是空白画布」的断言（NMCPS-DESIGN-001 A4）。
 		if (/^\/(?:api\/v1\/)?topology\/graph$/.test(url.pathname) && req.method === "GET") {
-			// 两层形状样本（真实上游形状，§6.10 / A27）：四层各一台，事实全在 `data` 里。
-			// 注意 `bandwidth` 是字符串 `"100 Mbps"`（实测口径），链路的 `linkType` / `status`
-			// 同样在 `data` 里 —— 拍平后 A27 才能读到 tier 与 `deviceName`。
-			if (control.topologyNested && !control.topologyEmpty) {
-				return send(200, {
-					code: 0,
-					msg: "success",
-					data: {
-						nodes: [
-							{
-								id: "10.9.0.1",
-								data: { deviceName: "嵌套核心-1", label: "嵌套核心-1", type: "core", tier: 1, status: "online", cpu: 33.3, memory: 41.5, interfaces: 8, uptime: 3600 },
-								style: { x: 120, y: 120 },
-								combo: "combo-nested"
-							},
-							{
-								id: "10.9.0.2",
-								data: { deviceName: "嵌套汇聚-1", label: "嵌套汇聚-1", type: "distribution", tier: 2, status: "warning", cpu: 66.6, memory: 52 },
-								style: { x: 340, y: 320 },
-								combo: "combo-nested"
-							},
-							{
-								id: "10.9.0.3",
-								data: { deviceName: "嵌套接入-1", label: "嵌套接入-1", type: "access", tier: 3, status: "online", interfaces: 0 },
-								style: { x: 560, y: 520 },
-								combo: "combo-nested"
-							},
-							{
-								id: "10.9.0.4",
-								data: { deviceName: "嵌套终端-1", label: "嵌套终端-1", type: "endnode", tier: 4, status: "offline" },
-								style: { x: 780, y: 720 },
-								combo: "combo-nested"
-							}
-						],
-						edges: [
-							{ id: "e-10.9.0.1-10.9.0.2", source: "10.9.0.1", target: "10.9.0.2", data: { linkType: "fiber", bandwidth: "100 Mbps", status: "online", bandwidth_util_pct: 0 } },
-							{ id: "e-10.9.0.2-10.9.0.3", source: "10.9.0.2", target: "10.9.0.3", data: { linkType: "fiber", bandwidth: "100 Mbps", status: "online", bandwidth_util_pct: 0 } },
-							{ id: "e-10.9.0.3-10.9.0.4", source: "10.9.0.3", target: "10.9.0.4", data: { linkType: "radio", bandwidth: "100 Mbps", status: "up", bandwidth_util_pct: 0 } }
-						],
-						combos: [{ id: "combo-nested", label: "嵌套区" }]
-					}
-				});
-			}
-
 			const graph = control.topologyEmpty
 				? { nodes: [], edges: [], combos: [] }
 				: {
@@ -520,7 +515,8 @@ export async function startUpstream(port) {
 					combos: [{ id: "combo-access", label: "接入区" }]
 				};
 
-			return send(200, { code: 0, msg: "success", data: graph });
+			// 默认出站即现网的两层形状（`__control/topology-flat` 才回扁平本体）。
+			return send(200, { code: 0, msg: "success", data: control.topologyNested ? nestTopologyGraph(graph) : graph });
 		}
 		// ── /metric/*：节点指标（`/topology/monitor` 详情栏趋势，NMCPS-DESIGN-001 A3） ──
 		// `/metric/name` 回该设备可用指标名清单：新路径是字符串数组、旧路径是对象数组（双形态，缺口
