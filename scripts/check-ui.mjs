@@ -1919,6 +1919,57 @@ if (upstreamPort) {
 			+ ` rotation=${rotatedView.badge}→${afterReset.badge} back=${sameGeometry(afterReset, viewBaseline)}`
 		);
 
+		// A27：上游是**两层形状**（`{ id, data: { deviceName, tier, status, cpu… }, style, combo }`）时也要读对
+		// （§6.10）。2026-11-07 的用户反馈「页面没看到变化」真因就在这里：`data` 没被拍平 ⇒ `tier` 全落空 ⇒
+		// 分层布局把 36 个节点全塞进同一条水平线（`rows=1`）、名称退化成管理 IP、状态全 `unknown`。
+		// 所以这条断言钉四件事：分层仍按 tier 分行（4 台 4 行，y 落在分带公式上）、名称取自 `data.deviceName`、
+		// 详情栏 CPU 取自 `data.cpu`、状态不再 `unknown`（页面出现「在线」而不是图例之外的兜底文案）。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-nested`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+
+		const nestedProbe = await page.evaluate(() => {
+			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']")).map((el) => {
+				const circle = el.querySelector("circle:last-of-type");
+				return {
+					id: el.getAttribute("data-node-id") ?? "",
+					y: Number(circle?.getAttribute("cy") ?? NaN),
+					label: (el.querySelector("text")?.textContent ?? "").trim()
+				};
+			});
+			return {
+				layout: document.querySelector("[data-testid='topology-layout-switcher']")?.getAttribute("data-layout") ?? "",
+				count: nodes.length,
+				rows: [...new Set(nodes.map((node) => node.y))].sort((a, b) => a - b),
+				labels: nodes.map((node) => node.label).sort()
+			};
+		});
+
+		await page.evaluate(() => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === "10.9.0.1");
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await page.waitForTimeout(500);
+		const nestedFacts = await page.evaluate(() => ({
+			cpu: document.querySelector("[data-testid='topology-fact-cpu']")?.textContent?.trim() ?? "",
+			interfaces: document.querySelector("[data-testid='topology-fact-interfaces']")?.textContent?.trim() ?? "",
+			text: document.body.textContent ?? ""
+		}));
+
+		// 复原扁平样本：后面的 A4 / A5 走的是同一份假上游，形状要回到它们预期的那一版。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-flat`);
+
+		log(
+			"A27 上游两层形状（data 嵌套）拍平后：分层仍按 tier 分行、名称与事实取自 data",
+			nestedProbe.layout === "layered" && nestedProbe.count === 4
+			&& nestedProbe.rows.join(",") === "70,220,370,520"
+			&& ["嵌套核心-1", "嵌套汇聚-1", "嵌套接入-1", "嵌套终端-1"].every((label) => nestedProbe.labels.includes(label))
+			&& nestedFacts.cpu === "33.3%" && nestedFacts.interfaces === "8",
+			`layout=${nestedProbe.layout} nodes=${nestedProbe.count} rows=${nestedProbe.rows.join(",")}`
+			+ ` labels=${nestedProbe.labels.join("|")} cpu=${nestedFacts.cpu} if=${nestedFacts.interfaces}`
+		);
+
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
 		await page.reload({ waitUntil: "networkidle" });
 		await page.waitForTimeout(400);

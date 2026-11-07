@@ -311,7 +311,7 @@ export async function startUpstream(port) {
 	 * 让 BFF 侧表现为网络错误（502 `bff_upstream_unreachable`），而不是上游 5xx。
 	 * 用于「已登录 → 上游掉线 → 操作给出修复指引」这类只能运行中构造的场景。
 	 */
-	const control = { down: false, topologyEmpty: false, metricError: false, catalogError: false };
+	const control = { down: false, topologyEmpty: false, topologyNested: false, metricError: false, catalogError: false };
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -340,7 +340,7 @@ export async function startUpstream(port) {
 			return send(200, { down: false });
 		}
 		if (url.pathname === "/__control/state")
-			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, metricError: control.metricError, catalogError: control.catalogError });
+			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, topologyNested: control.topologyNested, metricError: control.metricError, catalogError: control.catalogError });
 		/**
 		 * 指标取数失败开关：`/metric/datapoint` 回 HTTP 200 + `code !== 0` + 一句上游原话。
 		 * 这不是网络错误（`__control/down` 是），而是「上游回了信封但业务失败」——
@@ -375,6 +375,21 @@ export async function startUpstream(port) {
 			control.topologyEmpty = false;
 			return send(200, { topologyEmpty: false });
 		}
+		/**
+		 * 两层形状开关：真实上游（8888 `/api/v1/topology/graph`，2026-11-07 复测）的节点 / 链路是
+		 * **G6 元素形态** `{ id, data: { deviceName, tier, status, cpu… }, style, combo }`，
+		 * 事实字段全在 `data` 里。`topology-nested` 就是按这个形状回的样本 ——
+		 * 用来钉住「线格式 → 读模型」的拍平（`NMCPS-DESIGN-001` §6.10 / A27）：
+		 * 少了这一步，`data.tier` 读不到 ⇒ 全部节点落到同一个兜底档 ⇒ 分层布局排成一条水平线。
+		 */
+		if (url.pathname === "/__control/topology-nested") {
+			control.topologyNested = true;
+			return send(200, { topologyNested: true });
+		}
+		if (url.pathname === "/__control/topology-flat") {
+			control.topologyNested = false;
+			return send(200, { topologyNested: false });
+		}
 
 		if (control.down) {
 			req.socket.destroy();
@@ -396,6 +411,50 @@ export async function startUpstream(port) {
 		// 1=在线 / 2=告警 / 0=离线、链路 `bandwidth` 实测全为 0）。`__control/topology-empty`
 		// 用于「空拓扑渲染空态而不是空白画布」的断言（NMCPS-DESIGN-001 A4）。
 		if (/^\/(?:api\/v1\/)?topology\/graph$/.test(url.pathname) && req.method === "GET") {
+			// 两层形状样本（真实上游形状，§6.10 / A27）：四层各一台，事实全在 `data` 里。
+			// 注意 `bandwidth` 是字符串 `"100 Mbps"`（实测口径），链路的 `linkType` / `status`
+			// 同样在 `data` 里 —— 拍平后 A27 才能读到 tier 与 `deviceName`。
+			if (control.topologyNested && !control.topologyEmpty) {
+				return send(200, {
+					code: 0,
+					msg: "success",
+					data: {
+						nodes: [
+							{
+								id: "10.9.0.1",
+								data: { deviceName: "嵌套核心-1", label: "嵌套核心-1", type: "core", tier: 1, status: "online", cpu: 33.3, memory: 41.5, interfaces: 8, uptime: 3600 },
+								style: { x: 120, y: 120 },
+								combo: "combo-nested"
+							},
+							{
+								id: "10.9.0.2",
+								data: { deviceName: "嵌套汇聚-1", label: "嵌套汇聚-1", type: "distribution", tier: 2, status: "warning", cpu: 66.6, memory: 52 },
+								style: { x: 340, y: 320 },
+								combo: "combo-nested"
+							},
+							{
+								id: "10.9.0.3",
+								data: { deviceName: "嵌套接入-1", label: "嵌套接入-1", type: "access", tier: 3, status: "online", interfaces: 0 },
+								style: { x: 560, y: 520 },
+								combo: "combo-nested"
+							},
+							{
+								id: "10.9.0.4",
+								data: { deviceName: "嵌套终端-1", label: "嵌套终端-1", type: "endnode", tier: 4, status: "offline" },
+								style: { x: 780, y: 720 },
+								combo: "combo-nested"
+							}
+						],
+						edges: [
+							{ id: "e-10.9.0.1-10.9.0.2", source: "10.9.0.1", target: "10.9.0.2", data: { linkType: "fiber", bandwidth: "100 Mbps", status: "online", bandwidth_util_pct: 0 } },
+							{ id: "e-10.9.0.2-10.9.0.3", source: "10.9.0.2", target: "10.9.0.3", data: { linkType: "fiber", bandwidth: "100 Mbps", status: "online", bandwidth_util_pct: 0 } },
+							{ id: "e-10.9.0.3-10.9.0.4", source: "10.9.0.3", target: "10.9.0.4", data: { linkType: "radio", bandwidth: "100 Mbps", status: "up", bandwidth_util_pct: 0 } }
+						],
+						combos: [{ id: "combo-nested", label: "嵌套区" }]
+					}
+				});
+			}
+
 			const graph = control.topologyEmpty
 				? { nodes: [], edges: [], combos: [] }
 				: {

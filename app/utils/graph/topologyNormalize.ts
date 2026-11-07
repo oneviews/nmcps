@@ -106,3 +106,115 @@ export function normalizeTier(value: unknown): number {
 		? Math.trunc(value)
 		: 3;
 }
+
+// ── 线格式的**两层形状**归一（A27，NMCPS-DESIGN-001 §6.10） ─────────────────────
+// 8888 `/topology/graph` 的节点 / 链路是 G6 的**元素形态**，事实字段全在 `data` 里：
+//   · 节点 `{ id, data: { deviceName, label, type, tier, status, cpu, memory, … }, style: { x, y }, combo }`
+//   · 链路 `{ id, source, target, data: { linkType, bandwidth: "100 Mbps", status, bandwidth_util_pct } }`
+// 本节之前的读模型（`TopologyGraphNode` 的扁平字段）是**归一后**的形状。少了这一步，`tier` /
+// `status` / 名称 / 指标全部落空：`normalizeTier(undefined)` 一律回落到 3 ⇒ 分层布局把 36 个节点
+// 全塞进同一条水平线（2026-11-07 用户反馈「页面没看到变化」的真因），名称退化成管理 IP、
+// 状态全成 `unknown`、详情栏全写「—」。
+//
+// 归一在 **BFF 取数边界**做一次（`useTopologyMonitor.loadGraph()`），布局 / 事实层 / 画布都只吃扁平读模型
+// —— 读表的地方不该各自再猜一次 `data` 在哪。
+
+/** 任意 JSON 记录（上游线格式没有类型保证：先收窄再取值） */
+type JsonRecord = Record<string, unknown>;
+
+/** 非数组对象收窄；其余（含 `null` / 数组 / 标量）一律当「没有」 */
+function asRecord(value: unknown): JsonRecord | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonRecord : null;
+}
+
+/** 取第一个**非空字符串**候选（优先级由调用方按 1.0 的口径排列） */
+function firstString(...candidates: readonly unknown[]): string | null {
+	for (const candidate of candidates) {
+		if (typeof candidate === "string" && candidate.trim())
+			return candidate.trim();
+	}
+	return null;
+}
+
+/** 元素的 `data` 外壳（两层形状）；单层形状（老接口 / 自检假上游）就是空表 */
+function dataOf(raw: unknown): JsonRecord {
+	return asRecord(asRecord(raw)?.data) ?? {};
+}
+
+/**
+ * 节点线格式 → 扁平读模型（**幂等**：已经是扁平形状的输入原样返回）。
+ *
+ * 取值优先级与 1.0 的 `normalizeTopologyInput()`（`_reference/nmcps-v1/shared/connector/topologyAdapt.ts`）
+ * 对齐：`data.*` 优先、扁平字段兜底 —— 上游哪天把字段挪回顶层也不会丢；`name` 取
+ * `data.deviceName → data.label → 顶层 name / hostname / label`，绝不先回 `id`（那是管理 IP）。
+ */
+export function flattenTopologyNode(raw: TopologyGraphNode): TopologyGraphNode {
+	const data = dataOf(raw);
+	const lifted = <K extends keyof TopologyGraphNode>(key: K): TopologyGraphNode[K] =>
+		(data[key as string] ?? raw[key]) as TopologyGraphNode[K];
+
+	return {
+		...raw,
+		id: firstString(raw.id, data.id) ?? "",
+		name: firstString(data.deviceName, data.label, raw.name, raw.hostname, raw.label, data.name),
+		hostname: firstString(raw.hostname, data.hostname),
+		label: firstString(raw.label, data.label),
+		ip: firstString(raw.ip, data.ip),
+		category: firstString(raw.category, data.category),
+		type: firstString(raw.type, data.type),
+		status: lifted("status"),
+		tier: lifted("tier"),
+		icon: firstString(raw.icon, data.icon),
+		brand: firstString(raw.brand, data.brand),
+		color: firstString(raw.color, data.color),
+		sysDescr: firstString(raw.sysDescr, data.sysDescr),
+		cpu: lifted("cpu"),
+		memory: lifted("memory"),
+		interfaces: lifted("interfaces"),
+		neighbors: lifted("neighbors"),
+		traffic: lifted("traffic"),
+		traffic_in: lifted("traffic_in"),
+		traffic_out: lifted("traffic_out"),
+		trafficInKbps: lifted("trafficInKbps"),
+		trafficOutKbps: lifted("trafficOutKbps"),
+		trafficTotalKbps: lifted("trafficTotalKbps"),
+		uptime: lifted("uptime"),
+		location: lifted("location")
+	};
+}
+
+/** 链路线格式 → 扁平读模型（同 `flattenTopologyNode()`：`data.*` 优先、顶层兜底） */
+export function flattenTopologyLink(raw: TopologyGraphLink): TopologyGraphLink {
+	const data = dataOf(raw);
+	const bandwidth = data.bandwidth ?? raw.bandwidth;
+
+	return {
+		...raw,
+		id: firstString(raw.id, data.id),
+		source: firstString(raw.source, data.source) ?? "",
+		target: firstString(raw.target, data.target) ?? "",
+		// 实测带宽是字符串（`"100 Mbps"`）：原样保留，读的人自己判单位（契约里 Type 是 `number | string`）
+		bandwidth: (typeof bandwidth === "number" || typeof bandwidth === "string" ? bandwidth : null),
+		linkType: firstString(raw.linkType, data.linkType),
+		status: (data.status ?? raw.status) as TopologyGraphLink["status"],
+		bandwidth_util_pct: (data.bandwidth_util_pct ?? raw.bandwidth_util_pct) as number | null | undefined,
+		bandwidthUtilPct: (data.bandwidth_util_pct ?? raw.bandwidthUtilPct) as number | null | undefined,
+		sourcePort: firstString(raw.sourcePort, data.sourcePort),
+		targetPort: firstString(raw.targetPort, data.targetPort)
+	};
+}
+
+/**
+ * 整张图归一（节点 + 链路都拍平；`edges` / `links` 两种键名各自保留，解包仍由 `topologyLinksOf()` 决定）。
+ *
+ * 这是**唯一**把线格式变成读模型的地方：布局（`layoutTopology()`）、事实层（`nodeFactsOf()`）、
+ * 画布都只吃它的产物，同一份上游数据因此只有一套字段口径。
+ */
+export function normalizeTopologyGraph(graph: TopologyGraph): TopologyGraph {
+	return {
+		...graph,
+		nodes: (graph.nodes ?? []).map(flattenTopologyNode),
+		...(graph.edges ? { edges: graph.edges.map(flattenTopologyLink) } : {}),
+		...(graph.links ? { links: graph.links.map(flattenTopologyLink) } : {})
+	};
+}

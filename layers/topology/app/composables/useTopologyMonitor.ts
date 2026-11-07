@@ -14,7 +14,7 @@ import type { TopologyGraph } from "~~/shared/types/topology";
 import { buildSimulatorIndex, simulatorMarkerOf } from "~~/app/utils/graph/simulatorOverlay";
 import { layoutTopology, RADIAL_ROTATE_DEG, TOPOLOGY_ROTATE_MAX, TOPOLOGY_ROTATE_MIN } from "~~/app/utils/graph/topologyLayout";
 import { clearNodeOffsets, countNodeOffsets, setNodeOffset } from "~~/app/utils/graph/topologyNodeOffsets";
-import { normalizeNodeStatus, topologyLinksOf, topologyNodeIp } from "~~/app/utils/graph/topologyNormalize";
+import { normalizeNodeStatus, normalizeTopologyGraph, topologyLinksOf, topologyNodeIp } from "~~/app/utils/graph/topologyNormalize";
 import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 /** 仿真通道三态 + loading：`disabled` 是「未配置」，不是错误 */
@@ -174,9 +174,11 @@ export function useTopologyMonitor() {
 	/** 主上游：失败进 `graphError`（页面级错误态 + 重试），成功即清空 */
 	async function loadGraph(): Promise<void> {
 		try {
-			graph.value = await api.get<TopologyGraph>("/api/topology/graph", {
+			// 线格式 → 读模型只在这里做一次（§6.10）：上游是 `{ id, data: { tier, status, … } }` 的
+			// 两层形状，不拍平则 `tier` / 名称 / 状态 / 指标全部落空 —— 分层布局会把全部节点排成一条水平线。
+			graph.value = normalizeTopologyGraph(await api.get<TopologyGraph>("/api/topology/graph", {
 				query: { include_status: true, include_virtual: false }
-			});
+			}));
 			graphError.value = null;
 		} catch (error) {
 			const { code, message } = error as Partial<TopologyGraphError>;

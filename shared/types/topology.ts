@@ -4,7 +4,11 @@
 // 设计基准：NMCPS-DESIGN-001 §6.1（主数据源）与 §七（图形形态）。
 // 字段口径取自 1.0 对同一端点的**只读实测消费**（2026-10-14：36 节点 / 47~48 链路 / 3 combos，
 // 见 `_reference/nmcps-v1/shared/connector/topologyAdapt.ts` 的 `normalizeTopologyInput()`）：
-//   · 节点 `id` 是**管理 IP**（如 `10.0.0.2`），展示名在 `name` / `hostname` / `label`；
+//   · 节点 / 链路是 **G6 元素形态的两层形状**：`{ id, data: { …事实… }, style, combo }`，
+//     本文件描述的扁平字段是 `flattenTopologyNode()` / `flattenTopologyLink()` 归一后的**读模型**
+//     （2026-11-07 复测：节点 `data.tier` 实测 1/2/3/4 四档齐全、`data.status` 是 `online|warning|…`，
+//     链路 `data.bandwidth` 是 `"100 Mbps"`）—— `NMCPS-DESIGN-001` §6.10；
+//   · 节点 `id` 是**管理 IP**（如 `10.0.0.2`），展示名在 `data.deviceName` / `data.label`；
 //   · 节点 `status` 数值口径 `1=在线 / 2=告警 / 0=离线`，也会直接给字符串；
 //   · 链路 `bandwidth` 实测**全为 0**（真值缺失），因此页面不得把 `0` 当带宽展示；
 //   · 链路另有 `linkType` / `bandwidth_util_pct` / `sourcePort` / `targetPort`，`medium` 上游没有。
@@ -40,6 +44,17 @@ export interface TopologyGraphQuery {
 export interface TopologyGraphNode {
 	/** 管理 IP（实测）——与 8001 运行态节点的 `ip_address` 对齐用 */
 	id: string
+	/**
+	 * 上游**实际**线格式的 `data` 外壳（G6 元素形态，2026-11-07 只读实测）：
+	 * 事实字段全在这里（`deviceName` / `label` / `type` / `tier` / `status` / `cpu` / `memory` …），
+	 * 与本接口的扁平字段**不是两份数据** —— `flattenTopologyNode()` 把 `data.*` 抬到扁平槽位，
+	 * 布局与详情栏只读扁平槽位（`NMCPS-DESIGN-001` §6.10 / A27）。
+	 */
+	data?: Record<string, unknown> | null
+	/** 上游预置的几何（`{ x, y }`）：2.0 不复用它（几何唯一由 `layoutTopology()` 产生，§6.8） */
+	style?: Record<string, unknown> | null
+	/** 上游的分组 id（1.0 的 combo 归属；2.0 只按 `combos` 计数） */
+	combo?: string | null
 	name?: string | null
 	hostname?: string | null
 	label?: string | null
@@ -81,12 +96,17 @@ export interface TopologyGraphNode {
 	location?: string | null
 }
 
-/** 图链路（线格式；`bandwidth` 实测全为 0） */
+/** 图链路（线格式；`bandwidth` 实测为字符串 `"100 Mbps"` 或 0） */
 export interface TopologyGraphLink {
 	id?: string | null
+	/**
+	 * 上游**实际**线格式的 `data` 外壳（G6 元素形态）：`linkType` / `bandwidth` / `status` /
+	 * `bandwidth_util_pct` / `telemetry` 都在这里 —— 由 `flattenTopologyLink()` 抬到扁平槽位（§6.10）。
+	 */
+	data?: Record<string, unknown> | null
 	source: string
 	target: string
-	/** 上游实测为 0（真值缺失）；页面不得把 0 当带宽 */
+	/** 上游实测为 0（真值缺失）或字符串 `"100 Mbps"`；页面不得把 0 当带宽 */
 	bandwidth?: number | string | null
 	linkType?: string | null
 	status?: string | number | null
