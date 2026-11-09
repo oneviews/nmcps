@@ -66,6 +66,17 @@ page.on("console", (msg) => {
 });
 page.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
+/**
+ * 切到详情区某个 Tab（1.0 版式：页签固定在内容页工具栏右区，内容按 Tab 条件渲染）。
+ *
+ * 详情页默认停在「概览」，折线只在「图表」页 —— 不切 Tab 就断言 `trend-chart`，
+ * 测的其实是「概览页没有图」这种意外。Tab 文案走 i18n（默认 cn），按 `role=tab` 的名字点。
+ */
+async function openDetailTab(tabLabel) {
+	await page.getByRole("tab", { name: tabLabel }).first().click();
+	await page.waitForTimeout(1200);
+}
+
 await page.goto(`${BASE_URL}/`, { waitUntil: "networkidle" });
 
 // 1. 根路径：没有落地页（NMCPS-ADR-0016）—— 冷启动 302 到登录页，站内跳转由全局守卫分流
@@ -1452,7 +1463,8 @@ if (upstreamPort) {
 // 7.5 列表栏尾部（NMCPS-ARCH-006 §3.8）：三条实测问题的回归守卫 ——
 // ① 尾高固定 49px（`--app-list-footer-h`）且在滚动区之外；
 // ② 每页默认 15 条，四个列表页都在尾部提供选择器（此前只有 /system/log 有一个，还藏在筛选浮层里）；
-// ③ 选中行底色与未选中行在浅 / 深两模式都能分辨（此前 `bg-elevated/60` 叠在白面板上几乎同色）。
+// ③ 选中行底色与未选中行在浅 / 深两模式都能分辨（此前 `bg-elevated/60` 叠在白面板上几乎同色；
+//    现行规则是 `NMCPS-ARCH-006` §3.6 的 `.list-row-selected` —— 主色半透明底 + 左缘主色竖条）。
 if (upstreamPort) {
 	const LIST_PAGES = ["/system/user", "/system/policy", "/system/permission", "/system/log"];
 	const footers = [];
@@ -1596,23 +1608,32 @@ if (upstreamPort) {
 		shapes ? `circles=${shapes.circles} paths=${shapes.paths}` : "未找到 [data-testid='topology-canvas']"
 	);
 
-	// A6：自建实例没有 `NUXT_SIMULATOR_BASE_URL` → 拓扑照常渲染，仿真动作整体 disabled 且有降级说明
-	const simProbe = await page.evaluate(() => ({
-		canvas: !!document.querySelector("[data-testid='topology-canvas']"),
-		actions: Array.from(document.querySelectorAll("[data-testid='sim-action']")).map((el) => el.hasAttribute("disabled")),
-		degraded: !!document.querySelector("[data-testid='sim-degraded']"),
-		text: document.body.textContent ?? ""
-	}));
+	// A6：自建实例没有 `NUXT_SIMULATOR_BASE_URL` → 拓扑照常渲染。（2026-11-09 起画布上不再有
+	// 节点级「停止 / 重启」按钮：那两档改的是整台设备的运行态，与「看拓扑」不是一件事，
+	// 用户裁决下线。链路动作仍在链路详情卡里，见后面对 `topology-link-action` 的断言。）
+	// 「未配置」不挂页头告警条（2026-11-08 用户裁决）：那是部署形态而不是故障。
+	const simProbe = await page.evaluate(() => {
+		const alertText = Array.from(document.querySelectorAll("[data-slot='title']"))
+			.map((el) => el.textContent?.trim() ?? "")
+			.join("|");
+		return {
+			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+			actions: Array.from(document.querySelectorAll("[data-testid='sim-action']")).length,
+			degraded: !!document.querySelector("[data-testid='sim-degraded']"),
+			alertText,
+			text: document.body.textContent ?? ""
+		};
+	});
 	log("A6 仿真未配置时拓扑照常渲染", simProbe.canvas, simProbe.canvas ? "canvas 存在" : "canvas 缺失");
 	log(
-		"A6 仿真未配置时动作按钮全部 disabled",
-		simProbe.actions.length === 2 && simProbe.actions.every(Boolean),
-		`buttons=${simProbe.actions.length} disabled=${simProbe.actions.filter(Boolean).length}`
+		"A6 画布不再提供节点停止 / 重启按钮（节点级动作整体下线）",
+		simProbe.actions === 0 && !simProbe.text.includes("停止节点") && !simProbe.text.includes("重启节点"),
+		`sim-action=${simProbe.actions} 文案残留=${simProbe.text.includes("停止节点") || simProbe.text.includes("重启节点")}`
 	);
 	log(
-		"仿真未配置时给出「未启用」降级说明",
-		simProbe.degraded && simProbe.text.includes("仿真控制未启用"),
-		simProbe.degraded ? "已提示" : "无降级条"
+		"仿真未配置时不再挂「未启用」告警条（原因留在按钮 tooltip 里）",
+		!simProbe.degraded && !simProbe.alertText.includes("仿真控制未启用"),
+		`alert=${simProbe.degraded} titles=${simProbe.alertText}`
 	);
 
 	// A7：写端点在 `allowWrite=false`（默认）时被拒，且不触达上游。自建实例连仿真平台都没配，
@@ -1656,35 +1677,65 @@ if (upstreamPort) {
 		});
 		await page.waitForTimeout(800);
 
-		const trendProbe = await page.evaluate(() => ({
+		const monitorProbe = await page.evaluate(() => {
+			const button = document.querySelector("[data-testid='topology-node-metrics']");
+			return {
+				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				error: !!document.querySelector("[data-testid='trend-error']"),
+				ip: button?.getAttribute("data-mgmt-ip") ?? "",
+				disabled: button?.hasAttribute("disabled") ?? true
+			};
+		});
+		page.off("request", recordTrend);
+
+		log(
+			"A3 监控页不再自绘折线：选中节点零指标请求，改为带管理 IP 的深链按钮",
+			clickedNode === "10.0.0.2" && !monitorProbe.chart && !monitorProbe.error
+			&& trendRequests.length === 0 && monitorProbe.ip === "10.0.0.2" && !monitorProbe.disabled,
+			`node=${clickedNode} chart=${monitorProbe.chart} 指标请求=${trendRequests.length} ip=${monitorProbe.ip}`
+		);
+
+		// 折线没有消失，只是搬家了：深链按钮是这条能力的唯一入口，点了必须真的到指标页、
+		// 真的按**管理 IP**取数、真的画出折线（否则「搬走」就成了「砍掉」）。
+		const deepRequests = [];
+		const recordDeep = (request) => {
+			if (request.url().includes("/api/metric/"))
+				deepRequests.push(request.url());
+		};
+		page.on("request", recordDeep);
+		await page.click("[data-testid='topology-node-metrics']");
+		await page.waitForURL("**/topology/device-metrics**", { timeout: 15_000 }).catch(() => null);
+		await page.waitForTimeout(1_500);
+		await openDetailTab("图表");
+		const deepProbe = await page.evaluate(() => ({
+			path: `${location.pathname}${location.search}`,
 			chart: !!document.querySelector("[data-testid='trend-chart']"),
 			lines: document.querySelectorAll("[data-testid='trend-line']").length,
 			text: document.body.textContent ?? ""
 		}));
-		page.off("request", recordTrend);
-
+		page.off("request", recordDeep);
 		// 编码断言的不是「随便抓一个名字」：假上游把 `up` / `scrape_*` 放在清单最前面，
 		// 出现 `if_in_octets` 说明真的跳过了采集器自监控命名空间（CONTRACT-002 §三）。
+		const deepDatapoint = deepRequests.find((url) => url.includes("/api/metric/datapoint")) ?? "";
 		log(
-			"A3 选中节点后详情栏出现 TrendChart（按目录选编码，跳过 collector）",
-			clickedNode === "10.0.0.2" && trendProbe.chart && trendProbe.lines === 1 && trendProbe.text.includes("if_in_octets"),
-			`node=${clickedNode} chart=${trendProbe.chart} lines=${trendProbe.lines}`
-		);
-
-		const datapointRequest = trendRequests.find((url) => url.includes("/api/metric/datapoint")) ?? "";
-		log(
-			"A3 指标请求带该节点管理 IP",
-			datapointRequest.includes("mgmt_ip=10.0.0.2") && datapointRequest.includes("metric_code=if_in_octets"),
-			datapointRequest ? datapointRequest.split("?")[1]?.slice(0, 120) ?? "" : "未见 /api/metric/datapoint 请求"
+			"A3 深链落到设备指标页：按管理 IP 取数并画出折线（跳过 collector 命名空间）",
+			deepProbe.path.startsWith("/topology/device-metrics") && deepProbe.chart && deepProbe.lines >= 1
+			&& deepDatapoint.includes("mgmt_ip=10.0.0.2") && deepDatapoint.includes("metric_code=if_in_octets"),
+			`${deepProbe.path || "未跳转"} chart=${deepProbe.chart} lines=${deepProbe.lines}`
+			+ ` ${deepDatapoint ? deepDatapoint.split("?")[1]?.slice(0, 120) ?? "" : "未见 /api/metric/datapoint 请求"}`
 		);
 
 		// 假上游的序列里夹了空串与 `NaN` 两个非法点：它们必须被丢弃并计数，绝不能被当成 0 画进来
 		// （CONTRACT-002 §6.3 ②：丢弃 + 计数，不补 0、不插值）。
 		log(
 			"A3 非法采样点被丢弃并计数（不补 0）",
-			trendProbe.text.includes("已忽略 2 个非法采样点"),
-			trendProbe.text.includes("已忽略 2 个非法采样点") ? "计数 2" : `未见丢弃提示：${trendProbe.text.slice(0, 100)}`
+			deepProbe.text.includes("已忽略 2 个非法采样点"),
+			deepProbe.text.includes("已忽略 2 个非法采样点") ? "计数 2" : `未见丢弃提示：${deepProbe.text.slice(0, 100)}`
 		);
+
+		// 折线搬到指标页之后，本节剩下的断言还在监控页上：先回去，别让后面的节点点击落到指标页的台账上
+		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
 
 		// A21：节点详情的事实层（复刻 1.0 的 CPU / 内存进度条 + 接口·邻居·流量 KPI + 邻居列表）。
 		// 假上游刻意给了四种节点（全给 / 只给方向流量 / 1.0 的 `-1` 哨兵 + 真实 0 / 一个都不给），
@@ -1740,7 +1791,9 @@ if (upstreamPort) {
 
 		// A24 / A25：2D 布局切换与径向扇旋转（§6.8，复刻 1.0 顶栏的布局下拉 + 旋转控件）。
 		// 断言的是**几何真的换了**而不是「按钮点了没报错」：读每个节点的 `circle` 中心坐标，
-		// 三种布局必须两两不同；层级树再验「每层均值 = 画布中心」（居中分层的数学保证）。
+		// 两档布局（径向扇 / 层级树）必须不同、切回来必须逐点一致；层级树再验「父压子女中点」
+		// （`汇聚交换机` 落在其下级均值正上方）与「**末层（终端带）居中**」—— 2026-11-09 用户裁决
+		// 把居中基准从根层换成末端层，这两条是塔型可读的全部意义。
 		const readGeometry = () => page.evaluate(() => {
 			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']")).map((el) => {
 				const circle = el.querySelector("[data-testid='topology-node-shape']");
@@ -1756,13 +1809,22 @@ if (upstreamPort) {
 				row.push(node.x);
 				rows.set(node.y, row);
 			}
+			const rowMeans = [...rows.keys()]
+				.sort((left, right) => left - right)
+				.map((y) => Math.round(rows.get(y).reduce((sum, x) => sum + x, 0) / rows.get(y).length));
+			// 画布逻辑尺寸随内容长大（`layoutBox()`：bbox 比基准视口大时取 bbox）⇒ 「居中」要读**当前**
+			// `viewBox` 的一半，不能写死 500：20 台样本的末层 14 台铺到 1074px 宽，画布中心就是 537。
+			const viewBox = (document.querySelector("[data-testid='topology-canvas']")?.getAttribute("viewBox") ?? "").split(/\s+/).map(Number);
+			const canvas = { width: viewBox[2] || 1000, height: viewBox[3] || 660 };
 			return {
 				layout: document.querySelector("[data-testid='topology-layout-switcher']")?.getAttribute("data-layout") ?? "",
 				rotate: !!document.querySelector("[data-testid='topology-rotate']"),
 				badge: document.querySelector("[data-testid='topology-rotate'] .tabular-nums")?.textContent?.trim() ?? "",
 				nodes,
-				rowMeans: [...rows.values()].map((xs) => Math.round(xs.reduce((sum, x) => sum + x, 0) / xs.length)),
-				inside: nodes.every((node) => node.x >= 0 && node.x <= 1000 && node.y >= 0 && node.y <= 660)
+				// rowMeans 按 y 升序（DOM 顺序 = 节点入参顺序，与层序无关；不排序会把「末层」读成随便一层）
+				rowMeans,
+				canvas,
+				inside: nodes.every((node) => node.x >= 0 && node.x <= canvas.width && node.y >= 0 && node.y <= canvas.height)
 			};
 		});
 
@@ -1790,48 +1852,62 @@ if (upstreamPort) {
 			return false;
 		};
 
-		const layeredGeometry = await readGeometry();
-		const radialClicked = await switchLayout("径向扇");
-		const radialGeometry = await readGeometry();
+		const defaultGeometry = await readGeometry();
 		const treeClicked = await switchLayout("层级树");
 		const treeGeometry = await readGeometry();
-		const backClicked = await switchLayout("分层");
+		const backClicked = await switchLayout("径向扇");
 		const backGeometry = await readGeometry();
 
+		// 「父压子女中点」：默认样本里 10.0.0.4 的下级是 10.0.0.5 / 10.0.0.6，10.0.0.1 的下级是
+		// 10.0.0.2 / 10.0.0.3 —— 两处父节点都必须落在子女 x 的中点（±1 容差，圆心是整数坐标）。
+		const xOfGeometry = (geometry, id) => geometry.nodes.find((node) => node.id === id)?.x ?? NaN;
+		const centredOver = (geometry, parent, children) => {
+			const mean = children.reduce((sum, id) => sum + xOfGeometry(geometry, id), 0) / children.length;
+			return Math.abs(xOfGeometry(geometry, parent) - mean) <= 1;
+		};
+		const treeParentsCentred = centredOver(treeGeometry, "10.0.0.4", ["10.0.0.5", "10.0.0.6"])
+			&& centredOver(treeGeometry, "10.0.0.1", ["10.0.0.2", "10.0.0.3"]);
+		const treeBottomRowMean = treeGeometry.rowMeans.at(-1) ?? NaN;
+		const treeCentreX = treeGeometry.canvas.width / 2;
+
 		log(
-			"A24 三种布局可切换且真的换了坐标（层级树每层居中，节点不越画布）",
-			radialClicked && treeClicked && backClicked
-			&& layeredGeometry.layout === "layered" && radialGeometry.layout === "radial" && treeGeometry.layout === "tree"
-			&& !sameGeometry(layeredGeometry, radialGeometry) && !sameGeometry(radialGeometry, treeGeometry)
-			&& sameGeometry(backGeometry, layeredGeometry)
-			&& radialGeometry.inside && treeGeometry.inside
-			&& treeGeometry.rowMeans.length >= 2
-			&& treeGeometry.rowMeans.every((mean) => Math.abs(mean - 500) <= 1),
-			`switch=${radialClicked}/${treeClicked}/${backClicked} layout=${layeredGeometry.layout}→${radialGeometry.layout}→${treeGeometry.layout}`
-			+ ` rows=${treeGeometry.rowMeans.join(",")} inside=${radialGeometry.inside}/${treeGeometry.inside}`
+			"A24 两档布局可切换且真的换了坐标（层级树父压子女中点、末层居中、节点不越画布）",
+			defaultGeometry.layout === "radial" && treeClicked && backClicked
+			&& treeGeometry.layout === "tree" && backGeometry.layout === "radial"
+			&& !sameGeometry(defaultGeometry, treeGeometry)
+			&& sameGeometry(backGeometry, defaultGeometry)
+			&& defaultGeometry.inside && treeGeometry.inside
+			&& treeGeometry.rowMeans.length >= 3
+			&& treeParentsCentred && Math.abs(treeBottomRowMean - treeCentreX) <= 1,
+			`layout=${defaultGeometry.layout}→${treeGeometry.layout}→${backGeometry.layout}`
+			+ ` rows=${treeGeometry.rowMeans.join(",")} bottom-row=${treeBottomRowMean}/${treeCentreX} parents-centred=${treeParentsCentred}`
+			+ ` inside=${defaultGeometry.inside}/${treeGeometry.inside}`
 		);
 
-		// 旋转控件只在径向扇出现：其它布局不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」。
+		// 旋转控件只在径向扇出现：层级树不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」。
 		// A25 同时钉住步进 +5°、复位回默认 25°、以及「复位后坐标回到未旋转那一版」。
-		await switchLayout("径向扇");
-		const rotateBefore = await readGeometry();
+		// 旋转「复位」小按钮已下线（2026-11-09）：复位旋转角是「恢复默认配置」的第一步，
+		// 这里改点 `topology-reset-view`（此刻没有位移 / 缩放，它等价于只复位旋转角）。
+		const radialGeometry = backGeometry;
+		const rotateBefore = radialGeometry;
 		await page.click("[data-testid='topology-rotate-ccw']");
 		await page.waitForTimeout(250);
 		const rotateAfter = await readGeometry();
-		await page.click("[data-testid='topology-rotate-reset']");
+		await page.click("[data-testid='topology-reset-view']");
 		await page.waitForTimeout(250);
 		const rotateReset = await readGeometry();
-		await switchLayout("分层");
-		const afterLayered = await readGeometry();
+		await switchLayout("层级树");
+		const afterTree = await readGeometry();
+		await switchLayout("径向扇");
 
 		log(
 			"A25 径向扇旋转：仅 radial 出现控件、步进 +5°、复位回 25°",
-			layeredGeometry.layout === "layered" && !layeredGeometry.rotate
-			&& rotateBefore.rotate && rotateBefore.badge === "25°"
+			defaultGeometry.rotate && !treeGeometry.rotate && !afterTree.rotate
+			&& rotateBefore.badge === "25°"
 			&& rotateAfter.badge === "30°" && !sameGeometry(rotateBefore, rotateAfter)
-			&& rotateReset.badge === "25°" && sameGeometry(rotateReset, rotateBefore)
-			&& !afterLayered.rotate,
-			`layered.rotate=${layeredGeometry.rotate} badge=${rotateBefore.badge}→${rotateAfter.badge}→${rotateReset.badge}`
+			&& rotateReset.badge === "25°" && sameGeometry(rotateReset, rotateBefore),
+			`radial.rotate=${defaultGeometry.rotate} tree.rotate=${treeGeometry.rotate}`
+			+ ` badge=${rotateBefore.badge}→${rotateAfter.badge}→${rotateReset.badge}`
 			+ ` moved=${!sameGeometry(rotateBefore, rotateAfter)} restored=${sameGeometry(rotateReset, rotateBefore)}`
 		);
 
@@ -1898,7 +1974,7 @@ if (upstreamPort) {
 		const beforeSwitchState = await readViewState();
 		await switchLayout("层级树");
 		const afterSwitchState = await readViewState();
-		await switchLayout("分层");
+		await switchLayout("径向扇");
 
 		log(
 			"A26 节点拖拽位移保持 + 恢复默认配置（三合一复位，切布局清位移）",
@@ -1921,10 +1997,12 @@ if (upstreamPort) {
 
 		// A27：**默认就是两层形状**（假上游 `control.topologyNested` 初值 true，§6.10）。
 		// 2026-11-07 现场「页面没看到变化」的真因就在这里：`data` 没被拍平 ⇒ `tier` 全落空 ⇒
-		// 分层布局把 36 个节点全塞进同一条水平线（`rows=1`）、名称退化成管理 IP、状态全 `unknown`。
-		// 断言钉四件事：分层仍按 tier 分行（y 落在分带公式 `PADDING_Y + BAND_HEIGHT × (tier − 1)`）、
-		// 名称取自 `data.deviceName`、详情事实取自 `data.cpu` / `data.interfaces`、
-		// 以及**两种形状渲染结果逐点一致**（切回扁平本体再读一次几何，必须与两层形状完全相同）。
+		// 布局层拿不到层序、名称退化成管理 IP、状态全 `unknown`。
+		// 断言钉四件事：层级树仍把 6 台按四层摆开（4 个不同的 y 行）、名称取自 `data.deviceName`、
+		// 详情事实取自 `data.cpu` / `data.interfaces`、以及**两种形状渲染结果逐点一致**
+		// （切回扁平本体再读一次几何，必须与两层形状完全相同）。
+		// 「四层」只能在层级树下量：默认布局是径向扇，六个方向各不同 ⇒ `y` 各不同（`rows = 6` 属正常，
+		// 0.17.15 收掉「分层」后这里改切一层级树再量，量完切回径向扇，不改变后续断言的默认布局）。
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-nested`);
 		await page.reload({ waitUntil: "networkidle" });
 		await page.waitForTimeout(800);
@@ -1933,6 +2011,9 @@ if (upstreamPort) {
 			.map((el) => (el.querySelector("text")?.textContent ?? "").trim())
 			.sort());
 		const nestedFacts = await factsOf("10.0.0.1");
+		await switchLayout("层级树");
+		const nestedTreeGeometry = await readGeometry();
+		await switchLayout("径向扇");
 
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-flat`);
 		await page.reload({ waitUntil: "networkidle" });
@@ -1941,21 +2022,1235 @@ if (upstreamPort) {
 		// 复原默认形状：后面的 A4 / A5 走同一份假上游，默认应当仍是现网的两层形状。
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-nested`);
 
-		const nestedRows = [...new Set(nestedGeometry.nodes.map((node) => node.y))].sort((a, b) => a - b);
+		const nestedRows = [...new Set(nestedTreeGeometry.nodes.map((node) => node.y))].sort((a, b) => a - b);
 		const shapeSame = sameGeometry(flatGeometry, nestedGeometry);
 		const labelOk = ["核心路由器-1", "汇聚交换机-1", "接入交换机-1", "无线AP-1", "单链路终端-1", "单链路终端-2"]
 			.every((label) => nestedLabels.includes(label));
 		log(
-			"A27 两层形状（data 嵌套）拍平后：分层仍按 tier 分行、名称与事实取自 data、与扁平形状逐点一致",
-			nestedGeometry.layout === "layered" && nestedGeometry.nodes.length === 6
-			&& nestedRows.join(",") === "70,220,370,520" && labelOk
+			"A27 两层形状（data 嵌套）拍平后：层级树仍按 tier 摆成四层、名称与事实取自 data、与扁平形状逐点一致",
+			nestedGeometry.layout === "radial" && nestedGeometry.nodes.length === 6
+			&& nestedTreeGeometry.layout === "tree" && nestedTreeGeometry.nodes.length === 6
+			&& nestedRows.length === 4 && labelOk
 			&& nestedFacts.cpu === "21.5%" && nestedFacts.interfaces === "24"
 			&& shapeSame,
-			`layout=${nestedGeometry.layout} nodes=${nestedGeometry.nodes.length} rows=${nestedRows.join(",")}`
+			`layout=${nestedGeometry.layout}/${nestedTreeGeometry.layout} nodes=${nestedGeometry.nodes.length} rows=${nestedRows.length}`
 			+ ` labels=${nestedLabels.join("|")} cpu=${nestedFacts.cpu} if=${nestedFacts.interfaces} flatSame=${shapeSame}`
 		);
 
-		// A28：链路事实（§6.11）。现网 48/48 链路的 `in|out_util_pct` / `packet_loss` / `error_rate`
+		// A41：页头读数搬到工具栏右区（1.0 顶栏版式）。读数本身的口径不变（缺数据写「—」不写 0），
+		// 变的是**位置**：原先 4 张 `SparkStat` 卡片独占内容区第一行（100px 高），把画布整个往下推。
+		// 断言钉三件事：① 四个徽标都在 `#app-toolbar-right` 内（0.17.15 起「仿真中」那档已删：仿真没配置
+		// 是部署形态而不是读数，链路动作按钮的 tooltip 已经说明原因）；② 内容区零 `spark-stat` 卡片、
+		// 也没有 `topology-stat-simulated` 这枚多余的徽标；③ 徽标文案 = 「标签 + 读数」（读数取自同一份数据）。
+		const statsProbe = await page.evaluate(() => {
+			const read = (key) => document.querySelector(`[data-testid='topology-stat-${key}']`);
+			const textOf = (key) => read(key)?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+			return {
+				inToolbar: !!document.querySelector("#app-toolbar-right [data-testid='topology-stats']"),
+				badges: document.querySelectorAll("#app-toolbar-right [data-testid^='topology-stat-']").length,
+				cards: document.querySelectorAll("[data-testid='spark-stat']").length,
+				simulated: !!read("simulated"),
+				nodes: textOf("nodes"),
+				links: textOf("links"),
+				combos: textOf("combos"),
+				alarms: textOf("alarms")
+			};
+		});
+		log(
+			"A41 页头读数改为工具栏右区徽标（节点 / 链路 / 组合 / 告警），内容区不再有卡片行",
+			statsProbe.inToolbar && statsProbe.badges === 4 && statsProbe.cards === 0 && !statsProbe.simulated
+			&& statsProbe.nodes.includes("6") && statsProbe.links.includes("6") && statsProbe.combos.includes("3")
+			&& statsProbe.alarms.includes("5"),
+			`toolbar=${statsProbe.inToolbar} badges=${statsProbe.badges} cards=${statsProbe.cards} 仿真徽标=${statsProbe.simulated}`
+			+ ` nodes=${statsProbe.nodes} links=${statsProbe.links} combos=${statsProbe.combos}`
+			+ ` alarms=${statsProbe.alarms}`
+		);
+
+		// A42：层级树 = **塔型**（1.0 的 `dagre` 等价实现，§6.8）。收掉「分层」那一档之后，塔型的
+		// 全部语义都落在层级树上：层内次序按父层重心排（相邻层交叉 0）、父节点压在子女群中线上、
+		// 同层间距 ≥ 80（1.0 `nodesep`，不是「铺满整幅画布宽」）、半径随层递减、外圈按层级取色。
+		// （默认样本：1 → 2,3；2,3 → 4；4 → 5,6 ⇒ 2 / 3 共享同一个下级 4，两者对称夹在中线两侧。）
+		await switchLayout("层级树");
+		const towerProbe = await page.evaluate(() => {
+			const centers = new Map();
+			const roles = {};
+			for (const node of document.querySelectorAll("[data-testid='topology-node']")) {
+				const id = node.getAttribute("data-node-id") ?? "";
+				const shape = node.querySelector("[data-testid='topology-node-shape']");
+				const dot = node.querySelector("[data-testid='topology-node-dot']");
+				centers.set(id, {
+					x: Number(shape?.getAttribute("cx")),
+					y: Number(shape?.getAttribute("cy")),
+					r: Number(shape?.getAttribute("r"))
+				});
+				roles[id] = {
+					role: shape?.getAttribute("data-node-role") ?? "",
+					dotRadius: Number(dot?.getAttribute("r"))
+				};
+			}
+			const links = Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.map((el) => (el.getAttribute("data-link-key") ?? "").split("|").slice(0, 2));
+			let crossings = 0;
+			for (let a = 0; a < links.length; a++) {
+				for (let b = a + 1; b < links.length; b++) {
+					const [a0, a1] = links[a];
+					const [b0, b1] = links[b];
+					const aUp = (centers.get(a0)?.y ?? 0) <= (centers.get(a1)?.y ?? 0) ? a0 : a1;
+					const aLow = aUp === a0 ? a1 : a0;
+					const bUp = (centers.get(b0)?.y ?? 0) <= (centers.get(b1)?.y ?? 0) ? b0 : b1;
+					const bLow = bUp === b0 ? b1 : b0;
+					if (centers.get(aUp)?.y !== centers.get(bUp)?.y)
+						continue;
+					const deltaUp = (centers.get(aUp)?.x ?? 0) - (centers.get(bUp)?.x ?? 0);
+					const deltaLow = (centers.get(aLow)?.x ?? 0) - (centers.get(bLow)?.x ?? 0);
+					if (deltaUp * deltaLow < 0)
+						crossings++;
+				}
+			}
+			const byY = new Map();
+			for (const [, point] of centers) {
+				const row = byY.get(point.y) ?? [];
+				row.push(point.x);
+				byY.set(point.y, row);
+			}
+			const rowGaps = [...byY.values()].map((xs) => {
+				const sorted = [...xs].sort((left, right) => left - right);
+				return sorted.length > 1
+					? Math.min(...sorted.slice(1).map((value, index) => value - sorted[index]))
+					: 999;
+			});
+			const center = (id) => centers.get(id)?.x ?? Number.NaN;
+			return {
+				crossings,
+				rowGaps,
+				coreMid: center("10.0.0.1"),
+				distMid: (center("10.0.0.2") + center("10.0.0.3")) / 2,
+				accessMid: center("10.0.0.4"),
+				terminalMid: (center("10.0.0.5") + center("10.0.0.6")) / 2,
+				radius: {
+					core: centers.get("10.0.0.1")?.r ?? 0,
+					distro: centers.get("10.0.0.2")?.r ?? 0,
+					access: centers.get("10.0.0.4")?.r ?? 0,
+					terminal: centers.get("10.0.0.5")?.r ?? 0
+				},
+				roles
+			};
+		});
+		const towerRoles = ["10.0.0.1", "10.0.0.2", "10.0.0.4", "10.0.0.5"]
+			.map((id) => towerProbe.roles[id]?.role)
+			.join(",");
+		const towerAligned = [towerProbe.distMid, towerProbe.accessMid, towerProbe.terminalMid]
+			.every((value) => Math.abs(value - towerProbe.coreMid) <= 1);
+		const towerSpacingOk = towerProbe.rowGaps.every((gap) => gap >= 79.5);
+		const towerRadiusOk = towerProbe.radius.core > towerProbe.radius.distro
+			&& towerProbe.radius.distro > towerProbe.radius.access
+			&& towerProbe.radius.access > towerProbe.radius.terminal;
+		const towerDotOk = ["10.0.0.1", "10.0.0.5", "10.0.0.6"].every((id) => (towerProbe.roles[id]?.dotRadius ?? 0) > 0);
+		log(
+			"A42 层级树 = 塔型：父层压在子女群中线、层内按重心排序（交叉 0）、间距 ≥ 80、外圈按层级取色",
+			towerProbe.crossings === 0 && towerAligned && towerSpacingOk && towerRadiusOk && towerDotOk
+			&& towerRoles === "core,distro,access,terminal",
+			`crossings=${towerProbe.crossings} aligned=${towerAligned} gaps=${towerProbe.rowGaps.join("/")}`
+			+ ` radius=${towerProbe.radius.core}/${towerProbe.radius.distro}/${towerProbe.radius.access}/${towerProbe.radius.terminal}`
+			+ ` roles=${towerRoles} centers=${towerProbe.coreMid}/${towerProbe.distMid}/${towerProbe.accessMid}/${towerProbe.terminalMid}`
+		);
+
+		// A43：层序归约（§6.8 的两条规则；1.0 完全没有这个能力）。假上游换成「网状顶层 + 无下级接入
+		// + 满行终端」的样本（`__control/topology-mesh`），钉四件事：
+		//   ① 顶层三台**两两互联**（关系等价，边表达不了上下）⇒ 只有「网控中心」命中名称判据
+		//      ⇒ 被选举为根、独占首行（`data-node-role="root"`）；
+		//   ② 被留在第二行的核心仍是 `core`：角色按 **tier** 取，不按行号 —— 换了行不等于换了设备类别；
+		//   ③ 没有下一级的「接入交换机-2」下移到**末行**（与 13 台终端同排），并因此读作**终端层**
+		//      （`terminal`，2026-11-08 要求 3：叶子没有下一层，画成蓝色接入等于说「它下面还有一层」）；
+		//   ④ 层序连续：5 行（`y` 逐行等距递增 110 = `TIER_TREE_TIER_GAP`），
+		//      末行 14 台 = 满行样本（供 A44 用）。行的判定一律用**行序号**而不是绝对 y：
+		//      绝对 y 是层级树几何库的内部常量，写死它等于把「换个间距」当成回归。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-mesh`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		await switchLayout("层级树");
+		const rankProbe = await page.evaluate(() => {
+			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']")).map((node) => {
+				const shape = node.querySelector("[data-testid='topology-node-shape']");
+				return {
+					id: node.getAttribute("data-node-id") ?? "",
+					label: (node.querySelector("text")?.textContent ?? "").trim(),
+					x: Number(shape?.getAttribute("cx")),
+					y: Number(shape?.getAttribute("cy")),
+					role: shape?.getAttribute("data-node-role") ?? "",
+					tier: shape?.getAttribute("data-node-tier") ?? ""
+				};
+			});
+			const byId = new Map(nodes.map((node) => [node.id, node]));
+			const rows = [...new Set(nodes.map((node) => node.y))].sort((left, right) => left - right);
+			const bottom = rows.at(-1) ?? 0;
+			const bottomRow = nodes.filter((node) => node.y === bottom);
+			// 画布中心读**当前** `viewBox`（20 台样本的末层铺到 1074px，中心是 537 而不是 500）
+			const viewBox = (document.querySelector("[data-testid='topology-canvas']")?.getAttribute("viewBox") ?? "").split(/\s+/).map(Number);
+			const centreX = (viewBox[2] || 1000) / 2;
+			const rowOf = (id) => rows.indexOf(byId.get(id)?.y ?? -1);
+			const roots = nodes.filter((node) => node.role === "root");
+			return {
+				count: nodes.length,
+				rows: rows.map((y) => Math.round(y)),
+				rowGaps: rows.slice(1).map((y, index) => Math.round(y - rows[index])),
+				rootCount: roots.length,
+				rootLabel: roots[0]?.label ?? "",
+				rootRow: rows.indexOf(roots[0]?.y ?? -1),
+				rootY: roots[0]?.y ?? -1,
+				// 根的层号必须是 0（2026-11-09 用户裁决：根比边界层还高一档，不再与核心同为 1）
+				rootTier: roots[0]?.tier ?? "",
+				coreRow: rowOf("10.0.1.2"),
+				coreRole: byId.get("10.0.1.2")?.role ?? "",
+				coreTier: byId.get("10.0.1.2")?.tier ?? "",
+				accessParentRow: rowOf("10.0.1.6"),
+				demotedRow: rowOf("10.0.1.7"),
+				demotedRole: byId.get("10.0.1.7")?.role ?? "",
+				bottomCount: bottomRow.length,
+				// 居中基准 = 末层（终端带）：它的 x 均值应落在**画布**中心（±1px）
+				bottomMean: Math.round(bottomRow.reduce((sum, node) => sum + node.x, 0) / bottomRow.length),
+				centreX
+			};
+		});
+		log(
+			"A43 层序归约：名称判据选举根节点（网控中心组网等价时上提到首行，tier=0）、叶子下移到末层并归位终端层、末层居中",
+			rankProbe.count === 20 && rankProbe.rows.length === 5
+			&& rankProbe.rowGaps.every((gap) => gap === 110)
+			&& rankProbe.rootCount === 1 && rankProbe.rootLabel === "网控中心" && rankProbe.rootRow === 0
+			&& rankProbe.rootTier === "0" && rankProbe.coreTier === "1"
+			&& rankProbe.coreRow === 1 && rankProbe.coreRole === "core"
+			&& rankProbe.accessParentRow === 3 && rankProbe.demotedRow === 4 && rankProbe.demotedRole === "terminal"
+			&& rankProbe.bottomCount === 14 && Math.abs(rankProbe.bottomMean - rankProbe.centreX) <= 1,
+			`nodes=${rankProbe.count} rows=${rankProbe.rows.join("/")} gaps=${rankProbe.rowGaps.join("/")}`
+			+ ` root=${rankProbe.rootLabel}@row${rankProbe.rootRow}/tier${rankProbe.rootTier}`
+			+ ` core=${rankProbe.coreRole}@row${rankProbe.coreRow}/tier${rankProbe.coreTier}`
+			+ ` access-1=@row${rankProbe.accessParentRow} access-2=${rankProbe.demotedRole}@row${rankProbe.demotedRow}`
+			+ ` bottom=${rankProbe.bottomCount}/${rankProbe.bottomMean}(centre=${rankProbe.centreX})`
+		);
+
+		// A44：标签避让 + 「显示名称」开关（§七）。末行 14 台设备的名称（「无线终端设备-01」10px 下 ≈ 77px）
+		// 比同层间距（窄画布收窄到 `TIER_TREE_MIN_NODE_GAP = 74`）宽，硬摆会互相压字；断言钉四件事：
+		//   ① 满行按**奇偶错行**（`data-label-shift` 同时出现 0 与 1）；
+		//   ② 名称**一个都不截断**：文本里没有省略号 `…`，且逐字等于样本里的设备名
+		//      （2026-11-09 用户裁决：画布上出现「汇聚交换机…」会让人认错设备）；
+		//   ③ 字号收到 10px（`text-[10px]`，与 `LABEL_FONT_SIZE` 同值 —— 收字号才换来「不截断也不压字」）；
+		//   ④ 关掉「显示名称」后画布上 **0 个**标签，再打开恢复原样（开关只影响渲染，不改布局 / 位移）。
+		// 「哪一行是末行」由节点 `cy` 的最大值决定（层级树的绝对 y 是几何库内部常量，不写死）。
+		const labelProbe = await page.evaluate(() => {
+			const groups = Array.from(document.querySelectorAll("[data-testid='topology-node']"));
+			const cyOf = (el) => Number(el.querySelector("[data-testid='topology-node-shape']")?.getAttribute("cy"));
+			const bottomY = Math.max(...groups.map(cyOf));
+			const bottom = groups
+				.filter((el) => cyOf(el) === bottomY)
+				.map((el) => el.querySelector("[data-testid='topology-node-label']"))
+				.filter(Boolean);
+			return {
+				total: document.querySelectorAll("[data-testid='topology-node-label']").length,
+				bottomCount: bottom.length,
+				shifts: [...new Set(bottom.map((el) => el.getAttribute("data-label-shift") ?? ""))].sort(),
+				// 层级树的标签方向恒为「正下方」（`0,1`）：方向由布局层给，一层只有一个自由度
+				dirs: [...new Set(Array.from(document.querySelectorAll("[data-testid='topology-node-label']"))
+					.map((el) => el.getAttribute("data-label-dir") ?? ""))].sort(),
+				ellipsis: Array.from(document.querySelectorAll("[data-testid='topology-node-label']"))
+					.filter((el) => (el.textContent ?? "").includes("…"))
+					.length,
+				fontSize: bottom[0] ? getComputedStyle(bottom[0]).fontSize : "",
+				texts: bottom.map((el) => (el.textContent ?? "").trim())
+			};
+		});
+		const labelNamesOk = ["接入交换机-2", "无线终端设备-01", "无线终端设备-13"]
+			.every((name) => labelProbe.texts.includes(name));
+		await page.click("[data-testid='topology-labels-toggle']");
+		await page.waitForTimeout(300);
+		const labelsOff = await page.evaluate(() => document.querySelectorAll("[data-testid='topology-node-label']").length);
+		await page.click("[data-testid='topology-labels-toggle']");
+		await page.waitForTimeout(300);
+		const labelsOn = await page.evaluate(() => document.querySelectorAll("[data-testid='topology-node-label']").length);
+		log(
+			"A44 名称标签避让：满行按奇偶错行、不截断（无省略号、10px）、层级树方向恒为下方，关闭「显示名称」后 0 标签、再开恢复原样",
+			labelProbe.total === 20 && labelProbe.bottomCount === 14
+			&& labelProbe.shifts.join(",") === "0,1" && labelProbe.ellipsis === 0
+			&& labelProbe.dirs.join("|") === "0,1"
+			&& labelProbe.fontSize === "10px"
+			&& labelNamesOk && labelsOff === 0 && labelsOn === labelProbe.total,
+			`labels=${labelProbe.total} bottom=${labelProbe.bottomCount} shifts=${labelProbe.shifts.join("/")}`
+			+ ` ellipsis=${labelProbe.ellipsis} font=${labelProbe.fontSize} dirs=${labelProbe.dirs.join("|")}`
+			+ ` names=${labelNamesOk} off=${labelsOff} on=${labelsOn}`
+		);
+		// A45：层序归约对**两种布局**都生效（§6.8）。A43 / A44 只钉了层级树，若只有它读归约结果、
+		// 径向扇仍按原始 `tier` 排，就会「换个布局看」变成「换个事实看」：根被摊回第一圈、
+		// 无下级的接入又爬回中间环。这里在同一份 `topology-mesh` 样本上切到径向扇再切回来，钉三件事：
+		//   ① 径向扇：圆心 = 被选举的根（根到自己的半径 0），环半径严格递增，末环同时装着
+		//      下移的「接入交换机-2」与 13 台终端（同环 = 同一带），下移叶子读作 `terminal`；
+		//   ② 层级树：5 条水平线，根独占首行、核心第二行、下移接入与终端同排（末行）。
+		//   ③ 切回层级树后与 A43 读数一致（布局切换是幂等的，不会攒状态）。
+		const readRankGeometry = () => page.evaluate(() => Array.from(document.querySelectorAll("[data-testid='topology-node']")).map((node) => {
+			const shape = node.querySelector("[data-testid='topology-node-shape']");
+			const label = node.querySelector("[data-testid='topology-node-label']");
+			return {
+				id: node.getAttribute("data-node-id") ?? "",
+				label: (node.querySelector("text")?.textContent ?? "").trim(),
+				x: Number(shape?.getAttribute("cx")),
+				y: Number(shape?.getAttribute("cy")),
+				role: shape?.getAttribute("data-node-role") ?? "",
+				labelX: Number(label?.getAttribute("x")),
+				labelY: Number(label?.getAttribute("y")),
+				dir: label?.getAttribute("data-label-dir") ?? ""
+			};
+		}));
+		const radialClicked45 = await switchLayout("径向扇");
+		await page.waitForTimeout(300);
+		const radialNodes = await readRankGeometry();
+		const treeClicked45 = await switchLayout("层级树");
+		await page.waitForTimeout(300);
+		const treeNodes = await readRankGeometry();
+		// 切回层级树 = 同一个幂等动作的第二次：坐标必须与 A43 的读数一致（不攒状态）
+		const backNodes = treeNodes;
+
+		/** 以某个节点为圆心看半径（径向扇的「第几环」就是它到根的圆心距） */
+		const ringOf = (nodes, centerId, id) => {
+			const center = nodes.find((node) => node.id === centerId);
+			const target = nodes.find((node) => node.id === id);
+			return center && target ? Math.round(Math.hypot(target.x - center.x, target.y - center.y)) : -1;
+		};
+		const radialRoot = radialNodes.filter((node) => node.role === "root");
+		// 环半径 = 到根的圆心距；同环节点会有 1~2px 的圆弧取整差，按 6px 容差归并成「第几环」
+		const ringRadiusOf = (id) => ringOf(radialNodes, radialRoot[0]?.id ?? "", id);
+		const radialRadii = radialNodes.map((node) => ringRadiusOf(node.id)).sort((left, right) => left - right);
+		const radialRings = [];
+		for (const radius of radialRadii) {
+			if (!radialRings.length || radius - radialRings.at(-1) > 6)
+				radialRings.push(radius);
+		}
+		const ringIndexOf = (radius) => radialRings.findIndex((ring) => Math.abs(ring - radius) <= 6);
+		const radialRadius = {
+			core: ringIndexOf(ringRadiusOf("10.0.1.2")),
+			distro: ringIndexOf(ringRadiusOf("10.0.1.4")),
+			access: ringIndexOf(ringRadiusOf("10.0.1.6")),
+			terminal: ringIndexOf(ringRadiusOf("10.0.1.11")),
+			demoted: ringIndexOf(ringRadiusOf("10.0.1.7"))
+		};
+		const radialDemotedRole = radialNodes.find((node) => node.id === "10.0.1.7")?.role ?? "";
+		// 径向扇的标签必须朝**背离圆心**一侧（2026-11-09 用户裁决「标签位置统一」）：
+		// 每台的「标签方向」与「它到根的射线」同向（点积 > 0.3，留出扇形角度的余量），
+		// 圆心那台没有方向可言（退回 `0,1`，与层级树同一个默认）。
+		const radialCenter = radialRoot[0];
+		const radialLabelOut = radialCenter
+			? radialNodes.filter((node) => node.id !== radialCenter.id).map((node) => {
+				const dx = node.x - radialCenter.x;
+				const dy = node.y - radialCenter.y;
+				const [dirX, dirY] = node.dir.split(",").map(Number);
+				const length = Math.hypot(dx, dy) || 1;
+				return {
+					id: node.id,
+					dot: (dx / length) * dirX + (dy / length) * dirY,
+					// 标签真的落在那个方向上（而不只是属性对）
+					offset: Math.hypot(node.labelX - node.x, node.labelY - node.y),
+					away: (node.labelX - node.x) * dirX + (node.labelY - node.y) * dirY > 0
+				};
+			})
+			: [];
+		const radialLabelOk = radialLabelOut.length === 19
+			&& radialLabelOut.every((item) => item.dot > 0.3 && item.away && item.offset > 0)
+			&& radialCenter?.dir === "0,1";
+		const radialOk = radialClicked45 && radialNodes.length === 20
+			&& radialRoot.length === 1 && radialRoot[0]?.label === "网控中心"
+			&& radialRings.length === 5 && radialRings[0] === 0
+			&& radialRadius.core === 1 && radialRadius.distro === 2 && radialRadius.access === 3
+			&& radialRadius.terminal === 4 && radialRadius.demoted === 4
+			&& radialDemotedRole === "terminal";
+
+		const treeRows = [...new Set(treeNodes.map((node) => node.y))].sort((left, right) => left - right);
+		const treeYOf = (id) => treeNodes.find((node) => node.id === id)?.y ?? -1;
+		const treeRoot = treeNodes.filter((node) => node.role === "root");
+		const treeOk = treeClicked45 && treeNodes.length === 20
+			&& treeRows.length === 5
+			&& treeRoot.length === 1 && treeRoot[0]?.label === "网控中心" && treeRoot[0]?.y === treeRows[0]
+			&& treeYOf("10.0.1.2") === treeRows[1]
+			&& treeYOf("10.0.1.6") === treeRows[3]
+			&& treeYOf("10.0.1.7") === treeRows[4] && treeYOf("10.0.1.11") === treeRows[4];
+		const backSame = treeClicked45 && rankProbe.rows[0] === Math.min(...backNodes.map((node) => node.y))
+			&& backNodes.filter((node) => node.role === "root").length === 1
+			&& backNodes.length === 20;
+		log(
+			"A45 径向扇与层级树读同一份层序归约：圆心/首行 = 选举出的根，下移接入与终端同环/同排；径向标签朝背离圆心一侧落位",
+			radialOk && treeOk && backSame && radialLabelOk,
+			`radial=${radialClicked45} ringRadii=${radialRings.join("/")} ringOf=${radialRadius.core}/${radialRadius.distro}/${radialRadius.access}/${radialRadius.demoted}`
+			+ ` demoted=${radialDemotedRole} tree=${treeClicked45} rows=${treeRows.map((y) => Math.round(y)).join(",")}`
+			+ ` treeRoot=${treeRoot[0]?.label}@${treeRoot[0]?.y} treeBottom=${treeYOf("10.0.1.7")}/${treeYOf("10.0.1.11")} back=${backSame}`
+			+ ` labelOut=${radialLabelOut.filter((item) => item.dot > 0.3).length}/${radialLabelOut.length}`
+			+ `(minDot=${radialLabelOut.length ? Math.min(...radialLabelOut.map((item) => item.dot)).toFixed(2) : "n/a"})`
+		);
+		// A46：收起 / 展开下级（§6.15，G6 v5 `collapse-expand`「实际案例」的等价实现）。
+		// 语义是「元素自己留着、子树与挂边摘掉」，四件事缺一条都不算过：
+		//   ① 角标只长在**真有下级**的节点上：网状顶层两两互联不算下级（方向由 `tier` 定），
+		//      末行 13 台终端与「接入交换机-2」都没有下级 ⇒ 20 台里恰 6 台可收起；
+		//   ② 双击「接入交换机-1」→ 20 台变 7 台，它的 13 条挂边一起消失且画布上不留悬空边；
+		//   ③ 角标写 `+13`、左上角出「已收起 13 台」+「全部展开」—— 读数与真遮住的台数一致；
+		//   ④ 再双击复原 20 台且坐标**逐点相等**（收起是视图，不是改数据）；
+		//   ⑤ 双击根「网控中心」收起整棵子树，只剩顶层 4 台（各分支不会互认下级）。
+		const readCollapseState = () => page.evaluate(() => {
+			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']"));
+			const ids = nodes.map((node) => node.getAttribute("data-node-id") ?? "");
+			const idSet = new Set(ids);
+			const positions = {};
+			for (const node of nodes) {
+				const shape = node.querySelector("[data-testid='topology-node-shape']");
+				positions[node.getAttribute("data-node-id") ?? ""] = `${shape?.getAttribute("cx")},${shape?.getAttribute("cy")}`;
+			}
+			// 链路 key 有两种形状（现网线格式 `e-<n>-<source>-<target>`、扁平 `source|target|index`），
+			// 但两端都是管理 IP ⇒「key 里出现的 IP 必须都在画布上」是判断悬空边的共同尺子。
+			const linkKeys = Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.map((el) => el.getAttribute("data-link-key") ?? "");
+			const dangling = linkKeys.filter((key) => (key.match(/\d+\.\d+\.\d+\.\d+/g) ?? []).some((ip) => !idSet.has(ip)));
+			const badges = Array.from(document.querySelectorAll("[data-testid='topology-node-collapse']"));
+			return {
+				nodeCount: ids.length,
+				ids,
+				positions,
+				linkCount: linkKeys.length,
+				dangling,
+				badgeIds: badges.map((el) => el.getAttribute("data-node-id") ?? "").sort(),
+				badgeTexts: Object.fromEntries(badges.map((el) => [el.getAttribute("data-node-id") ?? "", (el.textContent ?? "").trim()])),
+				collapsedIds: badges.filter((el) => el.getAttribute("data-collapsed") === "true").map((el) => el.getAttribute("data-node-id") ?? ""),
+				hiddenBadge: document.querySelector("[data-testid='topology-node-collapsed-badge']")?.getAttribute("data-hidden-count") ?? "",
+				expandAll: !!document.querySelector("[data-testid='topology-expand-all']")
+			};
+		});
+		/** 双击节点 = G6 `collapse-expand` 的默认触发（角标是同一个动作的鼠标出口） */
+		const toggleCollapse = (id) => page.evaluate((nodeId) => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === nodeId);
+			node?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+			return !!node;
+		}, id);
+
+		const collapseBefore = await readCollapseState();
+		const clickedAccess = await toggleCollapse("10.0.1.6");
+		await page.waitForTimeout(400);
+		const collapsedAccess = await readCollapseState();
+		const clickedAccessAgain = await toggleCollapse("10.0.1.6");
+		await page.waitForTimeout(400);
+		const restoredAccess = await readCollapseState();
+		const clickedRootForCollapse = await toggleCollapse("10.0.1.1");
+		await page.waitForTimeout(400);
+		const collapsedRoot = await readCollapseState();
+		const restoredSame = restoredAccess.nodeCount === collapseBefore.nodeCount
+			&& collapseBefore.ids.every((id) => restoredAccess.positions[id] === collapseBefore.positions[id]);
+		log(
+			"A46 收起 / 展开下级：角标只长在有下级的节点上、双击收起 13 台与挂边、展开坐标逐点复原、收起根只剩顶层 4 台",
+			collapseBefore.nodeCount === 20
+			&& collapseBefore.badgeIds.join(",") === "10.0.1.1,10.0.1.2,10.0.1.3,10.0.1.4,10.0.1.5,10.0.1.6"
+			&& collapseBefore.badgeTexts["10.0.1.6"] === "-"
+			&& clickedAccess && collapsedAccess.collapsedIds.join(",") === "10.0.1.6"
+			&& collapsedAccess.nodeCount === 7
+			&& collapsedAccess.linkCount === collapseBefore.linkCount - 13
+			&& collapsedAccess.dangling.length === 0
+			&& collapsedAccess.badgeTexts["10.0.1.6"] === "+13"
+			&& collapsedAccess.hiddenBadge === "13" && collapsedAccess.expandAll
+			&& clickedAccessAgain && restoredSame
+			&& clickedRootForCollapse && collapsedRoot.nodeCount === 4
+			&& [...collapsedRoot.ids].sort().join(",") === "10.0.1.1,10.0.1.2,10.0.1.3,10.0.1.5",
+			`badges=${collapseBefore.badgeIds.join("/")} before=${collapseBefore.nodeCount}台/${collapseBefore.linkCount}边`
+			+ ` collapsed=${collapsedAccess.nodeCount}台/${collapsedAccess.linkCount}边 悬空=${collapsedAccess.dangling.length}`
+			+ ` 角标=${collapsedAccess.badgeTexts["10.0.1.6"]} 已收起=${collapsedAccess.hiddenBadge} 全部展开=${collapsedAccess.expandAll}`
+			+ ` restored=${restoredAccess.nodeCount}台 逐点相等=${restoredSame}`
+			+ ` root=${collapsedRoot.nodeCount}台[${[...collapsedRoot.ids].sort().join("/")}]`
+		);
+
+		// A47：连线一律**低饱和中性灰** + 选中节点的关联强调（§6.15.2 要求 1 / 2）。四件事一起钉：
+		//   ① 灰是**同一档灰** —— 所有 `topology-link` 的 `stroke` 解析结果只有一个值（`--topology-link`），
+		//      它既不等于任何一档层色、也不等于主色，并且比 `--ui-text-muted` **同亮度、色度只剩 35%**
+		//      （2026-11-08 用户裁决「降低链路颜色的饱和度」—— 连线是背景关系，不该和层色抢注意力）；
+		//   ② 关联强调**只加外延、不加粗也不换色** —— 点 `10.0.1.4` 后恰 4 条
+		//      `data-link-emphasized=true`（1→4 / 2→4 / 4→6 / 4→7），本体描边仍是那一档灰、宽度仍是
+		//      带宽那一档 1.5px（**不是** 3px），多出来的是 4 圈同色低不透明度的外延环（1.5 + 6 = 7.5px / 30%）；
+		//      选中节点本体加粗一档（2 → 3px）但**不换色**，另有 1 圈半径 +2、4px / 50% 的同色外环，
+		//      恰 4 个 `data-node-emphasized=true`（一跳邻居）且外圈 2px / 22%、层色不变 ——
+		//      画布上一共 5 圈外延环（选中 1 + 邻居 4），本体粗细全是 2px；
+		//   ③ 「没有未选中态」（2026-11-09 用户裁决）：再点同一台**不会**取消选中 —— 强调条数与
+		//      外延环数原样留着（既不是「点亮就不灭」，也不是「点第二下就熄」）；
+		// 灰**不丢状态**的那一半在默认样本上（`offline` → 粗虚线、`wifi*` → 细密虚线），见 A47 的尾段。
+		await page.click("[data-testid='topology-expand-all']");
+		await page.waitForTimeout(400);
+		/** 用一个探针元素把 CSS 变量解析成浏览器真会画出来的颜色（不在断言里猜 var 的字符串） */
+		const resolveColors = () => page.evaluate(() => {
+			const probe = (property, token) => {
+				const el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+				el.setAttribute("style", `${property}: var(${token})`);
+				document.body.append(el);
+				const value = getComputedStyle(el)[property];
+				el.remove();
+				return value;
+			};
+			return {
+				muted: probe("stroke", "--ui-text-muted"),
+				primary: probe("stroke", "--ui-primary"),
+				link: probe("stroke", "--topology-link")
+			};
+		});
+		const greyColors = await resolveColors();
+		/**
+		 * 从 `oklch(L C H)` 的序列化里取**色度**：连线灰必须是 muted 的同一亮度、色度只剩 35%。
+		 * 取不到数值就返回 `null`（浏览器不支持相对色语法时会退化成 muted 本身 ⇒ 断言红）。
+		 */
+		const chromaOf = (value) => {
+			const match = /^oklch\(\s*([\d.]+)%?\s+([\d.]+)/.exec((value ?? "").trim());
+			return match ? { lightness: Number(match[1]), chroma: Number(match[2]) } : null;
+		};
+		const mutedOklch = chromaOf(greyColors.muted);
+		const linkOklch = chromaOf(greyColors.link);
+		const linkDesaturatedOk = !!mutedOklch && !!linkOklch
+			&& Math.abs(linkOklch.lightness - mutedOklch.lightness) < 0.02
+			&& mutedOklch.chroma > 0
+			&& Math.abs(linkOklch.chroma / mutedOklch.chroma - 0.35) < 0.06;
+		const greyProbe = await page.evaluate(() => {
+			const links = Array.from(document.querySelectorAll("[data-testid='topology-link']"));
+			const roleStrokes = new Set();
+			for (const shape of document.querySelectorAll("[data-testid='topology-node-shape']"))
+				roleStrokes.add(getComputedStyle(shape).stroke);
+			return {
+				linkCount: links.length,
+				linkStrokes: [...new Set(links.map((el) => getComputedStyle(el).stroke))],
+				roleStrokes: [...roleStrokes]
+			};
+		});
+		const greyOk = greyProbe.linkStrokes.length === 1
+			&& greyProbe.linkStrokes[0] === greyColors.link
+			&& !greyProbe.roleStrokes.includes(greyColors.link)
+			&& greyColors.link !== greyColors.primary
+			&& linkDesaturatedOk;
+
+		/** 点一个节点（画布上的 `<g>`）；再点同一台**不会**取消选中（「没有未选中态」，2026-11-09 用户裁决） */
+		const clickGraphNode = (id) => page.evaluate((nodeId) => {
+			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === nodeId);
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return !!node;
+		}, id);
+		const readHighlight = (nodeId = "") => page.evaluate((id) => {
+			const emphasized = Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.filter((el) => el.getAttribute("data-link-emphasized") === "true");
+			const halos = Array.from(document.querySelectorAll("[data-testid='topology-link-halo']"));
+			const neighbours = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.filter((el) => el.getAttribute("data-node-emphasized") === "true");
+			const shapes = neighbours.map((node) => node.querySelector("[data-testid='topology-node-shape']"));
+			// 节点本体：粗细必须与未选中时一样（强调只加外延，不靠变粗说话），颜色必须还是它自己的层色
+			const self = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.find((el) => el.getAttribute("data-node-id") === id);
+			const selfShape = self?.querySelector("[data-testid='topology-node-shape']");
+			const selfHalo = self?.querySelector("[data-testid='topology-node-halo']");
+			return {
+				linkCount: emphasized.length,
+				linkStrokes: [...new Set(emphasized.map((el) => getComputedStyle(el).stroke))],
+				linkWidths: [...new Set(emphasized.map((el) => getComputedStyle(el).strokeWidth))],
+				linkHaloCount: halos.length,
+				linkHaloLevels: [...new Set(halos.map((el) => el.getAttribute("data-link-halo-emphasis") ?? ""))].sort(),
+				linkHaloWidths: [...new Set(halos.map((el) => getComputedStyle(el).strokeWidth))],
+				linkHaloOpacities: [...new Set(halos.map((el) => getComputedStyle(el).strokeOpacity))],
+				linkHaloStrokes: [...new Set(halos.map((el) => getComputedStyle(el).stroke))],
+				// 邻居连线的外延环染成**选中设备**的层色（`data-link-halo-tint` = 角色 id）
+				linkHaloTints: [...new Set(halos.map((el) => el.getAttribute("data-link-halo-tint") ?? ""))],
+				selfRole: selfShape?.getAttribute("data-node-role") ?? "",
+				neighbourIds: neighbours.map((el) => el.getAttribute("data-node-id") ?? "").sort(),
+				neighbourWidths: [...new Set(shapes.map((shape) => getComputedStyle(shape).strokeWidth))],
+				neighbourStrokes: [...new Set(shapes.map((shape) => getComputedStyle(shape).stroke))],
+				neighbourHaloOpacities: [...new Set(neighbours.map((node) => {
+					const halo = node.querySelector("[data-testid='topology-node-halo']");
+					return halo ? getComputedStyle(halo).strokeOpacity : "none";
+				}))],
+				selfWidth: selfShape ? getComputedStyle(selfShape).strokeWidth : "",
+				selfStroke: selfShape ? getComputedStyle(selfShape).stroke : "",
+				haloCount: document.querySelectorAll("[data-testid='topology-node-halo']").length,
+				haloStroke: selfHalo ? getComputedStyle(selfHalo).stroke : "",
+				haloWidth: selfHalo ? getComputedStyle(selfHalo).strokeWidth : "",
+				haloOpacity: selfHalo ? getComputedStyle(selfHalo).strokeOpacity : "",
+				haloLevel: selfHalo ? selfHalo.getAttribute("data-halo-emphasis") ?? "" : ""
+			};
+		}, nodeId);
+		const highlightClicked = await clickGraphNode("10.0.1.4");
+		await page.waitForTimeout(500);
+		const highlighted = await readHighlight("10.0.1.4");
+		/**
+		 * 「没有未选中态」（2026-11-09 用户裁决）：再点同一台**不会**取消选中、右栏不会掉回空态。
+		 * 旧断言在这里读的是「取消后全图无强调」，那套语义已被砍掉（详情栏恒有一台设备）。
+		 */
+		const reclickSame = await clickGraphNode("10.0.1.4");
+		await page.waitForTimeout(400);
+		const stillSelected = await readHighlight("10.0.1.4");
+		/** 层色不变：邻居外圈的描边必须还是那几档层色之一（换邻居不换设备类别） */
+		const neighbourTierOk = highlighted.neighbourStrokes.every((stroke) => greyProbe.roleStrokes.includes(stroke));
+		/**
+		 * 选中态：本体**加粗一档（2 → 3）但绝不换色**（2026-11-09 用户裁决「加粗节点环」），
+		 * 同色外延环紧跟圆边（+2 / 4px / 50%）。取消选中后本体回到 2px（见 A47 尾段）。
+		 */
+		const selfTierOk = greyProbe.roleStrokes.includes(highlighted.selfStroke)
+			&& highlighted.selfStroke !== greyColors.primary
+			&& highlighted.haloStroke === highlighted.selfStroke
+			&& highlighted.selfWidth === "3px"
+			&& highlighted.haloWidth === "4px" && highlighted.haloOpacity === "0.5"
+			&& highlighted.haloLevel === "selected";
+		/**
+		 * 关联链路的强调也必须只落在外延环上：本体 1.5px 不动，外延 1.5 + 6 = 7.5px / 30%；
+		 * 颜色取**选中设备**的层色（`data-link-halo-tint` = 它自己的角色 id），不是灰 —— 一圈线只回答
+		 * 「它连着谁」，用邻居的颜色会把「谁被点中」说反。30% 是 2026-11-09 调亮后的值：
+		 * 16% 压在画布上几乎看不见层色，等于没染色。
+		 */
+		const linkEmphasisOk = highlighted.linkWidths.join(",") === "1.5px"
+			&& highlighted.linkHaloCount === 4
+			&& highlighted.linkHaloLevels.join(",") === "incident"
+			&& highlighted.linkHaloWidths.join(",") === "7.5px"
+			&& highlighted.linkHaloOpacities.join(",") === "0.3"
+			&& highlighted.selfRole !== ""
+			&& highlighted.linkHaloTints.length === 1 && highlighted.linkHaloTints[0] === highlighted.selfRole
+			&& highlighted.linkHaloStrokes.length === 1
+			&& highlighted.linkHaloStrokes[0] === highlighted.selfStroke
+			&& highlighted.linkHaloStrokes[0] !== greyColors.link;
+
+		// A48 ①②：控件收敛到画布右上一条排、图例落在右下角（§6.15 要求 4 / 5）。位置只能靠几何断言 ——
+		// 类名写着 `top-2 right-2` 并不等于「就在右上角」（父容器一换就不成立了），所以量
+		// `getBoundingClientRect()` 与画布边界之差（实际是 8px，断言给 12px 容差）。
+		// 图例这一侧除位置外还要钉三件事：只有一份（详情栏不再有卡片版）、只列实际出现的角色、
+		// 色块与画布外圈**同源**（HTML 认 `border-*`、SVG 认 `stroke-*`，取自 `topologyRoleStyle.ts`
+		// 的同一张 ROLE_TONE 表），选举出的根文案是「边界层」而角色 id 仍是 `root`。
+		const readCanvasChrome = () => page.evaluate(() => {
+			const box = (el) => {
+				const rect = el.getBoundingClientRect();
+				return { right: rect.right, top: rect.top, bottom: rect.bottom, cy: rect.top + rect.height / 2 };
+			};
+			// 色块令牌：图例写 `border-(--topology-tier-core)`（HTML）、画布圆写 `stroke-(--topology-tier-core)`
+			// （SVG），同名即「同源」。取令牌时按**属性前缀**过滤 —— 节点圆上还挂着 `fill-(--ui-bg-elevated)`，
+			// 只认第一个 `(--…` 会一律取到填充色。
+			const tokenOf = (el, prefix) => {
+				const item = (el?.getAttribute("class") ?? "").split(" ").find((value) => value.startsWith(`${prefix}-(`));
+				const start = item ? item.indexOf("(") : -1;
+				const end = item ? item.indexOf(")") : -1;
+				return start >= 0 && end > start ? item.slice(start + 1, end) : "";
+			};
+			const canvas = document.querySelector("[data-testid='topology-canvas']");
+			const controls = document.querySelector("[data-testid='topology-controls']");
+			const rotate = document.querySelector("[data-testid='topology-rotate']");
+			const switcher = document.querySelector("[data-testid='topology-layout-switcher']");
+			const legend = document.querySelector("[data-testid='topology-legend']");
+			const roleList = document.querySelector("[data-testid='topology-legend-roles']");
+			const canvasTokens = {};
+			for (const shape of document.querySelectorAll("[data-testid='topology-node-shape']"))
+				canvasTokens[shape.getAttribute("data-node-role") ?? ""] = tokenOf(shape, "stroke");
+			// 图标的「渲染出来了没有」只能看图标节点里有没有东西：图标名写错时按钮仍在、也仍有一个
+			// 空图标容器（2026-11-09 之前 `carbon:rotate-ccw` / `-cw` 就是这么一对空按钮）。
+			// 图标有两种渲染形态（`@nuxt/icon` 的 svg 模式给 `<svg>` 内容、CSS 模式给 `i-carbon-*` 类），
+			// 两种都收进来：断言只关心「非空且彼此不同」，不把实现形态写死。
+			const glyphOf = (selector) => {
+				const host = document.querySelector(selector);
+				if (!host)
+					return "";
+				const svg = host.querySelector("svg");
+				const classes = Array.from(host.querySelectorAll("[class*='i-carbon-'], [class*='iconify']"))
+					.map((el) => el.getAttribute("class") ?? "")
+					.join(" ");
+				return `${svg ? svg.innerHTML.trim().slice(0, 300) : ""}|${classes}`;
+			};
+			// 画布背景透明：量 `<svg>` 上两层容器的计算背景（第一层是画布宿主、第二层是带边框的画布框）
+			const shellBg = [];
+			for (let el = canvas?.parentElement, depth = 0; el && depth < 2; el = el.parentElement, depth++)
+				shellBg.push(getComputedStyle(el).backgroundColor);
+			return {
+				canvas: canvas ? box(canvas) : null,
+				controls: controls ? box(controls) : null,
+				switcher: switcher ? box(switcher) : null,
+				rotate: rotate ? box(rotate) : null,
+				legend: legend ? box(legend) : null,
+				// 控件排搬到工具栏左区（2026-11-09 用户调整）：位置靠 DOM 归属 + 同排几何一起钉
+				controlsInToolbarLeft: !!document.querySelector("#app-toolbar-left [data-testid='topology-controls']"),
+				switcherInToolbarLeft: !!document.querySelector("#app-toolbar-left [data-testid='topology-layout-switcher']"),
+				controlsOverCanvas: !!controls && !!canvas
+					&& controls.getBoundingClientRect().bottom > canvas.getBoundingClientRect().top
+					&& controls.getBoundingClientRect().top < canvas.getBoundingClientRect().bottom
+					&& Math.abs(controls.getBoundingClientRect().right - canvas.getBoundingClientRect().right) <= 12,
+				missingParts: ["topology-labels-toggle", "topology-reset-view", "topology-zoom-in", "topology-zoom-out", "topology-zoom", "topology-refresh"]
+					.filter((id) => !controls?.querySelector(`[data-testid='${id}']`)),
+				// 已下线的两枚「复位」（2026-11-09 用户裁决）：同一个动作由「恢复默认配置」三合一承担
+				retiredParts: ["topology-rotate-reset", "topology-zoom-reset"]
+					.filter((id) => !!document.querySelector(`[data-testid='${id}']`)),
+				// 左区排尾三枚：显示名称 → 恢复默认配置 → 更新（顺序 + 「更新」必须有文字）
+				leftTail: Array.from(document.querySelectorAll("#app-toolbar-left [data-testid]"))
+					.map((el) => el.getAttribute("data-testid") ?? "")
+					.slice(-3),
+				refreshLabel: document.querySelector("[data-testid='topology-refresh']")?.textContent?.trim() ?? "",
+				shellBg: shellBg.join("|"),
+				rotateCcwGlyph: glyphOf("[data-testid='topology-rotate-ccw']"),
+				rotateCwGlyph: glyphOf("[data-testid='topology-rotate-cw']"),
+				layoutGlyph: glyphOf("[data-testid='topology-layout-switcher']"),
+				labelsGlyph: glyphOf("[data-testid='topology-labels-toggle']"),
+				legendCount: document.querySelectorAll("[data-testid='topology-legend']").length,
+				roleListCount: document.querySelectorAll("[data-testid='topology-legend-roles']").length,
+				legendInAside: !!document.querySelector("aside [data-testid='topology-legend'], aside [data-testid='topology-legend-roles']"),
+				roles: roleList
+					? Array.from(roleList.querySelectorAll("[data-role]")).map((el) => ({
+						role: el.getAttribute("data-role") ?? "",
+						tone: el.getAttribute("data-role-color") ?? "",
+						token: tokenOf(el, "border"),
+						label: (el.parentElement?.textContent ?? "").trim()
+					}))
+					: [],
+				canvasTokens
+			};
+		});
+
+		const canvasChrome = await readCanvasChrome();
+		const radialChromeSwitch = await switchLayout("径向扇");
+		await page.waitForTimeout(300);
+		const radialChrome = await readCanvasChrome();
+		await switchLayout("层级树");
+		await page.waitForTimeout(300);
+		// 控件排在工具栏左区、与布局下拉同一行（2026-11-09 用户调整：原先压在画布右上角盖住顶层节点）。
+		// 断言两件事：① 归属（`#app-toolbar-left` 内）；② 同排（两者垂直中心差 ≤ 12px）且**不在画布上**。
+		const controlsOk = canvasChrome.controlsInToolbarLeft && canvasChrome.switcherInToolbarLeft
+			&& !!canvasChrome.controls && !!canvasChrome.switcher
+			&& Math.abs(canvasChrome.controls.cy - canvasChrome.switcher.cy) <= 12
+			&& canvasChrome.missingParts.length === 0 && !canvasChrome.controlsOverCanvas
+			&& radialChromeSwitch && !!radialChrome.rotate && !!radialChrome.controls
+			&& Math.abs(radialChrome.rotate.cy - radialChrome.controls.cy) <= 12;
+		// 2026-11-09 那轮工具栏调整里能自动钉的四条：画布透明、两枚「复位」下线、
+		// 左区排尾顺序（显示名称 → 恢复默认配置 → 更新）且「更新」带文字、图标真的画出来了。
+		// 图标两条尤其要量 SVG 内容：名字写错时按钮上什么都没有，但 `[data-testid]` 照样在。
+		// 「布局图标随档位换」用两档 glyph 不相等来钉（径向扇 = `carbon:chart-relationship`，
+		// 层级树 = `carbon:category`），不把类名写进断言。
+		const retiredOk = canvasChrome.retiredParts.length === 0 && radialChrome.retiredParts.length === 0;
+		const tailOrderOk = canvasChrome.leftTail.join(",") === "topology-labels-toggle,topology-reset-view,topology-refresh"
+			&& radialChrome.leftTail.join(",") === "topology-labels-toggle,topology-reset-view,topology-refresh";
+		const refreshLabelOk = [canvasChrome.refreshLabel, radialChrome.refreshLabel].join("|") === "更新|更新";
+		const glyphFilled = (glyph) => glyph.replaceAll("|", "").trim() !== "";
+		const glyphOk = glyphFilled(radialChrome.rotateCcwGlyph) && glyphFilled(radialChrome.rotateCwGlyph)
+			&& radialChrome.rotateCcwGlyph !== radialChrome.rotateCwGlyph
+			&& glyphFilled(canvasChrome.labelsGlyph)
+			&& glyphFilled(canvasChrome.layoutGlyph) && glyphFilled(radialChrome.layoutGlyph)
+			&& canvasChrome.layoutGlyph !== radialChrome.layoutGlyph;
+		// 画布背景：`<svg>` 上两层容器（宿主 + 带边框的画布框）都必须是全透明，底色交给页面
+		const shellBgOk = canvasChrome.shellBg === "rgba(0, 0, 0, 0)|rgba(0, 0, 0, 0)"
+			&& radialChrome.shellBg === "rgba(0, 0, 0, 0)|rgba(0, 0, 0, 0)";
+		const legendRoot = canvasChrome.roles.find((entry) => entry.role === "root") ?? null;
+		const legendTokensMatch = canvasChrome.roles.length > 0
+			&& canvasChrome.roles.every((entry) => entry.token !== "" && entry.token === (canvasChrome.canvasTokens[entry.role] ?? "?"));
+		const nearRightEdge = (target) => !!canvasChrome.canvas && !!target
+			&& Math.abs(canvasChrome.canvas.right - target.right) <= 12;
+		const legendOk = nearRightEdge(canvasChrome.legend)
+			&& !!canvasChrome.canvas && !!canvasChrome.legend
+			&& Math.abs(canvasChrome.canvas.bottom - canvasChrome.legend.bottom) <= 12
+			&& canvasChrome.legendCount === 1 && canvasChrome.roleListCount === 1 && !canvasChrome.legendInAside
+			&& legendTokensMatch
+			&& !!legendRoot && legendRoot.label === "边界层" && legendRoot.tone === "boundary";
+
+		// 复原默认样本：A28 起的断言仍走 6 节点默认图（`topology-nested` 只切形状，不复位样本）
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-default`);
+
+		// A47 尾段：灰**不丢状态** —— `offline` 用粗虚线 `6 4`、无线介质用细密虚线 `2 3`（默认 6 节点样本：
+		// 恰好 2 条 down、2 条无线，其中 `10.0.0.4→10.0.0.6` 两者兼具 ⇒ 粗虚线优先）。线型成了灰色之后
+		// 唯一还带语义的链路差异，所以必须钉住；同一轮顺带钉**线宽读带宽**（§6.15 要求 3）：
+		// 样本里只有 `10.0.0.1→10.0.0.2` 给了 `1 Gbps`（= 1000 Mbps，落 `2.5` 那档），其余 5 条没有带宽
+		// ⇒ 落到 `1.5` 的缺真值档：宽的那一条必须是它，且全图只有两种宽度。
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(900);
+		const dashProbe = await page.evaluate(() => Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+			.map((el) => ({
+				key: el.getAttribute("data-link-key") ?? "",
+				dash: getComputedStyle(el).strokeDasharray,
+				width: getComputedStyle(el).strokeWidth
+			})));
+		const dashedLinks = dashProbe.filter((link) => link.dash !== "none");
+		const coarseDashed = dashedLinks.filter((link) => ["6 4", "6px, 4px"].includes(link.dash));
+		const fineDashed = dashedLinks.filter((link) => ["2 3", "2px, 3px"].includes(link.dash));
+		/** 稠密样本里 down 的两条：`10.0.0.3→10.0.0.4`（有线）与 `10.0.0.4→10.0.0.6`（无线，状态优先） */
+		const dashOk = dashProbe.length === 6 && dashedLinks.length === 3
+			&& coarseDashed.length === 2 && fineDashed.length === 1
+			&& coarseDashed.every((link) => link.key.includes("10.0.0.4")
+				&& (link.key.includes("10.0.0.3") || link.key.includes("10.0.0.6")))
+			&& fineDashed[0].key.includes("10.0.0.4") && fineDashed[0].key.includes("10.0.0.5");
+		const wideLinks = dashProbe.filter((link) => link.width === "2.5px");
+		const widthOk = wideLinks.length === 1
+			&& wideLinks[0].key.includes("10.0.0.1") && wideLinks[0].key.includes("10.0.0.2")
+			&& dashProbe.filter((link) => link.width === "1.5px").length === 5;
+		log(
+			"A47 连线一律低饱和中性灰（同一档灰、不等于任何层色），关联强调只加同色外延环（本体宽度不动）",
+			greyOk
+			&& highlightClicked && highlighted.linkCount === 4
+			&& highlighted.linkStrokes.length === 1 && highlighted.linkStrokes[0] === greyColors.link
+			&& linkEmphasisOk
+			&& highlighted.neighbourIds.join(",") === "10.0.1.1,10.0.1.2,10.0.1.6,10.0.1.7"
+			&& highlighted.neighbourWidths.join(",") === "2px"
+			&& highlighted.neighbourHaloOpacities.join(",") === "0.22" && neighbourTierOk
+			&& selfTierOk
+			&& highlighted.haloCount === 5
+			&& reclickSame && stillSelected.selfWidth === "3px"
+			&& stillSelected.haloLevel === "selected"
+			&& stillSelected.linkCount === 4 && stillSelected.haloCount === 5
+			&& dashOk && widthOk,
+			`links=${greyProbe.linkCount} 描边=${greyProbe.linkStrokes.length}档 灰=${greyColors.link}`
+			+ `（色度 ${linkOklch?.chroma ?? "?"} / muted ${mutedOklch?.chroma ?? "?"}）层色=${greyProbe.roleStrokes.length}档`
+			+ ` 强调=${highlighted.linkCount}条[${highlighted.linkStrokes.join("/")}]/${highlighted.linkWidths.join("/")}`
+			+ ` 外延=${highlighted.linkHaloCount}圈[${highlighted.linkHaloLevels.join("/")}]/${highlighted.linkHaloWidths.join("/")}/${highlighted.linkHaloOpacities.join("/")} 染色=${highlighted.linkHaloTints.join("/")}`
+			+ ` 邻居=${highlighted.neighbourIds.length}个/${highlighted.neighbourWidths.join("/")}/${highlighted.neighbourHaloOpacities.join("/")} 层色不变=${neighbourTierOk}`
+			+ ` 本机=${highlighted.selfWidth}/${highlighted.selfStroke} 外环=${highlighted.haloCount}个[${highlighted.haloStroke}]/${highlighted.haloWidth}/${highlighted.haloOpacity}`
+			+ ` 再点同一台=${stillSelected.selfWidth}/${stillSelected.haloLevel}/强调=${stillSelected.linkCount}条`
+			+ ` 虚线=${dashedLinks.length}条[粗${coarseDashed.length}/细${fineDashed.length}]`
+			+ ` 线宽=${wideLinks.length}条2.5px/${dashProbe.filter((link) => link.width === "1.5px").length}条1.5px`
+		);
+
+		// A52：**同档**（`tier` 相同）的上下级（§6.15，2026-11-09 用户反馈）。现网 18 台胖 AP 登记成
+		// `tier 3`，与它们上联的接入交换机**同档**；只按「严格更靠下」判，收起汇聚时接入被摘掉、
+		// AP 却留在画布上且不连任何东西（用户原话「点收起，Wi-Fi胖AP-10~18 没有收起来」）。判据因此
+		// 补了第二条：同档时**只有一端还有上行**（邻接里存在 tier 更小的设备）才算方向。样本
+		// （`__control/topology-same-tier`）钉四件事：
+		//   ① 角标只长在核心-1 / 汇聚-1 / 接入-1 / 胖AP-10 上 —— 两台都上联汇聚的接入-2 与只连接入的
+		//      AP-11/12 都没有下级（同档且两端都没有 / 都有上行时不许凭空造层级）；
+		//   ② 角标读数：展开态一律 `-`（有下级但没收起）；收起汇聚-1 后它的角标写 `+6`（接入-1、接入-2、
+		//      3 台 AP、1 台终端），收起接入-1 后它的角标写 `+4` —— 后者必须**穿过「同档那一跳」**
+		//      把 AP 与挂在 AP 下的终端一起算进来；
+		//   ③ 双击汇聚-1 → 8 台只剩核心-1 与它自己 2 台、链路只剩 1 条、画布上无悬空边
+		//      （旧判据在这里会留下 3 台 AP + 1 台终端，且它们的边全被摘掉 ⇒ 4 个孤点）；
+		//   ④ 展开后 8 台坐标逐点复原；再收起接入-1 → 4 台（同档互相不认下级，接入-2 留着）。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-same-tier`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+		const sameTierBefore = await readCollapseState();
+		const clickedSameTierDistro = await toggleCollapse("10.0.3.2");
+		await page.waitForTimeout(400);
+		const sameTierDistroCollapsed = await readCollapseState();
+		const clickedSameTierDistroAgain = await toggleCollapse("10.0.3.2");
+		await page.waitForTimeout(400);
+		const sameTierRestored = await readCollapseState();
+		const sameTierRestoredSame = clickedSameTierDistroAgain
+			&& sameTierRestored.nodeCount === sameTierBefore.nodeCount
+			&& sameTierBefore.ids.every((id) => sameTierRestored.positions[id] === sameTierBefore.positions[id]);
+		const clickedSameTierAccess = await toggleCollapse("10.0.3.3");
+		await page.waitForTimeout(400);
+		const sameTierAccessCollapsed = await readCollapseState();
+		log(
+			"A52 同档（tier 相同）的上下级：接入收走它同档的胖 AP、两端都有上行的同档邻居互不认下级",
+			sameTierBefore.nodeCount === 8
+			&& sameTierBefore.linkCount === 8
+			&& sameTierBefore.badgeIds.join(",") === "10.0.3.1,10.0.3.10,10.0.3.2,10.0.3.3"
+			&& sameTierBefore.badgeTexts["10.0.3.2"] === "-"
+			&& sameTierBefore.badgeTexts["10.0.3.3"] === "-"
+			&& sameTierBefore.badgeTexts["10.0.3.10"] === "-"
+			&& clickedSameTierDistro && sameTierDistroCollapsed.collapsedIds.join(",") === "10.0.3.2"
+			&& sameTierDistroCollapsed.nodeCount === 2 && sameTierDistroCollapsed.linkCount === 1
+			&& [...sameTierDistroCollapsed.ids].sort().join(",") === "10.0.3.1,10.0.3.2"
+			&& sameTierDistroCollapsed.dangling.length === 0
+			&& sameTierDistroCollapsed.badgeTexts["10.0.3.2"] === "+6"
+			&& sameTierRestoredSame
+			&& clickedSameTierAccess && sameTierAccessCollapsed.nodeCount === 4
+			&& sameTierAccessCollapsed.badgeTexts["10.0.3.3"] === "+4"
+			&& [...sameTierAccessCollapsed.ids].sort().join(",") === "10.0.3.1,10.0.3.2,10.0.3.3,10.0.3.4",
+			`badges=${sameTierBefore.badgeIds.join("/")} 展开态=${sameTierBefore.badgeTexts["10.0.3.2"]}/${sameTierBefore.badgeTexts["10.0.3.3"]}/${sameTierBefore.badgeTexts["10.0.3.10"]}`
+			+ ` 收后角标=${sameTierDistroCollapsed.badgeTexts["10.0.3.2"]}/${sameTierAccessCollapsed.badgeTexts["10.0.3.3"]}`
+			+ ` before=${sameTierBefore.nodeCount}台/${sameTierBefore.linkCount}边`
+			+ ` 收汇聚=${sameTierDistroCollapsed.nodeCount}台/${sameTierDistroCollapsed.linkCount}边[${[...sameTierDistroCollapsed.ids].sort().join("/")}] 悬空=${sameTierDistroCollapsed.dangling.length}`
+			+ ` 复原=${sameTierRestored.nodeCount}台 逐点相等=${sameTierRestoredSame}`
+			+ ` 收接入=${sameTierAccessCollapsed.nodeCount}台[${[...sameTierAccessCollapsed.ids].sort().join("/")}]`
+		);
+		// 复原默认样本（A48 起的断言仍走 6 节点默认图）
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-default`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(900);
+
+		// A48 ③：详情栏的两枚按钮真跳到指标页（§6.15 要求 3）。两个域的记录标识不同（拓扑 id 是管理 IP、
+		// 设备台账 `?id` 是 `device_code`、链路台账 `?id` 是 `link_id`），所以深链带 IP、目标页用自己已经
+		// 抓到的台账解析成 `?id` —— 只断言「URL 变了」会漏掉「跳过去是另一台设备」。
+		// 默认样本里 `10.0.0.2` 对齐台账的 `DEV-CORE-1`（`sys_name` = 核心路由器-1）；`10.0.0.1` 不在台账里，
+		// 正好用来说明「命中不了就保持默认选中、不静默翻页去捞」（`NMCPS-ARCH-006` §5.2 同规则）。
+		const nodeForMetrics = await clickGraphNode("10.0.0.2");
+		await page.waitForTimeout(600);
+		const nodeMetricsButton = await page.evaluate(() => {
+			const button = document.querySelector("[data-testid='topology-node-metrics']");
+			/**
+			 * 「按钮在卡片最底部、主色」（2026-11-09 用户裁决）：位置用几何量 ——
+			 * 卡片里所有事实行（`dt` / `dd` / 小标题 / 邻居列表）的底边都在按钮上边之上，
+			 * 且按钮的包裹 `<span>` 是卡片的**最后一个子元素**（后面没有别的东西了）。
+			 * 颜色读 class 里的 `primary`（Nuxt UI 的 soft 主色按钮就是这么标的）。
+			 */
+			const card = button?.closest("div.rounded-lg.border") ?? null;
+			const rect = button?.getBoundingClientRect() ?? null;
+			const facts = Array.from(card?.querySelectorAll("dt, dd, h3, ul") ?? [])
+				.map((el) => el.getBoundingClientRect())
+				.filter((box) => box.height > 0);
+			const wrapper = button?.closest("span") ?? button;
+			const siblings = card && wrapper ? Array.from(card.children) : [];
+			return {
+				exists: !!button,
+				mgmtIp: button?.getAttribute("data-mgmt-ip") ?? "",
+				disabled: button?.hasAttribute("disabled") ?? true,
+				belowFacts: !!rect && facts.every((box) => box.bottom <= rect.top + 1),
+				factRows: facts.length,
+				siblingsAfter: wrapper ? siblings.slice(siblings.indexOf(wrapper) + 1).length : -1,
+				primaryTone: !!button && [...button.classList].some((name) => name.includes("primary"))
+			};
+		});
+		await page.click("[data-testid='topology-node-metrics']");
+		await page.waitForURL((target) => target.pathname === "/topology/device-metrics", { timeout: 15_000 }).catch(() => {});
+		await page.waitForTimeout(1_500);
+		const deviceDeepLink = await page.evaluate(() => {
+			const url = new URL(window.location.href);
+			return {
+				path: url.pathname,
+				mgmtIp: url.searchParams.get("mgmt_ip") ?? "",
+				id: url.searchParams.get("id") ?? "",
+				name: document.querySelector("[data-testid='device-detail-name']")?.textContent?.trim() ?? ""
+			};
+		});
+
+		// 链路侧：回到监控页点一条画布上的链路 → 卡片 → 按钮跳 `/topology/link-metrics`，深链带两端管理 IP。
+		// 这一条同时是「命中不了不编造」的反向证明：`10.0.0.1` 不在链路台账里（台账只有 10.0.0.2 ↔ 10.0.0.3
+		// 与 AP 那条），所以页面只会带上 `source_ip` / `target_ip`，保持默认选中，不会硬凑一条链路。
+		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(900);
+		const clickedLinkForMetrics = await page.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.find((el) => (el.getAttribute("data-link-key") ?? "").includes("10.0.0.1")
+					&& (el.getAttribute("data-link-key") ?? "").includes("10.0.0.2"));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return link?.getAttribute("data-link-key") ?? "";
+		});
+		await page.waitForTimeout(500);
+		const linkCardVisible = await page.evaluate(() => {
+			/**
+			 * 链路卡片的指标按钮同样压在**最底部**、同样是主色（2026-11-09 用户裁决），
+			 * 并且卡片里**没有关闭叉**（退出链路视图靠再点一次这条线）。
+			 */
+			const card = document.querySelector("[data-testid='topology-link-card']");
+			const button = document.querySelector("[data-testid='topology-link-metrics']");
+			const rect = button?.getBoundingClientRect() ?? null;
+			const facts = Array.from(card?.querySelectorAll("dt, dd, h3, ul, p") ?? [])
+				.map((el) => el.getBoundingClientRect())
+				.filter((box) => box.height > 0);
+			const wrapper = button?.closest("span") ?? button;
+			const children = card && wrapper ? Array.from(card.children) : [];
+			return {
+				visible: !!card,
+				metricsBelowFacts: !!rect && facts.every((box) => box.bottom <= rect.top + 1),
+				metricsSiblingsAfter: wrapper ? children.slice(children.indexOf(wrapper) + 1).length : -1,
+				metricsPrimary: !!button && [...button.classList].some((name) => name.includes("primary"))
+			};
+		});
+		await page.click("[data-testid='topology-link-metrics']");
+		await page.waitForURL((target) => target.pathname === "/topology/link-metrics", { timeout: 15_000 }).catch(() => {});
+		await page.waitForTimeout(1_500);
+		const linkDeepLink = await page.evaluate(() => {
+			const url = new URL(window.location.href);
+			return {
+				path: url.pathname,
+				source: url.searchParams.get("source_ip") ?? "",
+				target: url.searchParams.get("target_ip") ?? ""
+			};
+		});
+		// 直达解析（正向）：台账里 `10.0.0.2` / `10.0.0.3` 是 `DEV-CORE-1` / `DEV-ACC-1`，那条链路的
+		// `link_id` 是 `DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1`；方向不敏感（台账的 source / target 是发现顺序）。
+		await page.goto(`${BASE_URL}/topology/link-metrics?source_ip=10.0.0.2&target_ip=10.0.0.3`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_500);
+		const resolvedLink = await page.evaluate(() => {
+			const url = new URL(window.location.href);
+			return {
+				id: url.searchParams.get("id") ?? "",
+				header: document.querySelector("[data-testid='link-detail-header'] span")?.textContent?.trim() ?? ""
+			};
+		});
+		log(
+			"A48 控件排搬进工具栏左区与布局下拉同排、排尾「显示名称→恢复默认配置→更新」、两枚复位下线、图标非空、画布透明，图例只在画布右下角并写「边界层」，两枚深链按钮真跳到指标页并选中对应记录",
+			controlsOk && retiredOk && tailOrderOk && refreshLabelOk && glyphOk && shellBgOk && legendOk
+			&& nodeForMetrics && nodeMetricsButton.exists && !nodeMetricsButton.disabled && nodeMetricsButton.mgmtIp === "10.0.0.2"
+			&& nodeMetricsButton.belowFacts && nodeMetricsButton.siblingsAfter === 0 && nodeMetricsButton.primaryTone
+			&& deviceDeepLink.path === "/topology/device-metrics" && deviceDeepLink.mgmtIp === "10.0.0.2"
+			&& deviceDeepLink.id === "DEV-CORE-1" && deviceDeepLink.name === "核心路由器-1"
+			&& clickedLinkForMetrics !== "" && linkCardVisible.visible
+			&& linkCardVisible.metricsBelowFacts && linkCardVisible.metricsSiblingsAfter === 0 && linkCardVisible.metricsPrimary
+			&& linkDeepLink.path === "/topology/link-metrics"
+			&& linkDeepLink.source === "10.0.0.1" && linkDeepLink.target === "10.0.0.2"
+			&& resolvedLink.id === "DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1" && resolvedLink.header.includes("DEV-CORE-1"),
+			`工具栏左区=${canvasChrome.controlsInToolbarLeft}/${canvasChrome.switcherInToolbarLeft}`
+			+ ` 同排差=${canvasChrome.controls && canvasChrome.switcher ? Math.round(canvasChrome.controls.cy - canvasChrome.switcher.cy) : "?"}`
+			+ ` 压画布=${canvasChrome.controlsOverCanvas} 缺控件=[${canvasChrome.missingParts.join("/")}]`
+			+ ` 排尾=[${canvasChrome.leftTail.join("/")}] 更新文案=${canvasChrome.refreshLabel || "无"}`
+			+ ` 已下线残留=[${canvasChrome.retiredParts.join("/")}]>${retiredOk}/${tailOrderOk}/${glyphOk}`
+			+ ` 图标长度=[${[radialChrome.rotateCcwGlyph, radialChrome.rotateCwGlyph, canvasChrome.layoutGlyph, radialChrome.layoutGlyph, canvasChrome.labelsGlyph].map((glyph) => glyph.length).join("/")}]`
+			+ ` 画布底=${canvasChrome.shellBg}/${radialChrome.shellBg}`
+			+ ` 旋转同排=${!!radialChrome.rotate && !!radialChrome.controls}`
+			+ ` 图例右差=${canvasChrome.canvas && canvasChrome.legend ? Math.round(canvasChrome.canvas.right - canvasChrome.legend.right) : "?"}`
+			+ ` 下差=${canvasChrome.canvas && canvasChrome.legend ? Math.round(canvasChrome.canvas.bottom - canvasChrome.legend.bottom) : "?"}`
+			+ ` 图例份数=${canvasChrome.legendCount}/${canvasChrome.roleListCount} 侧栏重复=${canvasChrome.legendInAside}`
+			+ ` 角色=[${canvasChrome.roles.map((entry) => `${entry.role}:${entry.label}`).join("/")}] 色块同源=${legendTokensMatch}`
+			+ ` 节点按钮=${nodeMetricsButton.mgmtIp}/${nodeMetricsButton.disabled ? "禁用" : "可点"}`
+			+ ` 卡片底部=${nodeMetricsButton.belowFacts}(事实${nodeMetricsButton.factRows}行/尾随${nodeMetricsButton.siblingsAfter})/主色=${nodeMetricsButton.primaryTone}`
+			+ ` 设备页=${deviceDeepLink.path}?mgmt_ip=${deviceDeepLink.mgmtIp}&id=${deviceDeepLink.id}/${deviceDeepLink.name || "无"}`
+			+ ` 链路=${clickedLinkForMetrics || "未点中"}→卡片=${linkCardVisible.visible}`
+			+ ` 底部=${linkCardVisible.metricsBelowFacts}/尾随=${linkCardVisible.metricsSiblingsAfter}/主色=${linkCardVisible.metricsPrimary}`
+			+ `→${linkDeepLink.path}?${linkDeepLink.source}/${linkDeepLink.target}`
+			+ ` 解析后 id=${resolvedLink.id}`
+		);
+		// A49 链路可选中、右栏**二选一**切换、图例只留层色一行（§6.15 要求 2 / 5，2026-11-08 用户裁决）。
+		// 三件事各自独立地会坏，所以分开量：
+		//   ① 图例：一个 `<p>` 都没有、状态组整块消失、`li` 数 === 实际出现的角色数 —— 只留层色那一行；
+		//   ② 点链路：右栏切到链路详情，节点的详情 / 无线 / 告警 / LLDP 卡片全部让位（不是上下堆叠）；
+		//      链路卡片右上**没有关闭叉**（2026-11-09 用户裁决）—— 退出靠再点一次这条线或点一台设备；
+		//   ③ 点回节点：链路详情让位、节点事实回来；被点中的那条链路 `data-link-emphasis=selected`，
+		//      本体换成 `primary`、粗细仍只读带宽（`1 Gbps` = 2.5px，**不是** 5px），外延环收窄成一圈
+		//      主色柔光（2.5 + 5 = 7.5px / 35%）——「主色说当前、外延只做光晕」。
+		//   ⓸ 打开页面就选中根（见上面 `defaultSelection`，2026-11-09 用户裁决「不许有空态」）。
+		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(900);
+		/**
+		 * 默认选中（2026-11-09 用户裁决「打开监控页就选中根节点，右栏没有空态」）：
+		 * ① 画布上恰好一台节点带 `selected` 外延环，且它的层号就是**最上一档**（= 根：层级树里是塔尖、径向扇里是扇心；顶端带只有一台时 `resolveLayeredRanks()` 根本不选举 `role=root`，只能按层号认 —— 按角色名认会把「扇心那台读作 `core`」误判成「没有根」）；
+		 * ② 右栏一进来就是设备事实（节点指标按钮在），没有链路卡片；
+		 * ③ 空态提示语**不出现**（`detail.empty` 那段没有渲染）。
+		 */
+		const defaultSelection = await page.evaluate(() => {
+			const halos = Array.from(document.querySelectorAll("[data-testid='topology-node-halo']"))
+				.filter((el) => el.getAttribute("data-halo-emphasis") === "selected");
+			const nodes = Array.from(document.querySelectorAll("[data-testid='topology-node']"));
+			const tierOf = (el) => Number(el.querySelector("[data-testid='topology-node-shape']")?.getAttribute("data-node-tier"));
+			const tiers = nodes.map(tierOf).filter((tier) => Number.isFinite(tier));
+			const topTier = tiers.length > 0 ? Math.min(...tiers) : Number.NaN;
+			const nodeIds = (list) => list.map((el) => el.getAttribute("data-node-id") ?? "");
+			return {
+				selectedHalos: halos.length,
+				selectedIds: nodeIds(halos.map((el) => el.closest("[data-testid='topology-node']")).filter(Boolean)),
+				selectedTiers: halos.map((el) => tierOf(el.closest("[data-testid='topology-node']"))),
+				topTier,
+				rootIds: nodeIds(nodes.filter((el) => tierOf(el) === topTier)),
+				nodeCard: !!document.querySelector("[data-testid='topology-node-metrics']"),
+				linkCard: !!document.querySelector("[data-testid='topology-link-card']"),
+				// 空态那一句：右栏不该有任何「点画布上的节点」的提示
+				emptyHint: Array.from(document.querySelectorAll("aside p")).some((el) => el.textContent?.includes("点画布上的节点"))
+			};
+		});
+		const defaultSelectionOk = defaultSelection.selectedHalos === 1
+			&& defaultSelection.selectedIds.length === 1
+			&& defaultSelection.selectedTiers.join(",") === String(defaultSelection.topTier)
+			&& defaultSelection.rootIds.includes(defaultSelection.selectedIds[0])
+			&& defaultSelection.nodeCard && !defaultSelection.linkCard && !defaultSelection.emptyHint;
+		const legendTrim = await page.evaluate(() => {
+			const legend = document.querySelector("[data-testid='topology-legend']");
+			const roles = document.querySelectorAll("[data-testid='topology-legend-roles'] [data-role]");
+			return {
+				exists: !!legend,
+				paragraphs: legend ? legend.querySelectorAll("p").length : -1,
+				statusRows: legend ? legend.querySelectorAll("[data-testid='topology-legend-statuses']").length : -1,
+				roleCount: roles.length,
+				rows: legend ? legend.querySelectorAll("li").length : -1
+			};
+		});
+		const readAside = () => page.evaluate(() => {
+			const selected = Array.from(document.querySelectorAll("[data-testid='topology-link'][data-link-emphasis='selected']"));
+			const halos = selected.map((el) => el.parentElement?.querySelector("[data-testid='topology-link-halo']") ?? null);
+			const hits = Array.from(document.querySelectorAll("[data-testid='topology-link-hit']"));
+			return {
+				linkCard: !!document.querySelector("[data-testid='topology-link-card']"),
+				// 链路卡片不再有右上角关闭叉（2026-11-09 用户裁决）
+				linkClose: !!document.querySelector("[data-testid='topology-link-close']"),
+				nodeCard: !!document.querySelector("[data-testid='topology-node-metrics']"),
+				alarmCard: !!document.querySelector("[data-testid='topology-alarm-card']"),
+				lldpCard: !!document.querySelector("[data-testid='topology-lldp-card']"),
+				wifiCard: !!document.querySelector("[data-testid='topology-wifi-card']"),
+				selectedCount: selected.length,
+				selectedWidths: [...new Set(selected.map((el) => getComputedStyle(el).strokeWidth))],
+				selectedStrokes: [...new Set(selected.map((el) => getComputedStyle(el).stroke))],
+				selectedHaloCount: halos.filter(Boolean).length,
+				selectedHaloWidths: [...new Set(halos.filter(Boolean).map((el) => getComputedStyle(el).strokeWidth))],
+				selectedHaloOpacities: [...new Set(halos.filter(Boolean).map((el) => getComputedStyle(el).strokeOpacity))],
+				selectedHaloStrokes: [...new Set(halos.filter(Boolean).map((el) => getComputedStyle(el).stroke))],
+				hitAreas: hits.length,
+				// 连线必须是可聚焦控件（要求 B）：六个命中区一个都不能漏 `tabindex` / `role`
+				hitFocusable: hits.filter((el) => el.getAttribute("tabindex") === "0" && el.getAttribute("role") === "button").length,
+				selectedPressed: selected.map((el) => el.parentElement?.querySelector("[data-testid='topology-link-hit']")?.getAttribute("aria-pressed") ?? "")
+			};
+		});
+		await clickGraphNode("10.0.0.3");
+		await page.waitForTimeout(400);
+		const asideOnNode = await readAside();
+		/** 点一条画布链路（`10.0.0.1`↔`10.0.0.2`：样本里唯一给了带宽的那条，选中宽度因此可预期） */
+		const clickGraphLink = () => page.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-key") ?? ""));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			return link?.getAttribute("data-link-key") ?? "";
+		});
+		const clickedLinkForPanel = await clickGraphLink();
+		await page.waitForTimeout(500);
+		const asideOnLink = await readAside();
+		await clickGraphNode("10.0.0.6");
+		await page.waitForTimeout(400);
+		const asideBackOnNode = await readAside();
+		const linkPanelOk = asideOnNode.nodeCard && !asideOnNode.linkCard
+			&& asideOnLink.linkCard && !asideOnLink.nodeCard
+			&& !asideOnLink.alarmCard && !asideOnLink.lldpCard && !asideOnLink.wifiCard
+			&& asideBackOnNode.nodeCard && !asideBackOnNode.linkCard;
+		log(
+			"A49 链路可点选中且右栏二选一切换、右下角图例只留层色一行",
+			legendTrim.exists && legendTrim.paragraphs === 0 && legendTrim.statusRows === 0
+			&& legendTrim.roleCount >= 3 && legendTrim.rows === legendTrim.roleCount
+			&& defaultSelectionOk
+			&& linkPanelOk && !asideOnLink.linkClose
+			&& asideOnLink.selectedCount === 1 && asideOnLink.hitAreas === 6
+			&& asideOnLink.hitFocusable === 6
+			&& asideOnLink.selectedWidths.join(",") === "2.5px"
+			&& asideOnLink.selectedPressed.join(",") === "true"
+			&& asideOnLink.selectedHaloCount === 1
+			&& asideOnLink.selectedHaloWidths.join(",") === "7.5px"
+			&& asideOnLink.selectedHaloOpacities.join(",") === "0.35"
+			&& asideOnLink.selectedStrokes.length === 1 && asideOnLink.selectedStrokes[0] === greyColors.primary
+			&& asideOnLink.selectedHaloStrokes.join(",") === greyColors.primary,
+			`图例 段=${legendTrim.paragraphs} 状态组=${legendTrim.statusRows} 行=${legendTrim.rows}/${legendTrim.roleCount}`
+			+ ` 默认选中=${defaultSelection.selectedIds.join("/") || "无"}[根=${defaultSelection.rootIds.join("/") || "无"}]`
+			+ `/环=${defaultSelection.selectedHalos}/节点卡=${defaultSelection.nodeCard}/链路卡=${defaultSelection.linkCard}`
+			+ ` 节点态[链路卡=${asideOnNode.linkCard}/节点卡=${asideOnNode.nodeCard}]`
+			+ ` 链路态[链路卡=${asideOnLink.linkCard}/关闭叉=${asideOnLink.linkClose}/节点卡=${asideOnLink.nodeCard}/告警=${asideOnLink.alarmCard}/LLDP=${asideOnLink.lldpCard}/无线=${asideOnLink.wifiCard}]`
+			+ ` 选中=${clickedLinkForPanel || "未点中"}→${asideOnLink.selectedCount}条/${asideOnLink.selectedWidths.join("/")}/${asideOnLink.selectedStrokes.join("/")}`
+			+ ` 外延=${asideOnLink.selectedHaloCount}圈/${asideOnLink.selectedHaloWidths.join("/")}/${asideOnLink.selectedHaloOpacities.join("/")}`
+			+ ` 可聚焦命中区=${asideOnLink.hitFocusable}/${asideOnLink.hitAreas} aria-pressed=${asideOnLink.selectedPressed.join("/")}`
+			+ ` 点回节点[链路卡=${asideBackOnNode.linkCard}/节点卡=${asideBackOnNode.nodeCard}]`
+		);
+
+		// A50 深链**自己翻到目标那一页**（§6.15 要求 5）：台账一页 15 条，现网 36 台设备 / 48 条链路，
+		// 目标不在第一页是常态。假上游为此垫了 15 / 20 条填充行把真样本挤到第 2 页（第 2 页因此是
+		// 3 台设备 / 7 条链路）—— 深链必须
+		// ① 扫到那一页、② 把左栏停在那里（目标行可见）、③ 写 `?id` 并选中它。
+		// 只断言「URL 带了 ip」会漏掉「跳过去什么都没选中」这一半，而用户点「遥测」要的正是这一半。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/metric-deep-page`);
+		await page.goto(`${BASE_URL}/topology/device-metrics?mgmt_ip=10.0.0.2`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(2_500);
+		const pagedDevice = await page.evaluate(() => {
+			const url = new URL(window.location.href);
+			const row = document.querySelector("[data-device-id='DEV-CORE-1']");
+			return {
+				id: url.searchParams.get("id") ?? "",
+				rowVisible: !!row,
+				rowSelected: row?.getAttribute("aria-selected") === "true",
+				name: document.querySelector("[data-testid='device-detail-name']")?.textContent?.trim() ?? "",
+				rows: document.querySelectorAll("[data-testid='metric-device-row']").length
+			};
+		});
+		await page.goto(`${BASE_URL}/topology/link-metrics?source_ip=10.0.0.2&target_ip=10.0.0.3`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(2_500);
+		const pagedLink = await page.evaluate(() => {
+			const url = new URL(window.location.href);
+			const row = document.querySelector("[data-link-id='DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1']");
+			return {
+				id: url.searchParams.get("id") ?? "",
+				rowVisible: !!row,
+				rowSelected: row?.getAttribute("aria-selected") === "true",
+				rows: document.querySelectorAll("[data-testid='metric-link-row']").length
+			};
+		});
+		await fetch(`http://${HOST}:${upstreamPort}/__control/metric-deep-page-off`);
+		log(
+			"A50 深链目标落在第 2 页时自己翻页并选中对应设备 / 链路",
+			pagedDevice.id === "DEV-CORE-1" && pagedDevice.rowVisible && pagedDevice.rowSelected
+			&& pagedDevice.name === "核心路由器-1" && pagedDevice.rows === 3
+			&& pagedLink.id === "DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1"
+			&& pagedLink.rowVisible && pagedLink.rowSelected && pagedLink.rows === 7,
+			`设备页 id=${pagedDevice.id || "无"} 行可见=${pagedDevice.rowVisible} 选中=${pagedDevice.rowSelected}`
+			+ ` 名称=${pagedDevice.name || "无"} 本页行=${pagedDevice.rows}`
+			+ ` 链路页 id=${pagedLink.id || "无"} 行可见=${pagedLink.rowVisible} 选中=${pagedLink.rowSelected} 本页行=${pagedLink.rows}`
+		);
+
+		// A51 连线可以用键盘选中（要求 B，2026-11-08）：每条连线的命中区都是**可聚焦控件** ——
+		// `role="button"` + `tabindex=0` + 带事实的 `aria-label`，焦点落上去出一圈同色外延环
+		// （`focus` 档，与「关联」同宽），`Enter` / `Space` 与鼠标点击**同效**（`Space` 再点一次
+		// 即回到设备视图，2026-11-09 起没有「关闭叉」这条路），`aria-pressed` 同步回报。
+		// 缺任何一条，「只能用鼠标点」就还在：焦点看不见、键按不动、或无状态回报。
+		// 焦点环不引入新色：它借的是那条链路的本体灰（外延 = 基础 2.5 + 6 = 8.5px / 30%）。
+		// 焦点**优先于**「关联」：打开监控页就选中根（§6.15.6），与根直连的线一进图就带关联环，
+		// 若让关联压住焦点，Tab 到这几条线上就看不到任何变化；所以下面按「这条线自己的环」断言，
+		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(900);
+		const focusGraphLink = () => page.evaluate(() => {
+			const hit = Array.from(document.querySelectorAll("[data-testid='topology-link-hit']"))
+				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-hit-key") ?? ""));
+			hit?.focus();
+			return {
+				key: hit?.getAttribute("data-link-hit-key") ?? "",
+				focused: !!hit && document.activeElement === hit,
+				role: hit?.getAttribute("role") ?? "",
+				tabindex: hit?.getAttribute("tabindex") ?? "",
+				label: hit?.getAttribute("aria-label") ?? ""
+			};
+		});
+		const blurActiveLink = () => page.evaluate(() => {
+			if (document.activeElement instanceof SVGElement)
+				document.activeElement.blur();
+		});
+		/**
+		 * 读「被聚焦的那条线**自己**」的外延环，而不是全图所有外延环的集合。
+		 *
+		 * 为什么必须分开：打开监控页就选中根（§6.15.6），与根直连的那两条线一进图就带着 `incident` 环 ——
+		 * 全图环数因此恒为 2，「焦点恰一圈」这种断言从此量的是别的东西。焦点在这里只改**这条线**的档位
+		 * （`focus` 优先于 `incident`，见 `TopologyCanvas` 的 `linkHaloLevelOf()`），所以逐线读。
+		 */
+		const readLinkKeyboard = (key) => page.evaluate((linkKey) => {
+			const body = Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.find((el) => el.getAttribute("data-link-key") === linkKey);
+			const ownHalo = body?.parentElement?.querySelector("[data-testid='topology-link-halo']") ?? null;
+			const pressed = Array.from(document.querySelectorAll("[data-testid='topology-link-hit']"))
+				.filter((el) => el.getAttribute("aria-pressed") === "true");
+			// 被点中的那条：本体换成主色（2026-11-09 用户裁决「选中链路改主色」）
+			const selectedBody = Array.from(document.querySelectorAll("[data-testid='topology-link'][data-link-emphasis='selected']"));
+			return {
+				ownLevel: ownHalo?.getAttribute("data-link-halo-emphasis") ?? "none",
+				ownWidth: ownHalo ? getComputedStyle(ownHalo).strokeWidth : "",
+				ownOpacity: ownHalo ? getComputedStyle(ownHalo).strokeOpacity : "",
+				ownStroke: ownHalo ? getComputedStyle(ownHalo).stroke : "",
+				ownBodyStroke: body ? getComputedStyle(body).stroke : "",
+				bodyWidth: body ? getComputedStyle(body).strokeWidth : "",
+				haloCount: document.querySelectorAll("[data-testid='topology-link-halo']").length,
+				strokes: [...new Set(selectedBody.map((el) => getComputedStyle(el).stroke))],
+				pressedCount: pressed.length,
+				card: !!document.querySelector("[data-testid='topology-link-card']"),
+				nodeCard: !!document.querySelector("[data-testid='topology-node-metrics']")
+			};
+		}, key);
+		const focusedLink = await focusGraphLink();
+		await page.waitForTimeout(300);
+		const onFocus = await readLinkKeyboard(focusedLink.key);
+		await page.keyboard.press("Enter");
+		await page.waitForTimeout(400);
+		const onEnter = await readLinkKeyboard(focusedLink.key);
+		await page.keyboard.press("Space");
+		await page.waitForTimeout(400);
+		const onSpace = await readLinkKeyboard(focusedLink.key);
+		await blurActiveLink();
+		await page.waitForTimeout(300);
+		const onBlur = await readLinkKeyboard(focusedLink.key);
+		log(
+			"A51 连线可聚焦（role=button + tabindex=0 + 事实化 aria-label），Enter / Space 与点击同效并回报 aria-pressed",
+			focusedLink.focused && focusedLink.role === "button" && focusedLink.tabindex === "0"
+			&& focusedLink.label.startsWith("链路") && focusedLink.label.includes("1 Gbps")
+			&& focusedLink.label.includes("回车查看详情")
+			// 焦点环：这一条线自己的环从 `incident` 升到 `focus`（同宽同不透明度的灰圈，不染层色）
+			&& onFocus.ownLevel === "focus" && onFocus.ownWidth === "8.5px" && onFocus.ownOpacity === "0.3"
+			&& onEnter.card && !onEnter.nodeCard && onEnter.pressedCount === 1
+			&& onEnter.ownLevel === "selected" && onEnter.ownWidth === "7.5px"
+			&& onEnter.strokes.length === 1 && onEnter.strokes[0] === greyColors.primary
+			&& onEnter.bodyWidth === "2.5px" && onEnter.ownBodyStroke === greyColors.primary
+			// `Space` 再按一次 = 回到设备视图（没有关闭叉这条路）；焦点仍在线上，环仍是 `focus`，
+			// 而本体退回状态灰（不再是主色）—— 这一对照说明「主色只属于选中」。
+			&& !onSpace.card && onSpace.pressedCount === 0
+			&& onSpace.ownLevel === "focus" && onSpace.bodyWidth === "2.5px"
+			&& onSpace.ownBodyStroke !== greyColors.primary
+			&& onBlur.ownLevel === "incident" && onBlur.ownWidth === "8.5px" && onBlur.ownOpacity === "0.3"
+			&& !onBlur.card,
+			`命中区=${focusedLink.key || "未找到"} 聚焦=${focusedLink.focused} role=${focusedLink.role} tabindex=${focusedLink.tabindex}`
+			+ ` 名称=${focusedLink.label || "无"}`
+			+ ` 焦点环=${onFocus.ownLevel}/${onFocus.ownWidth}/${onFocus.ownOpacity}（全图 ${onFocus.haloCount} 圈）`
+			+ ` Enter[卡片=${onEnter.card}/节点卡=${onEnter.nodeCard}/按下=${onEnter.pressedCount}/环=${onEnter.ownLevel}/${onEnter.ownWidth}]`
+			+ ` 本体=${onEnter.bodyWidth}/${onEnter.ownBodyStroke === greyColors.primary ? "primary" : onEnter.ownBodyStroke}`
+			+ ` Space[卡片=${onSpace.card}/按下=${onSpace.pressedCount}/环=${onSpace.ownLevel}/本体=${onSpace.bodyWidth}]`
+			+ ` 失焦后=${onBlur.ownLevel}/${onBlur.ownWidth}/卡片=${onBlur.card}`
+		);
+
+		// 回到监控页：下面的断言（链路事实 / 告警 / 仿真 / LLDP）仍从这张图出发
+		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(800);
+
 		// 全是 0，而 21/48 的 `traffic_in|out` 非零（`traffic_out: 16.18` 配 `out_util_pct: 0`）——
 		// 这四个 0 是「没算」。断言钉两件事：点链路出卡片且基础事实照实（介质 / 关系 / 管理状态 /
 		// 带宽原文 / 双向流量），四个利用率维度写「未计算」而**绝不出现 `0%`**。
@@ -2015,6 +3310,12 @@ if (upstreamPort) {
 			counts: document.querySelector("[data-testid='topology-group-counts-combo-edge']")?.textContent?.trim() ?? "",
 			members: document.querySelector("[data-testid='topology-groups-expand']") ? "expand" : "collapsed-none"
 		}));
+		/** 分组清单在画布左上角的浮层里（不再占侧栏），读它之前先展开 */
+		const openGroups = async () => {
+			await page.click("[data-testid='topology-groups-toggle']");
+			await page.waitForTimeout(300);
+		};
+		await openGroups();
 		const groupsBefore = await groupRead();
 		await page.click("[data-testid='topology-combo-toggle'][data-combo-id='combo-edge']");
 		await page.waitForTimeout(400);
@@ -2022,6 +3323,9 @@ if (upstreamPort) {
 		await page.click("[data-testid='topology-groups-expand']");
 		await page.waitForTimeout(400);
 		const groupsRestored = await groupRead();
+		// 浮层还开着的话，下一次点画布只会把它关掉 —— 先收起来，别让后面的节点点击被吞掉
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(200);
 		log(
 			"A29 折叠区域分组：画布摘掉该组节点与挂边，组计数不变，「全部展开」复原",
 			groupsBefore.nodes === 6 && groupsBefore.links === 6
@@ -2211,7 +3515,10 @@ if (upstreamPort) {
 
 		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-empty`);
 		await page.reload({ waitUntil: "networkidle" });
-		await page.waitForTimeout(400);
+		// 等「空态节点出现」而不是等固定毫秒：BFF 冷启动 / 机器过载时 400ms 可能还停在骨架屏上，
+		// 那时 `empty` 与 `canvas` 同时为 false，红的是断言而不是实现（2026-11-10 实测一次误报）。
+		// 超时不抛：真没出空态就让下面的断言带着 `empty=false` 报出来，失败原因仍指向页面。
+		await page.waitForSelector("[data-testid='topology-empty']", { timeout: 10_000 }).catch(() => {});
 		const emptyProbe = await page.evaluate(() => ({
 			empty: !!document.querySelector("[data-testid='topology-empty']"),
 			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
@@ -2237,10 +3544,17 @@ if (upstreamPort) {
 				.filter((el) => el.getAttribute("data-focused") === "true")
 				.map((el) => el.getAttribute("data-combo-id"))
 		}));
-		const focusBefore = await focusRead();
+		const focusBefore = await (async () => {
+			await page.click("[data-testid='topology-groups-toggle']");
+			await page.waitForTimeout(300);
+			return focusRead();
+		})();
 		await page.click("[data-testid='topology-combo-focus'][data-combo-id='combo-edge']");
 		await page.waitForTimeout(400);
 		const focusOn = await focusRead();
+		// 浮层开着时点画布上的「回到全部」只会先关浮层（那一击不会穿透）—— 先收起浮层
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(200);
 		await page.click("[data-testid='topology-focus-clear']");
 		await page.waitForTimeout(400);
 		const focusOff = await focusRead();
@@ -2315,21 +3629,64 @@ if (upstreamPort) {
 		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
 		await page.waitForTimeout(1200);
 
-		const deviceProbe = await page.evaluate(() => ({
-			rows: document.querySelectorAll("[data-testid='metric-device-row']").length,
-			selected: document.querySelector("[data-testid='metric-device-row'][aria-selected='true']")?.getAttribute("data-device-id") ?? "",
+		const deviceProbe = await page.evaluate(() => {
+			// 左栏行 = 主标识一行 + 次级信息一行（`NMCPS-ARCH-006` §3.6）：次级信息从「IP · 标识」
+			// + 「CPU / 内存 / 端口」两行收成一行「管理 IP · 邻居 · 端口」，CPU / 内存只在右栏概览出。
+			const selectedRow = document.querySelector("[data-testid='metric-device-row'][aria-selected='true']");
+			const rowLines = Array.from(selectedRow?.querySelectorAll("p") ?? [])
+				.map((line) => (line.textContent ?? "").replace(/\s+/g, " ").trim());
+			// 工具栏口径（§4.4）：页签条 = `LayoutToolbarTabs`（pill，页签列表带 `bg-elevated`），
+			// 读数徽标 = `LayoutToolbarBadge`（`md` = `text-xs`，不是行内那种 `text-[10px]` 的 `sm`）。
+			const tabList = document.querySelector("[data-testid='device-detail-tabs'] [data-slot='list'], [data-testid='device-detail-tabs'] [role='tablist']");
+			const tabCountBadge = document.querySelector("[data-testid='device-detail-tab-count']");
+			const statusBadge = document.querySelector("[data-testid='device-detail-status']");
+			const badgeClass = (element) => element?.className ?? "";
+			return {
+				rows: document.querySelectorAll("[data-testid='metric-device-row']").length,
+				selected: selectedRow?.getAttribute("data-device-id") ?? "",
+				rowLines,
+				header: !!document.querySelector("[data-testid='device-detail-header']"),
+				tabs: document.querySelectorAll("[data-testid='device-detail-tabs'] [role='tab']").length,
+				tabCount: document.querySelector("[data-testid='device-detail-tab-count']")?.textContent?.trim() ?? "",
+				overview: !!document.querySelector("[data-testid='device-detail-cpu']"),
+				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				tabsPill: !!tabList && tabList.className.includes("bg-elevated"),
+				badgesMd: [tabCountBadge, statusBadge].every((badge) => {
+					const className = badgeClass(badge);
+					return className.includes("text-xs") && !className.includes("text-[10px]");
+				}),
+				text: document.body.textContent ?? ""
+			};
+		});
+		log(
+			"A10 设备台账渲染 + 默认选中第一条（计数来自信封 total），行次级信息只一行（IP · 邻居 · 端口）",
+			deviceProbe.rows === 3
+			&& deviceProbe.selected === "DEV-CORE-1"
+			&& deviceProbe.text.includes("共 3 台设备")
+			&& deviceProbe.rowLines.length === 2
+			&& deviceProbe.rowLines[1] === "10.0.0.2 · 邻居 2 · 端口 22/24",
+			`rows=${deviceProbe.rows} selected=${deviceProbe.selected || "无"} 行=${JSON.stringify(deviceProbe.rowLines)}`
+		);
+		// 1.0 版式：记录标识（名称 / IP / 状态）在工具栏左区，页签 / 页签数 / 刷新在右区，默认停在概览；
+		// 页签条是 pill 胶囊、读数徽标是 `md`（工具栏口径 §4.4，由 `LayoutToolbarTabs` / `LayoutToolbarBadge` 写死）
+		log(
+			"A10 设备详情为 1.0 版式（工具栏记录标识 + 7 页 Tab + 概览卡；页签 pill、徽标 md）",
+			deviceProbe.header && deviceProbe.tabs === 7 && deviceProbe.tabCount.includes("7") && deviceProbe.overview && !deviceProbe.chart
+			&& deviceProbe.tabsPill && deviceProbe.badgesMd,
+			`header=${deviceProbe.header} tabs=${deviceProbe.tabs} 计数=${deviceProbe.tabCount || "无"} 概览=${deviceProbe.overview} 概览页有图=${deviceProbe.chart} pill=${deviceProbe.tabsPill} 徽标 md=${deviceProbe.badgesMd}`
+		);
+
+		await openDetailTab("图表");
+		const deviceChartProbe = await page.evaluate(() => ({
 			chart: !!document.querySelector("[data-testid='trend-chart']"),
-			text: document.body.textContent ?? ""
+			overview: !!document.querySelector("[data-testid='device-detail-cpu']")
 		}));
 		log(
-			"A10 设备台账渲染 + 默认选中第一条（计数来自信封 total）",
-			deviceProbe.rows === 3 && deviceProbe.selected === "DEV-CORE-1" && deviceProbe.text.includes("共 3 台设备"),
-			`rows=${deviceProbe.rows} selected=${deviceProbe.selected || "无"}`
-		);
-		log(
-			"A10 选中设备后按 mgmt_ip 出 TrendChart",
-			deviceProbe.chart && metricRequests.some((url) => url.includes("/api/metric/datapoint") && url.includes("mgmt_ip=10.0.0.2")),
-			deviceProbe.chart ? "已出图" : "无 [data-testid='trend-chart']"
+			"A10 切到图表页后按 mgmt_ip 出 TrendChart",
+			deviceChartProbe.chart
+			&& !deviceChartProbe.overview
+			&& metricRequests.some((url) => url.includes("/api/metric/datapoint") && url.includes("mgmt_ip=10.0.0.2")),
+			deviceChartProbe.chart ? "已出图" : "无 [data-testid='trend-chart']"
 		);
 
 		const definitionCalls = metricRequests.filter((url) => url.includes("/api/metric/definition")).length;
@@ -2350,6 +3707,50 @@ if (upstreamPort) {
 			"A10 指标选择器只列 numeric（sys_name / collector 全部缺席）",
 			pickerClean,
 			pickerOptions.length ? pickerOptions.join(" | ") : "下拉没有选项"
+		);
+
+		// A10q：目录的真实字段名是 `data_type`（`hw_board_name` 那条样本），**不是** `metric_type`。
+		// 只认 `metric_type` 会让这条 `string` 指标按 §8.3 第 3 条落成 `numeric` 混进选项，
+		// 用户选中它就得到一条恒 1 的直线（2026-11-08 真实上游的路由器正是这样）。
+		const textMetricLeaked = pickerOptions.some((item) => item.includes("Board name") || item.includes("hw_board_name"));
+		log(
+			"A10q 目录按实测字段名（data_type）判类型：string 指标不进选择器",
+			pickerOptions.length > 0 && !textMetricLeaked,
+			textMetricLeaked ? "hw_board_name 混进了选项" : `选项 ${pickerOptions.length} 条，无 string 指标`
+		);
+
+		// A10p：**名字清单为空**（§七 实测 24/36 台）不再等于「没有可画的指标」——
+		// 候选交给 §8.6 的并集（目录里的 numeric 条目），选择器可用 + 提示一句，图表照常出。
+		await fetch(`http://${HOST}:${upstreamPort}/__control/names-empty`);
+		await page.goto(`${BASE_URL}/topology/device-metrics?id=DEV-CORE-1`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_200);
+		await openDetailTab("图表");
+		const emptyNamesProbe = await page.evaluate(() => {
+			const picker = document.querySelector("[data-testid='metric-picker']");
+			return {
+				notice: document.querySelector("[data-testid='metric-name-list-empty']")?.textContent ?? "",
+				disabled: picker ? picker.hasAttribute("disabled") || picker.getAttribute("aria-disabled") === "true" : null,
+				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				picked: picker?.textContent?.trim().slice(0, 40) ?? ""
+			};
+		});
+		await page.locator("[data-testid='metric-picker']").click();
+		await page.waitForTimeout(400);
+		const emptyNamesOptions = await page.evaluate(() =>
+			Array.from(document.querySelectorAll("[role='option']")).map((el) => el.textContent?.trim() ?? ""));
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(200);
+		await fetch(`http://${HOST}:${upstreamPort}/__control/names-ok`);
+		// 左栏台账行同样是 `role="option"`（含 `·` 分隔），只留下拉里的条目
+		const emptyNamesPicker = emptyNamesOptions.filter((item) => !item.includes("·"));
+		log(
+			"A10p 名清单为空时候选来自目录（选择器可用 + 提示一句 + 照常出图）",
+			emptyNamesProbe.disabled === false
+			&& emptyNamesProbe.notice.includes("指标目录")
+			&& emptyNamesProbe.chart
+			&& emptyNamesPicker.some((item) => item.includes("Interface in octets"))
+			&& emptyNamesPicker.some((item) => item.includes("CPU utilization")),
+			`disabled=${emptyNamesProbe.disabled} 提示=${emptyNamesProbe.notice ? "有" : "无"} 选中=${emptyNamesProbe.picked || "无"} 图=${emptyNamesProbe.chart} 选项=${emptyNamesPicker.join(" | ") || "无"}`
 		);
 
 		// A11：换指标 → `/api/metric/datapoint` 换 `metric_code`，且 `gauge` 上不出现速率开关
@@ -2375,28 +3776,66 @@ if (upstreamPort) {
 		await page.goto(`${BASE_URL}/topology/link-metrics`, { waitUntil: "networkidle" });
 		await page.waitForTimeout(1200);
 
+		const linkShell = await page.evaluate(() => {
+			// 左栏行（`NMCPS-ARCH-006` §3.6）：标题 = 两端**设备名**（端点只有 `device_code`，
+			// 名字靠 `/metric/device` 的 `sys_name` 反查），次级信息 = 两端 `接口名:管理 IP`。
+			const firstRow = document.querySelector("[data-testid='metric-link-row']");
+			const firstLines = Array.from(firstRow?.querySelectorAll("p") ?? [])
+				.map((line) => (line.textContent ?? "").replace(/\s+/g, " ").trim());
+			// 工具栏口径（§4.4）：页签条 pill（列表带 `bg-elevated`）、读数徽标 `md`（`text-xs`）
+			const tabList = document.querySelector("[data-testid='link-detail-tabs'] [data-slot='list'], [data-testid='link-detail-tabs'] [role='tablist']");
+			const tabCountBadge = document.querySelector("[data-testid='link-detail-tab-count']");
+			const statusBadge = document.querySelector("[data-testid='link-detail-status']");
+			return {
+				rows: document.querySelectorAll("[data-testid='metric-link-row']").length,
+				selected: document.querySelector("[data-testid='metric-link-row'][aria-selected='true']")?.getAttribute("data-link-id") ?? "",
+				firstLines,
+				header: !!document.querySelector("[data-testid='link-detail-header']"),
+				tabs: document.querySelectorAll("[data-testid='link-detail-tabs'] [role='tab']").length,
+				overview: !!document.querySelector("[data-testid='link-detail-id']"),
+				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				tabsPill: !!tabList && tabList.className.includes("bg-elevated"),
+				badgesMd: [tabCountBadge, statusBadge].every((badge) => {
+					const className = badge?.className ?? "";
+					return className.includes("text-xs") && !className.includes("text-[10px]");
+				}),
+				text: document.body.textContent ?? ""
+			};
+		});
+		log(
+			"A12 链路台账渲染当前值（设备名 → 设备名 / 接口:管理 IP）+ 右栏概览出利用率与时延",
+			linkShell.rows === 2
+			&& linkShell.text.includes("共 2 条链路")
+			&& linkShell.firstLines.length === 2
+			&& linkShell.firstLines[0] === "核心路由器-1 → 接入交换机-1"
+			&& linkShell.firstLines[1] === "GE0/0/1:10.0.0.2 → GE1/0/1:10.0.0.3"
+			&& linkShell.text.includes("32.5%")
+			&& linkShell.text.includes("1.2 ms"),
+			`rows=${linkShell.rows} selected=${linkShell.selected || "无"} 行=${JSON.stringify(linkShell.firstLines)}`
+		);
+		// 1.0 版式同样落在链路页：两端 → 标识 / 状态在工具栏左区，页签 / 页签数 / 刷新在右区，默认概览；
+		// 页签条 pill、读数徽标 `md`（与设备页同一口径，§4.4）
+		log(
+			"A12 链路详情为 1.0 版式（6 页 Tab + 概览卡，默认不出图；页签 pill、徽标 md）",
+			linkShell.header && linkShell.tabs === 6 && linkShell.overview && !linkShell.chart
+			&& linkShell.tabsPill && linkShell.badgesMd,
+			`header=${linkShell.header} tabs=${linkShell.tabs} 概览=${linkShell.overview} 概览页有图=${linkShell.chart} pill=${linkShell.tabsPill} 徽标 md=${linkShell.badgesMd}`
+		);
+
+		await openDetailTab("图表");
 		const linkProbe = await page.evaluate(() => ({
-			rows: document.querySelectorAll("[data-testid='metric-link-row']").length,
 			selected: document.querySelector("[data-testid='metric-link-row'][aria-selected='true']")?.getAttribute("data-link-id") ?? "",
 			chart: !!document.querySelector("[data-testid='trend-chart']"),
 			seriesIfIndex: document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-if-index") ?? "",
 			seriesCount: document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-count") ?? "",
 			text: document.body.textContent ?? ""
 		}));
-		log(
-			"A12 链路台账渲染当前值（利用率 / 时延来自 /metric/link）",
-			linkProbe.rows === 2
-			&& linkProbe.text.includes("共 2 条链路")
-			&& linkProbe.text.includes("32.5%")
-			&& linkProbe.text.includes("1.2 ms"),
-			`rows=${linkProbe.rows} selected=${linkProbe.selected || "无"}`
-		);
 
 		const linkIndex = metricRequests.find((url) => url.includes("/api/metric/device") && url.includes("page_size=200")) ?? "";
 		const linkDatapoint = metricRequests.filter((url) => url.includes("/api/metric/datapoint")).at(-1) ?? "";
 		log(
 			"A12 链路折线取 source 端设备 IP（device_code → mgmt_ip 反查）",
-			linkProbe.selected === "LNK-0001"
+			linkProbe.selected === "DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1"
 			&& !!linkIndex
 			&& linkProbe.chart
 			&& linkDatapoint.includes("mgmt_ip=10.0.0.2")
@@ -2428,7 +3867,7 @@ if (upstreamPort) {
 
 		// source 端没有 mgmt_ip（假上游的 DEV-AP-1）→ 只给一句原因，不发明请求
 		metricRequests.length = 0;
-		await page.locator("[data-link-id='LNK-0002']").click();
+		await page.locator("[data-link-id='DEV-AP-1:WLAN-0--DEV-CORE-1:GE0/0/9']").click();
 		await page.waitForTimeout(900);
 		const noIpProbe = await page.evaluate(() => ({
 			notice: !!document.querySelector("[data-testid='metric-no-ip']"),
@@ -2441,6 +3880,414 @@ if (upstreamPort) {
 			`notice=${noIpProbe.notice} chart=${noIpProbe.chart} datapoint=${noIpRequests}`
 		);
 
+		// A10b：设备详情「接口列表」页 —— 2.0 没有端口清单端点，逐端口表只能按 `ifIndex` 分组派生：
+		// 两个方向都不选时只说怎么用（外加缺口卡）；选定后端口行来自入向指标，设备级（无 `ifIndex`）组排在末尾并如实标注。
+		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_200);
+		await openDetailTab("接口列表");
+		const interfaceHint = await page.evaluate(() => ({
+			hint: !!document.querySelector("[data-testid='interface-hint']"),
+			table: !!document.querySelector("[data-testid='interface-table']"),
+			gap: !!document.querySelector("[data-testid='telemetry-gap']")
+		}));
+		log(
+			"A10b 接口列表页未选方向时只给用法说明 + 缺口卡（不出空表）",
+			interfaceHint.hint && !interfaceHint.table && interfaceHint.gap,
+			`hint=${interfaceHint.hint} table=${interfaceHint.table} gap=${interfaceHint.gap}`
+		);
+
+		await page.locator("[data-testid='interface-inbound-picker']").click();
+		await page.waitForTimeout(400);
+		await page.getByRole("option", { name: /Interface in octets/ }).first().click();
+		await page.waitForTimeout(400);
+		await page.locator("[data-testid='interface-outbound-picker']").click();
+		await page.waitForTimeout(400);
+		await page.getByRole("option", { name: /CPU utilization/ }).first().click();
+		await page.waitForTimeout(1_500);
+		const interfaceProbe = await page.evaluate(() => {
+			const table = document.querySelector("[data-testid='interface-table']");
+			const rows = Array.from(table?.querySelectorAll("tbody tr") ?? []);
+			return {
+				table: !!table,
+				rows: rows.length,
+				last: rows.at(-1)?.textContent ?? "",
+				count: document.querySelector("[data-testid='interface-row-count']")?.textContent?.trim() ?? "",
+				error: !!document.querySelector("[data-testid='interface-error']")
+			};
+		});
+		log(
+			"A10c 选定两个方向后按 ifIndex 出端口表（设备级组排在末尾并标注）",
+			interfaceProbe.table
+			&& interfaceProbe.rows === 3
+			&& interfaceProbe.count.includes("3")
+			&& interfaceProbe.last.includes("设备级")
+			&& !interfaceProbe.error,
+			`rows=${interfaceProbe.rows} 计数=${interfaceProbe.count || "无"} 末行=${interfaceProbe.last.trim().slice(0, 40) || "无"}`
+		);
+
+		// A10b 补充：接口列表页顶部先列**上游端口清单**（`/metric/device` 的 `lldp.ports`）——
+		// 「2.0 没有端口清单」是错的，缺的是逐端口的状态 / 速率 / 计数。
+		const lldpPortCount = await page.evaluate(() =>
+			document.querySelectorAll("[data-testid='interface-lldp-ports'] tbody tr").length);
+		log(
+			"A10b 接口列表页先列上游端口清单（lldp.ports）",
+			lldpPortCount === 2,
+			`端口清单行数=${lldpPortCount}`
+		);
+
+		// A10d：概览页按实测响应出「系统信息 / 硬件 / 邻居」三卡 —— 这些字段就在 `/metric/device` 里
+		await openDetailTab("概览");
+		const overviewExtras = await page.evaluate(() => ({
+			descr: document.querySelector("[data-testid='device-detail-descr']")?.textContent?.trim() ?? "",
+			text: document.querySelector("[data-testid='device-detail-body']")?.textContent ?? ""
+		}));
+		log(
+			"A10d 概览页出系统信息 / 硬件 / 邻居（sys_* 与 neighbors 是真来源）",
+			overviewExtras.descr.includes("Core Router")
+			&& overviewExtras.text.includes("机房 A-01")
+			&& overviewExtras.text.includes("接入交换机-1 · 无线AP-1")
+			&& overviewExtras.text.includes("VLAN 数"),
+			`描述=${overviewExtras.descr.slice(0, 24) || "无"}`
+		);
+
+		// A10e：协议页出真实计数器（DEV-CORE-1 的 tcp.retrans_segs=487114、ip 组整组 null）
+		await openDetailTab("协议");
+		const protocolProbe = await page.evaluate(() => ({
+			ip: document.querySelector("[data-testid='device-protocol-ip']")?.textContent ?? "",
+			tcp: document.querySelector("[data-testid='device-protocol-tcp']")?.textContent ?? "",
+			gapTabs: Array.from(document.querySelectorAll("[data-testid='telemetry-gap']"))
+				.map((element) => element.getAttribute("data-gap-tab"))
+		}));
+		// `formatCount` 走 `toLocaleString("en-US")`：487114 → `487,114`，断言按千分位写
+		log(
+			"A10e 协议页出真实计数器（IP 组 null 显 —，TCP retrans_segs 有值），缺口只到 OSPF/BGP 邻居表",
+			protocolProbe.tcp.includes("487,114")
+			&& (protocolProbe.ip.match(/—/g) ?? []).length >= 4
+			&& protocolProbe.gapTabs.join(",") === "protocolStack",
+			`缺口页=${protocolProbe.gapTabs.join(",") || "无"}`
+		);
+
+		// A10f：DEV-CORE-1 的 `radio` 是 null ⇒ 射频页说明「上游没给 radio 块」，不画空表
+		await openDetailTab("射频");
+		const radioAbsent = await page.evaluate(() => ({
+			tabs: Array.from(document.querySelectorAll("[data-testid='telemetry-gap']"))
+				.map((element) => element.getAttribute("data-gap-tab")),
+			table: !!document.querySelector("[data-testid='device-radio-associations']")
+		}));
+		log(
+			"A10f 非无线设备（radio=null）的射频页如实说明没给，不出空表",
+			radioAbsent.tabs.includes("radio") && !radioAbsent.table,
+			`缺口页=${radioAbsent.tabs.join(",") || "无"} 关联表=${radioAbsent.table}`
+		);
+
+		// A10g：切到 DEV-AP-1（radio 有值）⇒ 信道 / 关联客户端表照实出数
+		await page.locator("[data-device-id='DEV-AP-1']").click();
+		await page.waitForTimeout(900);
+		const radioProbe = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='device-radio-associations'] tbody tr"));
+			return {
+				channel: document.querySelector("[data-testid='device-radio-channel']")?.textContent?.trim() ?? "",
+				rows: rows.length,
+				first: rows[0]?.textContent ?? "",
+				gap: !!document.querySelector("[data-gap-tab='radio']")
+			};
+		});
+		log(
+			"A10g 无线设备的射频页出信道与关联客户端（一条 assoc 行）",
+			radioProbe.channel === "36" && radioProbe.rows === 1 && radioProbe.first.includes("单链路终端-1") && radioProbe.first.includes("-45") && !radioProbe.gap,
+			`信道=${radioProbe.channel || "无"} 关联行=${radioProbe.rows}`
+		);
+
+		// A10j：实测 `radio` 还有 MLO 从链路（`multilinks[]`）、对端 AP 与四个数值枚举 —— 之前整块被丢弃，
+		// 这一页只能看到 SSID / 信道。断言「多链路表 1 行 + 对端 AP 名 + 角色 / BSS 类型照实」。
+		const radioExtra = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='device-radio-multilinks'] tbody tr"));
+			return {
+				rows: rows.length,
+				first: rows[0]?.textContent ?? "",
+				peer: document.querySelector("[data-testid='device-radio-peer-ap']")?.textContent?.trim() ?? "",
+				text: document.querySelector("[data-testid='device-detail-body']")?.textContent ?? ""
+			};
+		});
+		log(
+			"A10j 射频页出 MLO 多链路表与对端 AP（role / bss_type / 功率管理原样数值）",
+			radioExtra.rows === 1
+			&& radioExtra.first.includes("02:00:00:00:09:00")
+			&& radioExtra.peer === "n10"
+			&& radioExtra.text.includes("BSS 类型")
+			&& radioExtra.text.includes("功率管理"),
+			`多链行=${radioExtra.rows} 对端AP=${radioExtra.peer || "无"}`
+		);
+
+		// A10h：DEV-AP-1 的 `lldp` 是 null（没上报，不是失败）⇒ 缺口卡；DEV-CORE-1 才有端口与邻居表
+		await openDetailTab("LLDP");
+		const lldpAbsent = await page.evaluate(() => ({
+			gap: !!document.querySelector("[data-gap-tab='lldp']"),
+			ports: document.querySelectorAll("[data-testid='device-lldp-ports'] tbody tr").length
+		}));
+		log(
+			"A10h lldp 为 null 的设备只说明「没上报 LLDP」，不出端口表",
+			lldpAbsent.gap && lldpAbsent.ports === 0,
+			`缺口=${lldpAbsent.gap} 端口行=${lldpAbsent.ports}`
+		);
+
+		await page.locator("[data-device-id='DEV-CORE-1']").click();
+		await page.waitForTimeout(900);
+		const lldpProbe = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='device-lldp-neighbors'] tbody tr"));
+			return {
+				ports: document.querySelectorAll("[data-testid='device-lldp-ports'] tbody tr").length,
+				rows: rows.length,
+				first: rows[0]?.textContent ?? "",
+				gap: !!document.querySelector("[data-gap-tab='lldp']")
+			};
+		});
+		log(
+			"A10h LLDP 页列本机端口 2 条 + 邻居 1 条，且邻居的本机端口按 port_num 反查成端口名",
+			lldpProbe.ports === 2 && lldpProbe.rows === 1 && lldpProbe.first.includes("n10-eth2") && lldpProbe.first.includes("n4-eth5") && !lldpProbe.gap,
+			`端口行=${lldpProbe.ports} 邻居行=${lldpProbe.rows} 首个邻居=${lldpProbe.first.trim().slice(0, 40) || "无"}`
+		);
+
+		// A10k：实测 `lldp.man_addr` 与邻居的 `man_addr` / `sys_desc` 都在 —— 之前整列被丢掉，
+		// 于是「对端是谁、怎么连过去」只能靠 sys_name 猜。断言本机地址一行 + 邻居行里的对端地址。
+		const lldpManAddr = await page.evaluate(() => ({
+			local: document.querySelector("[data-testid='device-lldp-man-addr']")?.textContent?.trim() ?? "",
+			first: document.querySelector("[data-testid='device-lldp-neighbors'] tbody tr")?.textContent ?? ""
+		}));
+		log(
+			"A10k LLDP 页给本机管理地址与邻居的对端管理地址 / 系统描述",
+			lldpManAddr.local === "10.0.0.2"
+			&& lldpManAddr.first.includes("10.0.0.249")
+			&& lldpManAddr.first.includes("Ubuntu 22.04.5"),
+			`本机=${lldpManAddr.local || "无"} 邻居含对端地址=${lldpManAddr.first.includes("10.0.0.249")}`
+		);
+
+		// A10l：`hw.entities[]` 实测只有交换机报（36 台里 9 台），此前只数了条数、丢掉板名 /
+		// 型号 / 两个状态。断言概览页把实体表画出来（板名照实、状态原样数值）。
+		await openDetailTab("概览");
+		const hwEntityProbe = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='device-hw-entities'] tbody tr"));
+			return { rows: rows.length, first: rows[0]?.textContent ?? "" };
+		});
+		log(
+			"A10l 概览页把 hw.entities 画成硬件实体表（板名 / 型号 / 两个状态数值）",
+			hwEntityProbe.rows === 1
+			&& hwEntityProbe.first.includes("CloudEngine S5735-L24P4X-A1")
+			&& hwEntityProbe.first.includes("4")
+			&& hwEntityProbe.first.includes("3"),
+			`实体行=${hwEntityProbe.rows} 首行=${hwEntityProbe.first.trim().slice(0, 40) || "无"}`
+		);
+
+		await openDetailTab("数据质量");
+		const deviceQualityProbe = await page.evaluate(() => ({
+			latency: document.querySelector("[data-testid='device-quality-latency']")?.textContent?.trim() ?? "",
+			text: document.querySelector("[data-testid='device-detail-body']")?.textContent ?? "",
+			gapTabs: Array.from(document.querySelectorAll("[data-testid='telemetry-gap']"))
+				.map((element) => element.getAttribute("data-gap-tab"))
+		}));
+		log(
+			"A10i 数据质量页出探针侧质量与质量标记（时延 µs、丢包比 0 ppm、job_mixed 置位）",
+			deviceQualityProbe.latency.includes("16,850")
+			&& deviceQualityProbe.text.includes("0 ppm")
+			&& deviceQualityProbe.text.includes("job_mixed")
+			&& deviceQualityProbe.gapTabs.join(",") === "dataQualityProbe",
+			`时延=${deviceQualityProbe.latency || "无"} 缺口页=${deviceQualityProbe.gapTabs.join(",") || "无"}`
+		);
+
+		// A10m：实测 `/metric/datapoint?metric_code=simIfaceInKbps` 的序列标签是 `simIfaceMetricIndex`
+		// （不是 `ifIndex`）。只认 `ifIndex` 时整页只剩「设备级」一行 ⇒ 断言分组认这个兜底、出三个端口。
+		await openDetailTab("接口列表");
+		await page.locator("[data-testid='interface-inbound-picker']").click();
+		await page.waitForTimeout(400);
+		await page.getByRole("option", { name: /Sim interface in Kbps/ }).first().click();
+		await page.waitForTimeout(1_500);
+		const simIfaceProbe = await page.evaluate(() => {
+			const rows = Array.from(document.querySelectorAll("[data-testid='interface-table'] tbody tr"));
+			return {
+				rows: rows.length,
+				ports: rows.map((row) => row.querySelector("td")?.textContent?.trim() ?? ""),
+				count: document.querySelector("[data-testid='interface-row-count']")?.textContent?.trim() ?? ""
+			};
+		});
+		log(
+			"A10m 端口维度认 simIfaceMetricIndex 兜底（3 个索引出 3 行，不塌成设备级 1 行）",
+			simIfaceProbe.rows === 3
+			&& simIfaceProbe.count.includes("3")
+			&& simIfaceProbe.ports.join(",") === "2,3,4",
+			`rows=${simIfaceProbe.rows} 计数=${simIfaceProbe.count || "无"} 端口=${simIfaceProbe.ports.join(",") || "无"}`
+		);
+
+		// A10n：1.0 版式的两行都在右栏内自建 —— 第一行左区（名称 · 管理 IP · 状态）、第二行（7 页签）
+		// 与第一行右区（页签数 + 刷新）本轮全部上内容页工具栏：左区出记录标识、右区出页签 / 页签数 / 刷新。
+		// 断言两侧同时成立 —— 工具栏真有这几件东西（且与左栏选中行是同一条），右栏内零 header / 零页签（§4.5）。
+		const toolbarProbe = await page.evaluate(() => {
+			const left = document.getElementById("app-toolbar-left");
+			const right = document.getElementById("app-toolbar-right");
+			const body = document.querySelector("[data-testid='device-detail-body']");
+			const row = document.querySelector("[data-testid='metric-device-row'][aria-selected='true']");
+			return {
+				rowId: row?.getAttribute("data-device-id") ?? "",
+				rowName: row?.querySelector("p")?.textContent?.trim() ?? "",
+				rowIp: row?.querySelector(".font-mono")?.textContent?.split("·")[0]?.trim() ?? "",
+				name: left?.querySelector("[data-testid='device-detail-name']")?.textContent?.trim() ?? "",
+				ip: left?.querySelector("[data-testid='device-detail-header'] span")?.textContent?.trim() ?? "",
+				status: left?.querySelector("[data-testid='device-detail-status']")?.textContent?.trim() ?? "",
+				tabs: right?.querySelectorAll("[data-testid='device-detail-tabs'] [role='tab']").length ?? -1,
+				count: right?.querySelector("[data-testid='device-detail-tab-count']")?.textContent?.trim() ?? "",
+				refresh: !!right?.querySelector("[data-testid='device-detail-refresh']"),
+				bodyHeader: body?.querySelectorAll("header").length ?? -1,
+				bodyTabs: body?.querySelectorAll("[role='tab']").length ?? -1
+			};
+		});
+		log(
+			"A10n 记录标识在工具栏左区、7 页签 + 页签数 + 刷新在右区，右栏内零 header / 零页签",
+			!!toolbarProbe.rowId
+			&& toolbarProbe.name === toolbarProbe.rowName
+			&& toolbarProbe.name.length > 0
+			&& toolbarProbe.ip === toolbarProbe.rowIp
+			&& toolbarProbe.status === "online"
+			&& toolbarProbe.tabs === 7
+			&& toolbarProbe.count.includes("7")
+			&& toolbarProbe.refresh
+			&& toolbarProbe.bodyHeader === 0
+			&& toolbarProbe.bodyTabs === 0,
+			`选中=${toolbarProbe.rowId || "无"} 工具栏名称=${toolbarProbe.name || "无"} IP=${toolbarProbe.ip || "无"} 状态=${toolbarProbe.status || "无"} 页签=${toolbarProbe.tabs} 计数=${toolbarProbe.count || "无"} 刷新=${toolbarProbe.refresh} 栏内 header=${toolbarProbe.bodyHeader} 栏内页签=${toolbarProbe.bodyTabs}`
+		);
+
+		// A10o：工具栏宽度不够时页签折叠成 `UDropdownMenu`（§4.4，断点与页面的 `compactToolbar` 同源）：
+		// 页签条消失、按钮写着当前页、菜单仍列 7 项，选中另一页后按钮文案跟着变、右栏内容真的换页。
+		await page.setViewportSize({ width: 1180, height: 900 });
+		await page.waitForTimeout(700);
+		const collapsedProbe = await page.evaluate(() => ({
+			menu: !!document.querySelector("[data-testid='device-detail-tabs-menu']"),
+			tabs: document.querySelectorAll("[data-testid='device-detail-tabs'] [role='tab']").length,
+			label: document.querySelector("[data-testid='device-detail-tabs-menu']")?.textContent?.trim() ?? ""
+		}));
+		await page.locator("[data-testid='device-detail-tabs-menu']").click();
+		await page.waitForTimeout(500);
+		const menuItems = await page.evaluate(() =>
+			document.querySelectorAll("[role='menuitemcheckbox'], [role='menuitem']").length);
+		await page.getByRole("menuitemcheckbox", { name: "LLDP" }).first().click();
+		await page.waitForTimeout(1_000);
+		const afterPick = await page.evaluate(() => ({
+			label: document.querySelector("[data-testid='device-detail-tabs-menu']")?.textContent?.trim() ?? "",
+			neighbors: !!document.querySelector("[data-testid='device-lldp-neighbors']")
+		}));
+		await page.setViewportSize({ width: 1440, height: 900 });
+		await page.waitForTimeout(700);
+		log(
+			"A10o 窄屏把 7 页签折叠成下拉（页签条消失、菜单 7 项、选中即换页）",
+			collapsedProbe.menu
+			&& collapsedProbe.tabs === 0
+			&& collapsedProbe.label === "接口列表"
+			&& menuItems === 7
+			&& afterPick.label === "LLDP"
+			&& afterPick.neighbors,
+			`折叠=${collapsedProbe.menu} 页签条=${collapsedProbe.tabs} 按钮=${collapsedProbe.label || "无"} 菜单项=${menuItems} 选后=${afterPick.label || "无"} LLDP 表=${afterPick.neighbors}`
+		);
+
+		// 端点对比给两端字段表、错误统计 / 链路质量给比率 / 时延并列出 2.0 缺哪些计数。
+		await page.goto(`${BASE_URL}/topology/link-metrics`, { waitUntil: "networkidle" });
+		await page.waitForTimeout(1_200);
+		await openDetailTab("端点对比");
+		const endpointProbe = await page.evaluate(() => {
+			const table = document.querySelector("[data-testid='link-endpoint-compare']");
+			return { table: !!table, text: table?.textContent ?? "" };
+		});
+		log(
+			"A12b 端点对比页给出两端字段表（oper_status 只显示数值、不猜 up / down）",
+			endpointProbe.table && endpointProbe.text.includes("操作状态") && endpointProbe.text.includes("DEV-CORE-1"),
+			endpointProbe.table ? "已出表" : "无 [data-testid='link-endpoint-compare']"
+		);
+
+		await openDetailTab("错误统计");
+		const errorsProbe = await page.evaluate(() => ({
+			rate: document.querySelector("[data-testid='link-error-rate']")?.textContent ?? "",
+			loss: document.querySelector("[data-testid='link-loss']")?.textContent ?? "",
+			gap: document.querySelector("[data-testid='telemetry-gap']")?.textContent ?? ""
+		}));
+		// 假上游只给 `packet_loss_percent: 0`、**没有** `error_rate_percent` ⇒ 一个显示 `0.0000%`、
+		// 一个必须是 `—`（缺字段不写 0），缺口卡同时列出 2.0 缺的计数端点。
+		log(
+			"A12c 错误统计页：缺的字段显示 —、有的字段按 4 位小数，缺口卡列出计数",
+			errorsProbe.rate.includes("—")
+			&& errorsProbe.loss.includes("0.0000%")
+			&& errorsProbe.gap.includes("ifInCrcErrors"),
+			`rate=${errorsProbe.rate.trim() || "无"} loss=${errorsProbe.loss.trim() || "无"} gap=${errorsProbe.gap ? "有" : "无"}`
+		);
+
+		// A12e：实测 `/metric/link` 的 `metrics` 逐条都有计数（in/out errors、discards、unknown protos、
+		// qlen、单播包）—— 把它们写成「2.0 没有端点」是误判。断言这些值照实上屏。
+		const counterProbe = await page.evaluate(() => ({
+			outErrors: document.querySelector("[data-testid='link-in-errors']")?.textContent?.trim() ?? "",
+			ucast: document.querySelector("[data-testid='link-in-ucast']")?.textContent?.trim() ?? "",
+			text: document.querySelector("[data-testid='link-detail-body']")?.textContent ?? ""
+		}));
+		log(
+			"A12e 错误统计页照实出报文计数（out_errors=2 / out_discards=3 / out_qlen=4 / in_ucast=103）",
+			counterProbe.outErrors === "0"
+			&& counterProbe.ucast === "103"
+			&& counterProbe.text.includes("3")
+			&& counterProbe.text.includes("发送队列长度"),
+			`in_errors=${counterProbe.outErrors || "无"} in_ucast=${counterProbe.ucast || "无"}`
+		);
+
+		await openDetailTab("链路质量");
+		const qualityProbe = await page.evaluate(() => ({
+			latency: document.querySelector("[data-testid='link-latency']")?.textContent ?? "",
+			peer: document.querySelector("[data-testid='link-probe-peer']")?.textContent?.trim() ?? "",
+			gap: document.querySelector("[data-testid='telemetry-gap']")?.textContent ?? ""
+		}));
+		log(
+			"A12d 链路质量页给时延 + 报文计数缺口",
+			qualityProbe.latency.includes("ms") && qualityProbe.gap.includes("packets.retransmit"),
+			`latency=${qualityProbe.latency.trim() || "无"} gap=${qualityProbe.gap ? "有" : "无"}`
+		);
+
+		// A12f：探针侧三个字段（probe_peer / probe_dir / rtt_mdev_us）与四个新鲜度都在实测响应里，
+		// 断言对端名与 rtt µs 照实、时延新鲜度按秒给出（不换算成「x 分钟前」）。
+		const probeSide = await page.evaluate(() => ({
+			text: document.querySelector("[data-testid='link-detail-body']")?.textContent ?? ""
+		}));
+		log(
+			"A12f 链路质量页给探针侧与新鲜度（probe_peer=n7、rtt 8 µs、时延新鲜度 49 s）",
+			qualityProbe.peer === "n7"
+			&& probeSide.text.includes("8 µs")
+			&& probeSide.text.includes("49 s")
+			&& probeSide.text.includes("探针侧"),
+			`probe_peer=${qualityProbe.peer || "无"}`
+		);
+
+		// A12g：链路页与设备页同一版式 —— 两端标识在工具栏左区、6 页签 + 页签数 + 刷新在右区，
+		// 右栏内零 header / 零页签（§4.5）。链路的两端文案与 `link_id` 都按上游原样，不在这里改写。
+		const linkToolbar = await page.evaluate(() => {
+			const left = document.getElementById("app-toolbar-left");
+			const right = document.getElementById("app-toolbar-right");
+			const body = document.querySelector("[data-testid='link-detail-body']");
+			return {
+				name: left?.querySelector("[data-testid='link-detail-name']")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+				id: left?.querySelector("[data-testid='link-detail-header'] span")?.textContent?.trim() ?? "",
+				status: left?.querySelector("[data-testid='link-detail-status']")?.textContent?.trim() ?? "",
+				tabs: right?.querySelectorAll("[data-testid='link-detail-tabs'] [role='tab']").length ?? -1,
+				count: right?.querySelector("[data-testid='link-detail-tab-count']")?.textContent?.trim() ?? "",
+				refresh: !!right?.querySelector("[data-testid='link-detail-refresh']"),
+				bodyHeader: body?.querySelectorAll("header").length ?? -1,
+				bodyTabs: body?.querySelectorAll("[role='tab']").length ?? -1
+			};
+		});
+		log(
+			"A12g 链路页同版式：两端标识在左区、6 页签 + 页签数 + 刷新在右区，右栏内零 header",
+			linkToolbar.name.includes("→")
+			&& linkToolbar.id.includes("--")
+			&& linkToolbar.status === "up"
+			&& linkToolbar.tabs === 6
+			&& linkToolbar.count.includes("6")
+			&& linkToolbar.refresh
+			&& linkToolbar.bodyHeader === 0
+			&& linkToolbar.bodyTabs === 0,
+			`两端=${linkToolbar.name || "无"} 标识=${linkToolbar.id || "无"} 状态=${linkToolbar.status || "无"} 页签=${linkToolbar.tabs} 计数=${linkToolbar.count || "无"} 刷新=${linkToolbar.refresh} 栏内 header=${linkToolbar.bodyHeader} 栏内页签=${linkToolbar.bodyTabs}`
+		);
+
 		// A13：上游**回了信封但业务失败**（HTTP 200 + `code !== 0`，§6.7）—— 页面必须逐字给出上游原话
 		// 并给重试，且不能把失败画成「该时间窗内无采集数据」（空态是「没数据」，失败是「取不到」，两回事）。
 		// 这里用 `__control/metric-error` 而不是 `__control/down`：后者断的是网络错误下的 stale 分支。
@@ -2449,6 +4296,8 @@ if (upstreamPort) {
 		// 断言的就不是「纯失败态」了。
 		await page.goto(`${BASE_URL}/topology/link-metrics`, { waitUntil: "networkidle" });
 		await page.waitForTimeout(1_200);
+		// 折线在「图表」页：失败语义要落在面板上，先切过去
+		await openDetailTab("图表");
 
 		const failProbe = await page.evaluate(() => {
 			const box = document.querySelector("[data-testid='metric-trend-error']");
@@ -2497,6 +4346,7 @@ if (upstreamPort) {
 			return row?.getAttribute("data-device-id") ?? null;
 		});
 		await page.waitForTimeout(1_500);
+		await openDetailTab("图表");
 		const deviceFailProbe = await page.evaluate(() => {
 			const box = document.querySelector("[data-testid='metric-trend-error']");
 			return {
@@ -2517,8 +4367,15 @@ if (upstreamPort) {
 			`row=${pickedRow ?? "无"} box=${deviceFailProbe.box} chart=${deviceFailProbe.chart} 原话=${deviceFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)}`
 		);
 
-		// A15：监控页详情栏走的是同一内核的薄封装（`useNodeTrend`），语义必须一致 —— 失败就只出原话 + 重试，
-		// 不能在图里写「该时间窗内无采集数据」（那是「没采到」，与「取数没成功」是两回事，§6.7）。
+		// A15：监控页**不再取数**（折线归指标页，见 A3），因此上游指标失败时它既不该冒出错误块，
+		// 也不该冒出「该时间窗内无采集数据」—— 它手上根本没有这份数据，说哪一句都是编。
+		// 失败原话只在指标页逐字出现（A13 / A14）；监控页只留深链按钮，把人送到会说实话的那一页。
+		const monitorRequests = [];
+		const recordMonitor = (request) => {
+			if (request.url().includes("/api/metric/"))
+				monitorRequests.push(request.url());
+		};
+		page.on("request", recordMonitor);
 		await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
 		await page.waitForTimeout(1_000);
 		const monitorNode = await page.evaluate(() => {
@@ -2532,20 +4389,23 @@ if (upstreamPort) {
 			const box = document.querySelector("[data-testid='trend-error']");
 			return {
 				box: !!box,
-				text: box?.textContent ?? "",
 				chart: !!document.querySelector("[data-testid='trend-chart']"),
+				button: !!document.querySelector("[data-testid='topology-node-metrics']"),
 				page: document.body.textContent ?? ""
 			};
 		});
+		page.off("request", recordMonitor);
 		log(
-			"A15 监控页详情栏同样逐字展示原话、不降级成空态",
+			"A15 指标失败时监控页不编空态也不出错误块：取数只发生在指标页，监控页只给深链入口",
 			monitorNode === "10.0.0.2"
-			&& monitorFailProbe.box
-			&& monitorFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)
-			&& monitorFailProbe.text.includes("重试")
+			&& !monitorFailProbe.box
 			&& !monitorFailProbe.chart
-			&& !monitorFailProbe.page.includes("该时间窗内无采集数据"),
-			`node=${monitorNode ?? "无"} box=${monitorFailProbe.box} chart=${monitorFailProbe.chart} 原话=${monitorFailProbe.text.includes(METRIC_UPSTREAM_FAILURE)}`
+			&& monitorFailProbe.button
+			&& monitorRequests.length === 0
+			&& !monitorFailProbe.page.includes("该时间窗内无采集数据")
+			&& !monitorFailProbe.page.includes(METRIC_UPSTREAM_FAILURE),
+			`node=${monitorNode ?? "无"} box=${monitorFailProbe.box} chart=${monitorFailProbe.chart}`
+			+ ` 深链=${monitorFailProbe.button} 指标请求=${monitorRequests.length}`
 		);
 
 		// A16：**网络错误**下的 stale 分支（与上面「信封失败」是两条路）：上游已掉线，但手上还有上次成功的
@@ -2559,6 +4419,7 @@ if (upstreamPort) {
 			row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 		});
 		await page.waitForTimeout(1_500);
+		await openDetailTab("图表");
 		const beforeStale = await page.evaluate(() => document.querySelector("[data-testid='metric-trend']")?.getAttribute("data-series-count") ?? "");
 
 		await fetch(`http://${HOST}:${upstreamPort}/__control/down`);
@@ -2593,6 +4454,7 @@ if (upstreamPort) {
 		await fetch(`http://${HOST}:${upstreamPort}/__control/catalog-error`);
 		await page.goto(`${BASE_URL}/topology/device-metrics`, { waitUntil: "networkidle" });
 		await page.waitForTimeout(1_500);
+		await openDetailTab("图表");
 		const degradedProbe = await page.evaluate(() => {
 			const alert = document.querySelector("[data-testid='metric-catalog-degraded']");
 			const trend = document.querySelector("[data-testid='metric-trend']");
@@ -2662,7 +4524,7 @@ if (upstreamPort) {
 		);
 
 		// A20：同一套模板在链路页也必须一致 —— 只钉一页等于没钉（两页各有一份列表 / 详情模板）。
-		await page.goto(`${BASE_URL}/topology/link-metrics?id=LNK-0001`, { waitUntil: "networkidle" });
+		await page.goto(`${BASE_URL}/topology/link-metrics?id=DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1`, { waitUntil: "networkidle" });
 		await page.waitForTimeout(1_500);
 		const linkLedgerFailProbe = await page.evaluate(() => {
 			const split = "[data-split='link-metrics']";
@@ -2899,11 +4761,6 @@ if (upstreamPort) {
 			`${channelOnResponse?.status ?? 0} writeEnabled=${channelOnBody?.data?.writeEnabled}`
 		);
 
-		/** 两个写入口按钮当前的 `disabled` 状态（顺序与 DOM 一致） */
-		const simActionStates = (page) => page.evaluate(() =>
-			Array.from(document.querySelectorAll("[data-testid='sim-action']")).map((el) => el.hasAttribute("disabled"))
-		);
-
 		const writeContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const writePage = await writeContext.newPage();
 		await writePage.goto(`${writeBffBase}/auth/login`, { waitUntil: "networkidle" });
@@ -2914,73 +4771,21 @@ if (upstreamPort) {
 		await writePage.goto(`${writeBffBase}/topology/monitor`, { waitUntil: "networkidle" });
 		await writePage.waitForTimeout(800);
 
-		const idleActions = await simActionStates(writePage);
+		// A9：写开关打开后，画布**仍然**只是「选谁看什么」——不提供节点级「停止 / 重启」
+		// （2026-11-09 用户裁决下线，与 A6 同一条口径：那两档改的是整台设备的运行态，与「看拓扑」不是一件事）。
+		// 写入口只剩链路详情卡里的 `topology-link-action`（端到端见下面的 A35），所以 A9 钉的是
+		// 「开了写也不会在画布上长出动作」，同时确认页面真的渲染出来了（否则下面 A35 是在空页上点）。
+		const writeCapability = await writePage.evaluate(() => ({
+			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+			actions: document.querySelectorAll("[data-testid='sim-action']").length,
+			text: document.body.textContent ?? ""
+		}));
 		log(
-			"A9 开了写但没选节点时按钮仍 disabled",
-			idleActions.length === 2 && idleActions.every(Boolean),
-			`buttons=${idleActions.length} disabled=${idleActions.filter(Boolean).length}`
-		);
-
-		// 选一个「仿真中」的节点：虚线外环就是 8001 运行态对齐的结果（`circle[stroke-dasharray]`）。
-		// 用派发 click 而不是坐标点击：SVG 的命中测试会受缩放 / 拖拽层影响，派发事件测的是同一条处理链。
-		await writePage.evaluate(() => {
-			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
-				.find((el) => el.querySelector("circle[stroke-dasharray]"));
-			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-		});
-		await writePage.waitForTimeout(300);
-
-		const selectedActions = await simActionStates(writePage);
-		log(
-			"A9 选中仿真节点后写按钮可点",
-			selectedActions.length === 2 && selectedActions.every((disabled) => disabled === false),
-			`buttons=${selectedActions.length} disabled=${selectedActions.filter(Boolean).length}`
-		);
-
-		const writeHitsBefore = writeSimulator.log.length;
-		await writePage.locator("[data-testid='sim-action'][data-action='restart']").click();
-		const confirmVisible = await writePage.locator("[data-testid='sim-confirm']").isVisible().catch(() => false);
-		// UModal 的根是 DialogRoot（无 DOM），`data-testid` 传不进去 —— 只按 ARIA 角色取整张弹窗，
-		// 这样标题（动作）、正文（目标）与按钮（提交）一起进断言，缺一样就红。
-		const confirmText = confirmVisible
-			? await writePage.locator("[role='dialog']").first().evaluate((el) => el.textContent ?? "").catch(() => "")
-			: "";
-		log(
-			"A9 点按钮先弹二次确认（写明动作与目标）",
-			confirmVisible
-			&& confirmText.includes("确认下发仿真动作")
-			&& confirmText.includes("重启节点")
-			&& confirmText.includes("核心路由器-1"),
-			confirmVisible ? `弹窗文案：${confirmText.replace(/\s+/g, " ").slice(0, 100)}` : "未出现确认弹窗"
-		);
-
-		// 未确认前上游不该收到任何东西：二次确认不是装饰
-		const writesBeforeConfirm = writeSimulator.log.slice(writeHitsBefore).filter((entry) => entry.method !== "GET").length;
-		log(
-			"A9 确认前不触达上游",
-			writesBeforeConfirm === 0,
-			`确认前写请求 ${writesBeforeConfirm} 次`
-		);
-
-		await writePage.locator("[data-testid='sim-confirm']").click();
-		await writePage.waitForTimeout(1000);
-
-		const writeHits = writeSimulator.log.slice(writeHitsBefore).filter((entry) => entry.method !== "GET");
-		const writeHit = writeHits[0];
-		log(
-			"A9 确认后写请求真的到达仿真平台（方法与路径原样）",
-			writeHits.length === 1
-			&& writeHit?.method === "POST"
-			&& /^\/api\/network\/nodes\/[^/]+\/restart$/.test(writeHit?.path ?? ""),
-			writeHit ? `${writeHit.method} ${writeHit.path}（共 ${writeHits.length} 次）` : `写请求 ${writeHits.length} 次`
-		);
-
-		const afterWriteText = await writePage.evaluate(() => document.body.textContent ?? "");
-		log(
-			"A9 成功后给出成功提示并关掉弹窗",
-			afterWriteText.includes("重启已下发")
-			&& (await writePage.locator("[data-testid='sim-confirm']").isVisible().catch(() => false)) === false,
-			afterWriteText.includes("重启已下发") ? "已提示「重启已下发」" : `未见成功提示：${afterWriteText.slice(0, 80)}`
+			"A9 开了写也不在画布上长出节点级动作（写入口只在链路详情卡里）",
+			writeCapability.canvas && writeCapability.actions === 0
+			&& !writeCapability.text.includes("停止节点") && !writeCapability.text.includes("重启节点"),
+			`canvas=${writeCapability.canvas} sim-action=${writeCapability.actions}`
+			+ ` 文案残留=${writeCapability.text.includes("停止节点") || writeCapability.text.includes("重启节点")}`
 		);
 
 		// A35：链路动作端到端（§6.2）。选一条仿真里的链路（`10.0.0.1 ↔ 10.0.0.2` 在假仿真里是 `l1`），

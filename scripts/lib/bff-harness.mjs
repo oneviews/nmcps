@@ -112,6 +112,92 @@ export async function closeUpstream(server) {
  * `style.x|y` 给的是与布局无关的坐标：页面**不复用**它（几何只来自 `layoutTopology()`），
  * 这份样本的坐标因此可以随便编 —— 正好用来证明「上游坐标没被误当成布局结果」。
  */
+/**
+ * 分层规则样本（`__control/topology-mesh`，A43 / A44 专用）：`NMCPS-DESIGN-001` §6.8 / §七 的夹具。
+ *
+ * 形状刻意做成「现实里最常见、但 dagre 排不出来」的那种图：
+ *   · 顶层三台设备**两两互联**（关系等价）⇒ 边表达不了上下，只能靠名称判据选举根节点；
+ *   · 一台汇聚下挂两台接入，其中「接入交换机-2」**没有下级** ⇒ 应下移到末行；
+ *   · 末行 14 台设备的名称比 `nodesep = 80` 宽 ⇒ 标签必须错行（`data-label-shift`）。
+ *
+ * 出站故意走**扁平**形状：本样本要钉的是布局规则，不是 §6.10 的两层形状（那条由 A27 钉）。
+ */
+function meshTopologyGraph() {
+	const node = (id, name, tier, status = 1) => ({ id, name, category: "network-device", type: "access", tier, status });
+	const terminals = Array.from({ length: 13 }, (_, index) => {
+		const serial = String(index + 1).padStart(2, "0");
+		return { id: `10.0.1.${11 + index}`, name: `无线终端设备-${serial}`, category: "client", type: "endnode", tier: 4, status: index === 5 ? 0 : 1 };
+	});
+	return {
+		nodes: [
+			node("10.0.1.1", "网控中心", 1),
+			node("10.0.1.2", "核心路由器-2", 1),
+			node("10.0.1.3", "核心路由器-3", 1),
+			node("10.0.1.4", "汇聚交换机-1", 2),
+			node("10.0.1.5", "汇聚交换机-2", 2),
+			node("10.0.1.6", "接入交换机-1", 3, 2),
+			node("10.0.1.7", "接入交换机-2", 3),
+			...terminals
+		],
+		edges: [
+			// 顶层网状（三台两两互联）
+			{ source: "10.0.1.1", target: "10.0.1.2", status: "up", bandwidth: "1 Gbps" },
+			{ source: "10.0.1.2", target: "10.0.1.3", status: "up", bandwidth: "1 Gbps" },
+			{ source: "10.0.1.3", target: "10.0.1.1", status: "up", bandwidth: "1 Gbps" },
+			// 核心 → 汇聚（三台核心都往下走，因此都有「下一级」）
+			{ source: "10.0.1.2", target: "10.0.1.4", status: "up" },
+			{ source: "10.0.1.3", target: "10.0.1.5", status: "up" },
+			{ source: "10.0.1.1", target: "10.0.1.4", status: "up" },
+			// 汇聚 → 接入
+			{ source: "10.0.1.4", target: "10.0.1.6", status: "up" },
+			{ source: "10.0.1.5", target: "10.0.1.6", status: "up" },
+			// 「接入交换机-2」只有上级、没有下级 ⇒ 应下移到末行
+			{ source: "10.0.1.4", target: "10.0.1.7", status: "up" },
+			...terminals.map((terminal) => ({ source: "10.0.1.6", target: terminal.id, status: "up", linkType: "wireless" }))
+		],
+		combos: []
+	};
+}
+
+/**
+ * 同档下级样本（`__control/topology-same-tier`，A52 专用）：`NMCPS-DESIGN-001` §6.15 的夹具。
+ *
+ * 形状照现网 36 节点样本里最容易被误判的一段搬（2026-11-09 用户反馈）：
+ *   · 三台胖 AP 登记成 `tier 3`，与它们上联的接入交换机**同档** ⇒ 只按「严格更靠下」判，
+ *     它们谁也不是接入的下级；收起汇聚时接入被摘掉，AP 却留在画布上、不连任何东西；
+ *   · 两台接入都上联同一台汇聚 ⇒ 同档且**两端都有上行** ⇒ 谁也不是谁的下级（不得凭空造层级）；
+ *   · 一台终端挂在 AP-10 下面（`tier 4`）⇒ 收起汇聚要能穿过「同档那一跳」把它一起带走。
+ */
+function sameTierTopologyGraph() {
+	const node = (id, name, tier, category = "network-device") => ({ id, name, category, type: "access", tier, status: 1 });
+	return {
+		nodes: [
+			node("10.0.3.1", "核心路由器-1", 1),
+			node("10.0.3.2", "汇聚交换机-1", 2),
+			node("10.0.3.3", "接入交换机-1", 3),
+			node("10.0.3.4", "接入交换机-2", 3),
+			node("10.0.3.10", "Wi-Fi胖AP-10", 3, "ap"),
+			node("10.0.3.11", "Wi-Fi胖AP-11", 3, "ap"),
+			node("10.0.3.12", "Wi-Fi胖AP-12", 3, "ap"),
+			node("10.0.3.21", "无线终端设备-01", 4, "client")
+		],
+		edges: [
+			{ source: "10.0.3.2", target: "10.0.3.1", status: "up" },
+			{ source: "10.0.3.3", target: "10.0.3.2", status: "up" },
+			{ source: "10.0.3.4", target: "10.0.3.2", status: "up" },
+			// 同档：两台接入互相是邻居（都上联汇聚 ⇒ 两端都有上行 ⇒ 谁也不服谁）
+			{ source: "10.0.3.3", target: "10.0.3.4", status: "up" },
+			// 同档：AP 只连接入（AP 没有上行 ⇒ 接入是它们的上级）
+			{ source: "10.0.3.3", target: "10.0.3.10", status: "up", linkType: "wireless" },
+			{ source: "10.0.3.3", target: "10.0.3.11", status: "up", linkType: "wireless" },
+			{ source: "10.0.3.3", target: "10.0.3.12", status: "up", linkType: "wireless" },
+			{ source: "10.0.3.10", target: "10.0.3.21", status: "up", linkType: "wireless" }
+		],
+		combos: []
+	};
+}
+
+/** 现网的两层形状（`NMCPS-DESIGN-001` §6.10 / A27）：事实全塞进 `data`，坐标走 `style` */
 function nestTopologyGraph(flat) {
 	return {
 		nodes: flat.nodes.map((node, index) => {
@@ -225,6 +311,41 @@ export async function startUpstream(port) {
 		const slice = records.slice(start, start + pageSize);
 		return { list: slice.length ? slice : null, total: records.length, page, page_size: pageSize };
 	};
+
+	/** 设备台账的填充行：字段形状与真样本一致（缺的块写 null / 空对象，不编数） */
+	const deepPageDeviceFiller = (n) => ({
+		device_code: `FILLER-DEV-${String(n).padStart(2, "0")}`,
+		mgmt_ip: `10.9.0.${n}`,
+		sys_name: `填充设备-${n}`,
+		sys_descr: "Filler Device",
+		role: "access",
+		vendor: "filler",
+		model: "F-1000",
+		status: "online",
+		health: {},
+		hw: { entities: [] },
+		interface_summary: { total: 0, up: 0, down: 0 },
+		neighbors: [],
+		neighbor_summary: { total: 0 },
+		traffic: {},
+		protocol: null,
+		lldp: null,
+		radio: null,
+		device_quality: null,
+		quality: {}
+	});
+
+	/** 链路台账的填充行：两端都指向填充设备，因此深链的 IP 索引查不到它们 */
+	const deepPageLinkFiller = (n) => ({
+		identity: {
+			link_id: `FILLER-DEV-${String(n).padStart(2, "0")}:GE0/0/${n}--FILLER-DEV-99:GE0/0/${n}`,
+			source: { device_code: `FILLER-DEV-${String(n).padStart(2, "0")}`, device_role: "access", interface_id: `GE0/0/${n}`, interface_name: `GE0/0/${n}`, medium: "wired" },
+			target: { device_code: "FILLER-DEV-99", device_role: "access", interface_id: `GE0/0/${n}`, interface_name: `GE0/0/${n}`, medium: "wired" },
+			discovery: "lldp"
+		},
+		metrics: { status: "up", graph_status: "online", medium: "ethernet", bandwidth_mbps: 1000, metric_valid: 1 },
+		jobs: ["snmp_devices"]
+	});
 
 	/**
 	 * 审计域假数据（新代 `audit/*` 三族端点，NMCPS-ADR-0018 §三）：给 `/system/log` 的
@@ -349,7 +470,22 @@ export async function startUpstream(port) {
 	 * 自检因此默认就覆盖「线格式 → 拍平」这条路，而不是比现网更干净。
 	 * `__control/topology-flat` 切回扁平形状（A27 用它证明两种形状渲染结果一致）。
 	 */
-	const control = { down: false, topologyEmpty: false, topologyNested: true, metricError: false, catalogError: false, alarmError: false, alarmFlood: false };
+
+	const control = { down: false, topologyEmpty: false, topologyNested: true, topologyMesh: false, topologySameTier: false, metricError: false, metricDeepPage: false, catalogError: false, namesEmpty: false, alarmError: false, alarmFlood: false };
+
+	/**
+	 * 深链翻页样本（A50，2026-11-08）：在真样本身前垫 `count` 条填充行，把目标挤到第 2 页。
+	 *
+	 * 只在 `__control/metric-deep-page` 打开时生效（其余断言的台账首页保持 3 台设备 / 2 条链路）。
+	 * 填充行刻意**不含**真样本的管理 IP / `device_code`：深链要么命中真的那条，要么什么也命中不了，
+	 * 不会「碰巧选中一条填充行」而让断言假绿。
+	 */
+	const withDeepPageFillers = (records, count, make) => {
+		if (!control.metricDeepPage)
+			return records;
+		const fillers = Array.from({ length: count }, (_, index) => make(index + 1));
+		return [...fillers, ...records];
+	};
 
 	const server = createHttpServer(async (req, res) => {
 		const url = new URL(req.url ?? "/", `http://${HOST}:${port}`);
@@ -378,7 +514,7 @@ export async function startUpstream(port) {
 			return send(200, { down: false });
 		}
 		if (url.pathname === "/__control/state")
-			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, topologyNested: control.topologyNested, metricError: control.metricError, catalogError: control.catalogError, alarmError: control.alarmError, alarmFlood: control.alarmFlood });
+			return send(200, { down: control.down, topologyEmpty: control.topologyEmpty, topologyNested: control.topologyNested, topologyMesh: control.topologyMesh, topologySameTier: control.topologySameTier, metricError: control.metricError, catalogError: control.catalogError, namesEmpty: control.namesEmpty, alarmError: control.alarmError, alarmFlood: control.alarmFlood });
 		/**
 		 * 告警取数失败开关：`/alarm/alarm-events` 回 HTTP 200 + `code !== 0` + 一句上游原话。
 		 * 拓扑 / 仿真照常（告警是叠加层），页面必须写「告警通道不可用：<原话>」，**不能**写「无告警」——
@@ -419,6 +555,21 @@ export async function startUpstream(port) {
 			return send(200, { metricError: false });
 		}
 		/**
+		 * 深链翻页样本（A49，2026-11-08）：台账一页 15 条，而现网 36 台设备 / 48 条链路，
+		 * 拓扑深链的目标**多半不在第一页**。打开后 `/metric/device` 与 `/metric/link` 各在真样本前
+		 * 垫 15 / 20 条同名形态的填充行，把三条真设备挤到第 2 页、两条真链路挤到第 2 页：
+		 * 深链必须自己翻到那一页再写 `?id`（`resolveDeepLink()`），否则用户点了「遥测」什么都没选中。
+		 * 填充行的 `device_code` 都是 `FILLER-DEV-nn`，不与管理 IP 撞车。
+		 */
+		if (url.pathname === "/__control/metric-deep-page") {
+			control.metricDeepPage = true;
+			return send(200, { metricDeepPage: true });
+		}
+		if (url.pathname === "/__control/metric-deep-page-off") {
+			control.metricDeepPage = false;
+			return send(200, { metricDeepPage: false });
+		}
+		/**
 		 * 目录失败开关：`/metric/definition` 回 HTTP 200 + `code !== 0`。
 		 * 与 `metric-error` 的区别是**失败在哪一步**：目录只是「类型判定的依据」，
 		 * 而名字清单与序列都还好 —— 页面必须照常出图，只多一句「只按名字判断类型」（§8.4 / A17）。
@@ -430,6 +581,19 @@ export async function startUpstream(port) {
 		if (url.pathname === "/__control/catalog-ok") {
 			control.catalogError = false;
 			return send(200, { catalogError: false });
+		}
+		/**
+		 * 名字清单为空开关：`/metric/name` 回 `metrics: []`（实测 24/36 台设备就是这样），
+		 * 而 `/metric/datapoint` 照常回序列 —— 用来钉「空清单只影响提示，不影响能不能选」
+		 * （CONTRACT-002 §七 / §8.6 / A10p）。
+		 */
+		if (url.pathname === "/__control/names-empty") {
+			control.namesEmpty = true;
+			return send(200, { namesEmpty: true });
+		}
+		if (url.pathname === "/__control/names-ok") {
+			control.namesEmpty = false;
+			return send(200, { namesEmpty: false });
 		}
 		if (url.pathname === "/__control/topology-empty") {
 			control.topologyEmpty = true;
@@ -455,6 +619,33 @@ export async function startUpstream(port) {
 			control.topologyNested = false;
 			return send(200, { topologyNested: false });
 		}
+		/**
+		 * 分层规则样本（A43 / A44）：把拓扑换成「网状顶层 + 无下级接入 + 满行终端」的形状，
+		 * 专门钉 `NMCPS-DESIGN-001` §6.8 的两条层序归约规则与 §七 的标签避让：
+		 *   · 顶层三台设备两两互联（关系等价）⇒ 只有「网控中心」命中名称判据 ⇒ 被选举为根（第 1 行）；
+		 *   · 「接入交换机-2」挂在汇聚下但没有下一级 ⇒ 下移到末行（与终端同排）；
+		 *   · 末行 14 台设备的名称比 80px 间距宽 ⇒ 标签按奇偶错行（`data-label-shift` 0/1 交替）。
+		 * `topology-default` 复位（后面的断言仍走默认的 6 节点样本）。
+		 */
+		if (url.pathname === "/__control/topology-mesh") {
+			control.topologyMesh = true;
+			control.topologySameTier = false;
+			return send(200, { topologyMesh: true, topologySameTier: false });
+		}
+		/**
+		 * 同档下级样本（A52，2026-11-09）：胖 AP 与接入交换机同档（`tier 3`）的形状，
+		 * 钉「收起汇聚要把同档那一跳下面的 AP 一起带走」（`NMCPS-DESIGN-001` §6.15）。
+		 */
+		if (url.pathname === "/__control/topology-same-tier") {
+			control.topologySameTier = true;
+			control.topologyMesh = false;
+			return send(200, { topologySameTier: true, topologyMesh: false });
+		}
+		if (url.pathname === "/__control/topology-default") {
+			control.topologyMesh = false;
+			control.topologySameTier = false;
+			return send(200, { topologyMesh: false, topologySameTier: false, topologyEmpty: control.topologyEmpty });
+		}
 
 		if (control.down) {
 			req.socket.destroy();
@@ -477,7 +668,14 @@ export async function startUpstream(port) {
 		// 下表是**扁平**样本本体；出站时默认经 `nestTopologyGraph()` 包成现网的两层形状（§6.10 / A27），
 		// `__control/topology-empty` 用于「空拓扑渲染空态而不是空白画布」的断言（NMCPS-DESIGN-001 A4）。
 		if (/^\/(?:api\/v1\/)?topology\/graph$/.test(url.pathname) && req.method === "GET") {
+			// 分层规则样本（A43 / A44）：整套拓扑换成网状顶层 + 无下级接入 + 满行终端的形状
+			if (control.topologyMesh)
+				return send(200, { code: 0, msg: "success", data: meshTopologyGraph() });
+			// 同档下级样本（A52）：胖 AP 与接入同档（tier 3），收起要走通「同档那一跳」
+			if (control.topologySameTier)
+				return send(200, { code: 0, msg: "success", data: sameTierTopologyGraph() });
 			const graph = control.topologyEmpty
+
 				? { nodes: [], edges: [], combos: [] }
 				: {
 					// 指标事实（`cpu` / `memory` / `interfaces` / `traffic*`）刻意留四种形态，详情栏
@@ -685,6 +883,10 @@ export async function startUpstream(port) {
 		// 断言「挑编码时跳过 collector 命名空间」而不是抓到什么画什么（NMCPS-CONTRACT-002 §三）。
 		if (/^\/(?:api\/v1\/)?metric\/name$/.test(url.pathname) && req.method === "GET") {
 			const ip = url.searchParams.get("mgmt_ip");
+			// 空清单样本（§七 实测的 24/36 台）：清单为空 ≠ 设备没有数据，序列由 `/metric/datapoint` 照常给。
+			if (control.namesEmpty)
+				return send(200, { code: 0, msg: "success", data: { mgmt_ip: ip ?? null, metrics: [] } });
+
 			return send(200, {
 				code: 0,
 				msg: "success",
@@ -692,7 +894,8 @@ export async function startUpstream(port) {
 					mgmt_ip: ip ?? null,
 					// `sys_name` 排在最后且被目录标成 `string`：它必须**不**进指标选择器
 					// （NMCPS-CONTRACT-002 §八 三分类），否则「文本指标画成折线」的缺口就被掩盖了。
-					metrics: ["up", "scrape_duration_seconds", "if_in_octets", "cpu_util_pct", "sys_name"]
+					// `hw_board_name` 是**实测字段名**的那条样本（目录用 `data_type`），同样不许进选择器。
+					metrics: ["up", "scrape_duration_seconds", "if_in_octets", "cpu_util_pct", "sys_name", "sim_iface_kbps", "hw_board_name"]
 				}
 			});
 		}
@@ -714,53 +917,186 @@ export async function startUpstream(port) {
 						{ code: "scrape_duration_seconds", metric_type: "gauge", unit: "s", en_name: "Scrape duration" },
 						{ code: "if_in_octets", metric_type: "counter", unit: "bytes", en_name: "Interface in octets" },
 						{ code: "cpu_util_pct", metric_type: "gauge", unit: "%", en_name: "CPU utilization" },
-						{ code: "sys_name", metric_type: "string", has_series: false, en_name: "System name" }
+						// 仿真侧接口指标：实测 `metric_code=simIfaceInKbps` 的序列标签是
+						// `simIfaceMetricIndex`（不是 `ifIndex`），这里照抄一份样本给 A10j 钉分组兜底。
+						{ code: "sim_iface_kbps", metric_type: "gauge", unit: "Kbps", en_name: "Sim interface in Kbps" },
+						{ code: "sys_name", metric_type: "string", has_series: false, en_name: "System name" },
+						// 实测字段名样本（2026-11-08）：目录真实用的是 `metric_code` / `data_type` / `metric_name` /
+						// `metric_name_en`，只认 `metric_type` 会把这条 `string` 指标放行成可绘图（A10q 钉的就是这条）。
+						{ metric_code: "hw_board_name", data_type: "string", metric_name: "板卡名称", metric_name_en: "Board name", unit: "", enabled: true }
 					],
 					page: 1,
 					page_size: 200,
-					total: 5
+					total: 7
 				}
 			});
 		}
 
 		// `/metric/device`：设备台账（指标页左栏，`NMCPS-DESIGN-001` §6.6 / A10）。
-		// 三行刻意各有缺口：② 的 `cpu` / `ports` 缺一项（展示 `—`，不补 0）、③ 没有 `mgmt_ip`
-		// （趋势面板只能说明原因，不许发明请求）。
+		// 三个样本按 **2026-11-08 实测响应**构造，不是只留 identity / health / traffic —— 上游对每个设备
+		// 还回 `sys_*` / `hw` / `neighbors` / `protocol` / `lldp` / `radio` / `device_quality` / `quality`，
+		// 详情区四页（协议 / 射频 / LLDP / 数据质量）就是靠它们出数（A10d~A10g 钉这几页）。
+		// 刻意留的缺口：② 的 `health.mem` / `interface_summary.up` 为 null、`protocol` 整块 null、
+		// ③ 没有 `mgmt_ip` 且 `lldp` 为 null（= 没上报，不是失败）；② Ⅲ 的 `radio` 一有一无。
 		if (/^\/(?:api\/v1\/)?metric\/device$/.test(url.pathname) && req.method === "GET") {
 			const devices = [
 				{
 					device_code: "DEV-CORE-1",
 					mgmt_ip: "10.0.0.2",
 					sys_name: "核心路由器-1",
+					sys_descr: "Core Router (NMCPS-Core 9000)",
+					sys_object_id: "1.3.6.1.4.1.99999.1",
+					sys_contact: "NOC <noc@sim.local>",
+					sys_location: "机房 A-01",
+					sys_services: 6,
 					role: "core",
 					vendor: "huawei",
+					model: "NE9000",
 					status: "online",
+					uptime_sec: 216532,
 					health: { cpu_percent: 21.5, mem_percent: 48 },
-					interface_summary: { total: 24, up: 22, down: 2 }
+					// `hw.entities[]` 按实测形状（交换机报 1 条：板名 / 型号 / 两个数值状态）
+					hw: {
+						entities: [{ index: "1", board_name: "CloudEngine S5735-L24P4X-A1", model_name: "CloudEngine S5735-L24P4X-A1", admin_status: 4, oper_status: 3 }],
+						vlan_count: 12,
+						route_count: 340,
+						fdb_count: 1024,
+						mstp_status: "enabled"
+					},
+					interface_summary: { total: 24, up: 22, down: 2, unknown: 0, wired: 24, wireless: 0 },
+					neighbors: ["接入交换机-1", "无线AP-1"],
+					neighbor_summary: { total: 2, router: 0, l3_switch: 1, l2_switch: 0, ap: 1, sta: 0 },
+					traffic: { in_bps: 0, out_bps: 0, total_bps: 0, in_octets_total: 7466, out_octets_total: 11534 },
+					protocol: {
+						ip: { in_receives: null, in_hdr_errors: null, in_addr_errors: null, in_delivers: null },
+						icmp: { in_msgs: 2718818, in_errors: 1760, out_msgs: 2719866, out_errors: 0 },
+						tcp: { curr_estab: 4, in_segs: 66207457, out_segs: 70025359, retrans_segs: 487114, in_errs: 2 },
+						udp: { in_datagrams: 50111034, no_ports: 615, in_errors: 0, out_datagrams: 48531851 }
+					},
+					lldp: {
+						chassis_id: "02:1d:83:d8:bb:ab",
+						sys_desc: "Ubuntu 22.04.5 LTS Linux 5.15.0",
+						man_addr: "10.0.0.2",
+						ports: [
+							{ port_num: "1272", port_id: "n10-wlan1", port_id_subtype: 5, port_desc: "n10-wlan1" },
+							{ port_num: "1305", port_id: "n10-eth2", port_id_subtype: 5, port_desc: "n10-eth2" }
+						],
+						neighbors: [
+							{
+								sys_name: "接入交换机-1",
+								chassis_id: "02:1d:fe:6d:22:68",
+								local_port_num: "1305",
+								port_id: "n4-eth5",
+								port_desc: "n4-eth5",
+								man_addr: "10.0.0.249",
+								sys_desc: "Ubuntu 22.04.5 LTS Linux 5.15.0-198-generic"
+							}
+						]
+					},
+					radio: null,
+					device_quality: { device_latency_us: 16850, device_jitter_us: 249, device_loss_ratio_ppm: 0, metric_age_sec: 326, metric_valid: 2, peer_count: 2 },
+					sim: { session_id: "sim-354a5a7f", scenario_name: "三层环状核心无线场景" },
+					jobs: ["snmp_devices", "wireless_devices"],
+					anchor_job: "snmp_devices",
+					quality: { job_mixed: true, duplicate_samples: true, vendor_fields_unavailable: true }
 				},
 				{
 					device_code: "DEV-ACC-1",
 					mgmt_ip: "10.0.0.3",
 					sys_name: "接入交换机-1",
+					sys_descr: "Access Switch (NMCPS-Access 4800)",
+					sys_object_id: "1.3.6.1.4.1.99999.2",
+					sys_contact: null,
+					sys_location: null,
+					sys_services: 2,
 					role: "access",
 					vendor: "h3c",
+					model: "S4800",
 					status: "degraded",
+					uptime_sec: 10800,
 					health: { cpu_percent: 63.25, mem_percent: null },
-					interface_summary: { total: 48, up: null, down: null }
+					hw: { entities: [], vlan_count: null, route_count: null, fdb_count: null, mstp_status: null },
+					interface_summary: { total: 48, up: null, down: null },
+					neighbors: [],
+					neighbor_summary: { total: 0, router: 0, l3_switch: 0, l2_switch: 0, ap: 0, sta: 0 },
+					traffic: { in_bps: null, out_bps: null, total_bps: null, in_octets_total: 0, out_octets_total: 0 },
+					// 整块 null：协议页必须走「上游这一块没上报」，而不是把 null 画成 0
+					protocol: null,
+					lldp: {
+						chassis_id: "02:1d:5d:4e:2b:d9",
+						sys_desc: "H3C S4800",
+						ports: [{ port_num: "1", port_id: "GE1/0/1", port_id_subtype: 5, port_desc: "GE1/0/1" }],
+						neighbors: []
+					},
+					radio: null,
+					device_quality: null,
+					jobs: ["snmp_devices"],
+					anchor_job: "snmp_devices",
+					quality: {}
 				},
 				{
 					device_code: "DEV-AP-1",
 					mgmt_ip: null,
 					sys_name: "无线AP-1",
+					sys_descr: "Access Point (IEEE 802.11 OVS bridge + hostapd)",
+					sys_object_id: "1.3.6.1.4.1.99999.2",
+					sys_contact: "Simulation Admin <admin@sim.local>",
+					sys_location: "Mininet-WiFi Simulation",
+					sys_services: 2,
 					role: "ap",
 					vendor: "ruijie",
+					model: "n10",
 					status: "online",
+					uptime_sec: 216477,
 					health: {},
-					interface_summary: { total: 1, up: 1, down: 0 }
+					hw: { entities: [], vlan_count: null, route_count: null, fdb_count: null, mstp_status: null },
+					interface_summary: { total: 1, up: 1, down: 0, unknown: 0, wired: 1, wireless: 0 },
+					neighbors: ["单链路终端-1"],
+					neighbor_summary: { total: 1, router: 0, l3_switch: 0, l2_switch: 0, ap: 0, sta: 1 },
+					protocol: {
+						ip: { in_receives: null },
+						icmp: { in_msgs: 0, in_errors: 0, out_msgs: 0, out_errors: 0 },
+						tcp: { curr_estab: 70, retrans_segs: 487114, in_errs: 2 },
+						udp: { in_datagrams: 50112939, no_ports: 615, in_errors: 0 }
+					},
+					// `null` = 这台设备没上报 LLDP（同一批里 DEV-CORE-1 有）⇒ LLDP 页走「没上报」分支
+					lldp: null,
+					radio: {
+						role: 1,
+						ssid: "Wi-Fi胖AP-1",
+						mode: 2,
+						band: 2,
+						channel: 36,
+						frequency_mhz: 5180,
+						bandwidth_mhz: 20,
+						bss_type: 1,
+						power_mgmt_mode: 1,
+						tx_power_dbm: 36,
+						noise_dbm: -93,
+						interference_level: 5,
+						assoc_count: 1,
+						supported_rates_tx_mbps: 52,
+						supported_rates_rx_mbps: 52,
+						operational_rates_mbps: [6.5, 13, 19.5, 26, 39, 52, 58.5],
+						associations: [
+							{ index: "1", sta_name: "单链路终端-1", sta_mac: "02:00:00:00:00:00", rssi_dbm: -45, tx_rate_mbps: 52, status: "1" }
+						],
+						// MLO 从链路（实测 9 台终端共 15 条）与对端 AP（9 台终端各 1 个）
+						multilinks: [
+							{ index: "1", band: 2, channel: 36, bssid: "02:00:00:00:09:00", rssi_dbm: -45, tx_rate_mbps: 52, status: "1" }
+						],
+						peer_ap_name: "n10",
+						peer_ap_mac: "02:00:00:00:09:00"
+					},
+					device_quality: { device_latency_us: 50, device_jitter_us: 8, device_loss_ratio_ppm: 0, metric_age_sec: 148, metric_valid: 2, peer_count: 1 },
+					sim: { session_id: "sim-354a5a7f", scenario_name: "三层环状核心无线场景" },
+					jobs: ["snmp_devices", "wireless_devices"],
+					anchor_job: "snmp_devices",
+					quality: { vendor_fields_unavailable: true }
 				}
 			];
 
-			return send(200, { code: 0, msg: "success", data: iamPaged(devices, url) });
+			return send(200, { code: 0, msg: "success", data: iamPaged(withDeepPageFillers(devices, 15, deepPageDeviceFiller), url) });
 		}
 
 		// `/metric/link`：链路台账（A12）。链路**没有 `mgmt_ip`**，页面靠 source 端 `device_code`
@@ -770,39 +1106,103 @@ export async function startUpstream(port) {
 			const links = [
 				{
 					identity: {
-						link_id: "LNK-0001",
-						source: { device_code: "DEV-CORE-1", device_role: "core", interface_id: "GE0/0/1", if_index: 101, interface_name: "GE0/0/1", medium: "fiber" },
-						target: { device_code: "DEV-ACC-1", device_role: "access", interface_id: "GE1/0/1", if_index: 201, interface_name: "GE1/0/1", medium: "fiber" },
-						discovery: "lldp"
+						link_id: "DEV-CORE-1:GE0/0/1--DEV-ACC-1:GE1/0/1",
+						source: {
+							device_code: "DEV-CORE-1",
+							device_role: "core",
+							interface_id: "GE0/0/1",
+							if_index: 101,
+							interface_name: "GE0/0/1",
+							if_mtu: 1500,
+							if_phys_address: "4a:d8:56:6c:6e:75",
+							if_speed_bps: 100000000,
+							admin_status: 1,
+							oper_status: 1,
+							medium: "wired"
+						},
+						target: {
+							device_code: "DEV-ACC-1",
+							device_role: "access",
+							interface_id: "GE1/0/1",
+							if_index: 201,
+							interface_name: "GE1/0/1",
+							if_mtu: 1500,
+							if_phys_address: "1a:1e:35:e9:8e:e1",
+							if_speed_bps: 100000000,
+							admin_status: 1,
+							oper_status: 1,
+							medium: "wired"
+						},
+						discovery: "lldp",
+						if_type: 6
 					},
+					// 逐字段照实测形状：计数 / 探针侧 / 新鲜度都在（`redundancy_state` 实测恒 null）
 					metrics: {
 						status: "up",
-						medium: "fiber",
+						graph_status: "online",
+						graph_medium: "eth100m",
+						medium: "ethernet",
 						bandwidth_mbps: 10000,
 						bandwidth_usage_percent: 32.5,
 						latency_ms: 1.2,
-						packet_loss_percent: 0
-					}
+						jitter_ms: 0.005,
+						packet_loss_percent: 0,
+						in_errors: 0,
+						out_errors: 2,
+						in_discards: 0,
+						out_discards: 3,
+						in_ucast_pkts: 103,
+						out_ucast_pkts: 103,
+						in_nucast_pkts: 0,
+						out_nucast_pkts: 0,
+						in_unknown_protos: 0,
+						out_qlen: 4,
+						probe_peer: "n7",
+						probe_dir: 2,
+						rtt_mdev_us: 8,
+						latency_age_sec: 49,
+						jitter_age_sec: 38,
+						loss_age_sec: 49,
+						rate_age_sec: 8,
+						metric_valid: 1,
+						redundancy_state: null
+					},
+					jobs: ["snmp_devices", "wired_devices"]
 				},
 				{
 					identity: {
-						link_id: "LNK-0002",
+						link_id: "DEV-AP-1:WLAN-0--DEV-CORE-1:GE0/0/9",
 						source: { device_code: "DEV-AP-1", device_role: "ap", interface_id: "WLAN-0", interface_name: "WLAN-0", medium: "wireless" },
 						target: { device_code: "DEV-CORE-1", device_role: "core", interface_id: "GE0/0/9", interface_name: "GE0/0/9", medium: "wireless" },
 						discovery: "lldp"
 					},
 					metrics: {
 						status: "down",
+						graph_status: "offline",
+						graph_medium: "wifi",
 						medium: "wireless",
 						bandwidth_mbps: 300,
 						bandwidth_usage_percent: null,
 						latency_ms: null,
-						packet_loss_percent: null
-					}
+						jitter_ms: null,
+						packet_loss_percent: null,
+						// 计数缺失时逐项 null：这一条用来钉「缺字段写 `—`，不补 0」
+						in_errors: null,
+						out_errors: null,
+						in_discards: null,
+						in_ucast_pkts: null,
+						probe_peer: null,
+						probe_dir: null,
+						rtt_mdev_us: null,
+						metric_valid: null
+					},
+					jobs: ["wireless_devices"],
+					// 无线链路的质量标记：`link_unmapped` 与 `redundancy_unavailable` 置位（实测形状）
+					quality: { link_unmapped: true, redundancy_unavailable: true }
 				}
 			];
 
-			return send(200, { code: 0, msg: "success", data: iamPaged(links, url) });
+			return send(200, { code: 0, msg: "success", data: iamPaged(withDeepPageFillers(links, 20, deepPageLinkFiller), url) });
 		}
 
 		// `/metric/datapoint` 回 VM 风格 matrix：点对恒为 `[unix秒, 字符串值]`。序列里**故意夹三个
@@ -842,8 +1242,16 @@ export async function startUpstream(port) {
 					{ metric: { ...nameLabel, ip, job: "wireless_devices", ifIndex: "101" }, values: validOnly },
 					{ metric: { ...nameLabel, ip, job: "snmp_devices", ifIndex: "102" }, values: otherPort }
 				]
-				// 设备级指标（`sysUpTime` / `cpu_util_pct` 这类）没有 `ifIndex` 标签
-				: [{ metric: { ...nameLabel, ip, job: "snmp_devices" }, values }];
+				// 仿真侧接口指标（实测 `simIfaceInKbps`）：标签是 `simIfaceMetricIndex`，没有 `ifIndex`
+				// ⇒ 分组必须认这个兜底，否则整页只能出「设备级」一行。
+				: code === "sim_iface_kbps"
+					? [
+						{ metric: { ...nameLabel, ip, job: "sim_metrics", simIfaceMetricIndex: "2" }, values },
+						{ metric: { ...nameLabel, ip, job: "sim_metrics", simIfaceMetricIndex: "3" }, values: otherPort },
+						{ metric: { ...nameLabel, ip, job: "sim_metrics", simIfaceMetricIndex: "4" }, values: validOnly.map(([ts]) => [ts, "7"]) }
+					]
+					// 设备级指标（`sysUpTime` / `cpu_util_pct` 这类）没有任何接口索引标签
+					: [{ metric: { ...nameLabel, ip, job: "snmp_devices" }, values }];
 
 			return send(200, {
 				code: 0,
