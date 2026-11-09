@@ -153,34 +153,23 @@
 					class="flex flex-col"
 					@keydown="onListKeydown"
 				>
-					<li
+					<LayoutListRow
 						v-for="(row, index) in displayRows"
 						:key="row.id"
 						:ref="(element) => setRowRef(row.id, element)"
-						role="option"
-						:aria-selected="row.id === selectedId"
+						:label="row.title"
+						:subtitle="row.subtitle || row.id"
+						:selected="row.id === selectedId"
 						:tabindex="row.id === selectedId || (!selectedId && index === 0) ? 0 : -1"
 						:title="`${row.title} · ${row.id}`"
-						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-						:class="row.id === selectedId
-							? 'border-primary bg-accented'
-							: 'border-transparent'"
-						@click="selection.select(row.record)"
-						@keydown.enter.prevent="selection.select(row.record)"
-						@keydown.space.prevent="selection.select(row.record)"
+						@select="selection.select(row.record)"
 					>
-						<div class="flex min-w-0 items-center justify-between gap-2">
-							<p class="truncate text-sm font-medium">
-								{{ row.title }}
-							</p>
+						<template #badge>
 							<UBadge v-if="row.badge" :color="row.tone" variant="subtle" size="sm">
 								{{ row.badge }}
 							</UBadge>
-						</div>
-						<p class="truncate text-xs text-(--ui-text-muted)">
-							{{ row.subtitle || row.id }}
-						</p>
-					</li>
+						</template>
+					</LayoutListRow>
 				</ul>
 			</template>
 
@@ -677,11 +666,12 @@
 	watch(clearRequests, () => clearSelection());
 
 	// ── 键盘：listbox 语义（§3.6 / D8）────────────────────────────────────────
-	const rowElements = new Map<string, HTMLElement>();
+	/** 行实例（`LayoutListRow`，只暴露 `focus()`）：`↑/↓/Home/End` 要能把焦点搬到目标行 —— 行结构在组件里（§3.6） */
+	const rowElements = new Map<string, { focus: () => void }>();
 
-	function setRowRef(id: string, element: unknown): void {
-		if (element instanceof HTMLElement)
-			rowElements.set(id, element);
+	function setRowRef(id: string, row: unknown): void {
+		if (row && typeof (row as { focus?: unknown }).focus === "function")
+			rowElements.set(id, row as { focus: () => void });
 		else
 			rowElements.delete(id);
 	}

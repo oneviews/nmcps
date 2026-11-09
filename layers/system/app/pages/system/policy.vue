@@ -145,35 +145,25 @@
 					class="flex flex-col"
 					@keydown="onListKeydown"
 				>
-					<li
+					<LayoutListRow
 						v-for="(policyRow, index) in rows"
 						:key="policyRow.id"
 						:ref="(element) => setRowRef(policyRow.id, element)"
-						role="option"
-						:aria-selected="policyRow.id === selectedId"
+						:label="policyRow.name"
+						:subtitle="`${policyRow.code} · ${policyRow.policy_type}`"
+						mono-subtitle
+						:selected="policyRow.id === selectedId"
 						:tabindex="policyRow.id === selectedId || (!selectedId && index === 0) ? 0 : -1"
 						:title="`${policyRow.name} · ${policyRow.code}`"
-						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-						:class="policyRow.id === selectedId
-							? 'border-primary bg-accented'
-							: 'border-transparent'"
-						@click="selection.select(policyRow)"
-						@keydown.enter.prevent="selection.select(policyRow)"
-						@keydown.space.prevent="selection.select(policyRow)"
+						@select="selection.select(policyRow)"
 					>
-						<div class="flex min-w-0 items-center justify-between gap-2">
-							<p class="truncate text-sm font-medium">
-								{{ policyRow.name }}
-							</p>
+						<template #badge>
 							<!-- 系统策略只是标签，不是保护（UP-RBAC-02）：列表里也不加锁形图标误导 -->
 							<UBadge v-if="policyRow.is_system" color="neutral" variant="subtle" size="sm">
 								{{ $t("pages.system-policy.systemBadge") }}
 							</UBadge>
-						</div>
-						<p class="truncate font-mono text-xs text-(--ui-text-muted)">
-							{{ policyRow.code }} · {{ policyRow.policy_type }}
-						</p>
-					</li>
+						</template>
+					</LayoutListRow>
 				</ul>
 			</template>
 
@@ -452,12 +442,12 @@
 	});
 
 	// ── 键盘：listbox 语义（§3.6 / D8）────────────────────────────────────────
-	/** 行元素（`<li role="option">`）：`↑/↓/Home/End` 要能把焦点搬到目标行 */
-	const rowElements = new Map<string, HTMLElement>();
+	/** 行实例（`LayoutListRow`，只暴露 `focus()`）：`↑/↓/Home/End` 要能把焦点搬到目标行 —— 行结构在组件里（§3.6） */
+	const rowElements = new Map<string, { focus: () => void }>();
 
-	function setRowRef(id: string, element: unknown): void {
-		if (element instanceof HTMLElement)
-			rowElements.set(id, element);
+	function setRowRef(id: string, row: unknown): void {
+		if (row && typeof (row as { focus?: unknown }).focus === "function")
+			rowElements.set(id, row as { focus: () => void });
 		else
 			rowElements.delete(id);
 	}

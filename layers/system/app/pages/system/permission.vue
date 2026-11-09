@@ -145,36 +145,25 @@
 					class="flex flex-col"
 					@keydown="onListKeydown"
 				>
-					<li
+					<LayoutListRow
 						v-for="(roleRow, index) in rows"
 						:key="roleRow.id"
 						:ref="(element) => setRowRef(roleRow.id, element)"
-						role="option"
-						:aria-selected="roleRow.id === selectedId"
+						:label="roleRow.name"
+						:subtitle="roleRow.code"
+						mono-subtitle
+						:selected="roleRow.id === selectedId"
 						:tabindex="roleRow.id === selectedId || (!selectedId && index === 0) ? 0 : -1"
 						:title="`${roleRow.name} · ${roleRow.code}`"
-						class="cursor-pointer border-s-2 px-3 py-2 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-						:class="roleRow.id === selectedId
-							? 'border-primary bg-accented'
-							: 'border-transparent'"
-						@click="selection.select(roleRow)"
-						@keydown.enter.prevent="selection.select(roleRow)"
-
-						@keydown.space.prevent="selection.select(roleRow)"
+						@select="selection.select(roleRow)"
 					>
-						<div class="flex min-w-0 items-center justify-between gap-2">
-							<p class="truncate text-sm font-medium">
-								{{ roleRow.name }}
-							</p>
+						<template #badge>
 							<!-- 系统角色只是标签，不是保护（UP-RBAC-02）：列表里也不加锁形图标误导 -->
 							<UBadge v-if="roleRow.is_system" color="neutral" variant="subtle" size="sm">
 								{{ $t("pages.system-permission.systemBadge") }}
 							</UBadge>
-						</div>
-						<p class="truncate font-mono text-xs text-(--ui-text-muted)">
-							{{ roleRow.code }}
-						</p>
-					</li>
+						</template>
+					</LayoutListRow>
 				</ul>
 			</template>
 
@@ -431,12 +420,12 @@
 	});
 
 	// ── 键盘：listbox 语义（§3.6 / D8）────────────────────────────────────────
-	/** 行元素（`<li role="option">`）：`↑/↓/Home/End` 要能把焦点搬到目标行 */
-	const rowElements = new Map<string, HTMLElement>();
+	/** 行实例（`LayoutListRow`，只暴露 `focus()`）：`↑/↓/Home/End` 要能把焦点搬到目标行 —— 行结构在组件里（§3.6） */
+	const rowElements = new Map<string, { focus: () => void }>();
 
-	function setRowRef(id: string, element: unknown): void {
-		if (element instanceof HTMLElement)
-			rowElements.set(id, element);
+	function setRowRef(id: string, row: unknown): void {
+		if (row && typeof (row as { focus?: unknown }).focus === "function")
+			rowElements.set(id, row as { focus: () => void });
 		else
 			rowElements.delete(id);
 	}
