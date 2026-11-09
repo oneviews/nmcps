@@ -13,7 +13,7 @@ authority: normative
 scope:
   - contract.metrics
 status: baseline
-version: 0.6.0
+version: 0.7.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -22,7 +22,7 @@ dependsOn:
   - NMCPS-ARCH-002
   - NMCPS-DESIGN-001
 createdAt: "2026-10-25"
-updatedAt: "2026-11-06"
+updatedAt: "2026-11-08"
 icon: "carbon:chart-line"
 tags:
   - "契约"
@@ -90,9 +90,11 @@ export interface MetricCatalogItem {
   kind: MetricCatalogKind
   selectable: boolean      // = kind === 'numeric'
   has_series: boolean | null
-  meta_source: 'l1' | 'backend' | 'name-only'
+  meta_source: 'l1' | 'backend' | 'name-only' | 'catalog-only'
 }
 ```
+
+`meta_source` 的第 4 个取值 `catalog-only` 由 §8.6 的并集候选带出来：名字清单没报这个名字、只有目录证据。`has_series` 仍然**只记目录证据**（`null` = 目录没说），绝不用「名字清单没报」去填 `false` —— 那会命中 §8.3 第 2 条，把整份目录判成 `text`。
 
 ---
 
@@ -190,7 +192,7 @@ export interface MetricDatapointResponse {
 | 401 / `40101` | 走会话刷新流程（`NMCPS-CONTRACT-001` 的 auth 契约），面板不单独处理登录 |
 | 目录条目标 `has_series: false` | 该指标不进入折线面板（选它只显示最新单点值），避免「选了文本指标看到一条直线」 |
 
-失败语义对**三个入口**一视同仁（`link-metrics` 链路详情、`device-metrics` 设备详情、`monitor` 节点详情栏；后两者分别直接 / 间接复用同一个 `useMetricSeries` 内核），而且**纯失败态不画图**：手上没有可保留的旧序列时，图表容器整体不渲染 —— 否则图里写着「该时间窗内无采集数据」、下面写着「取数失败」，两句互相矛盾（前者说没采到，后者说没取到）。只有「同设备重取失败」才留图 + 一行 stale 说明。
+失败语义对**两个入口**（`link-metrics` 链路详情、`device-metrics` 设备详情，两者复用同一个 `useMetricSeries` 内核）一视同仁，而且**纯失败态不画图**：手上没有可保留的旧序列时，图表容器整体不渲染 —— 否则图里写着「该时间窗内无采集数据」、下面写着「取数失败」，两句互相矛盾（前者说没采到，后者说没取到）。只有「同设备重取失败」才留图 + 一行 stale 说明。2026-11-08 起 `monitor` 不再是第三个入口：它**不取数**（详情栏只留深链按钮把人送到 `device-metrics`，`NMCPS-DESIGN-001` §6.5），因此「取不到 vs 没采到」这对矛盾在监控页上根本没有落脚点 —— 它既不出错误块，也不写空态文案。
 
 ### 6.8 断言（供 `check:ui` 后续覆盖）
 
@@ -200,7 +202,7 @@ export interface MetricDatapointResponse {
 | S2 | 值全为字符串时，播放的数值序列与 `Number()` 后一致（排序、最大值） |
 | S3 | `code !== 0` 时出现 `UAlert` 且文案等于上游 `message` 原文 |
 | S6 | 给 `ifIndex` 时只用该接口的序列（同 `ifIndex`、不同 `job` 的两条先合并），与他接口/设备级序列的值可区分；不给 `ifIndex` 时按 §6.9 的确定性规则选组，不再取 `results[0]` |
-| S7 | 三个入口（链路详情 / 设备详情 / 节点详情栏）在 `code !== 0` 时都只出「原话 + 重试」且不渲染图表容器；同设备重取遇网络错误时折线保留并出现 stale 说明（`check:ui` A13 ~ A16） |
+| S7 | 两个入口（链路详情 / 设备详情）在 `code !== 0` 时都只出「原话 + 重试」且不渲染图表容器；同设备重取遇网络错误时折线保留并出现 stale 说明（`check:ui` A13 / A14 / A16）；`monitor` 不再是入口 —— 它不取数，失败态下页面既不出现错误块也不出现空态文案（A15 钉「不编」） |
 
 ### 6.9 多序列：`ifIndex` 接口维度与同源去重
 
@@ -221,7 +223,9 @@ export interface MetricDatapointResponse {
 
 ## 七、`/metric/name` 指标名清单（单设备）
 
-`/metric/datapoint` 的 `metric_code` 只能来自清单，不允许按命名猜。清单只回答「这台设备有哪些名字」；**名字 → 类型**的判定在 §八（目录 join + 三分类），选择器只列 §八 判为 `numeric` 的条目。
+`/metric/datapoint` 的 `metric_code` 只能来自清单或目录（§8.6），不允许按命名猜。清单只回答「这台设备报过哪些名字」；**名字 → 类型**的判定在 §八（目录 join + 三分类），选择器只列 §八 判为 `numeric` 的条目。
+
+清单是**线索，不是候选集的唯一入口**（§8.6）：2026-11-08 实测 36 台设备里 24 台的 `metrics` 为 `[]`（18 台胖 AP + 3 台接入交换机 + 3 台汇聚交换机），而同一台 AP 的 `ifInOctets` 仍回 4 条序列、`10.0.0.250` 的 `hwEntityCpuUsage` 仍回 2 条 —— 空清单只说明这条查询没给出名字，**不**说明设备没有数据。按空清单直接禁用选择器（24 台一条都选不了）、目录条目的类型字段名读错（文本指标混进选项、画成恒 1 直线）、目录只取首页 200/463 条（余下 263 条一律当 `numeric` 放行），是 2026-11-08 报的「路由器 / 二三层交换机 / AP 选不了指标、选了也画不出东西」的三条同源根因。
 
 ```ts
 export interface MetricNameData {
@@ -245,8 +249,8 @@ export interface RawMetricEntry {
 | 请求 | `GET /metric/name?mgmt_ip=<设备管理 IP>`（走 BFF 网关：`/api/metric/name`） |
 | 条目形态 | 新路径回**字符串数组**、旧路径回**对象数组**；归一只取 `metric_code` 再兜 `metric_name`，两种都要吃得下 |
 | 采集器命名空间 | `up` / `scrape_*` 属 §三 `collector`，**不进业务指标集**；清单首项可能正是它们，挑选时跳过 |
-| 首项选取 | `monitor` 详情栏只画清单里**第一个非 collector 条目**，不按名字挑（`cpu` 子串不等于 `gauge`） |
-| 空清单 | 是合法空（该设备暂无可查指标），渲染空态文案，不打 `/metric/datapoint` |
+| 首项选取 | 指标页默认只画清单里**第一个非 collector 条目**，不按名字挑（`cpu` 子串不等于 `gauge`）；并集候选下这个「第一个」仍落在清单命中项上（§8.6 的顺序）。监控页不再承担这一步（它不取数，只给深链按钮） |
+| 空清单 | **不是**「该设备暂无可查指标」：候选集改由 §8.6 的并集给出（目录里的 `numeric` 条目），选择器照常可用，用户选了一项再看窗口内有没有采样点；页面同时提示「候选来自指标目录」。旧口径「空清单 ⇒ 不打 `/metric/datapoint`」作废 —— 上游确实有这类空清单却仍有序列的设备（见上） |
 | 类型落点 | `shared/types/metric.ts`（`MetricNameData` / `RawMetricItem` / `RawMetricEntry`） |
 
 ---
@@ -259,7 +263,7 @@ export interface RawMetricEntry {
 
 | 参数 | 口径 |
 | :--- | :--- |
-| `page` / `page_size` | 后端默认 1 / 20；前端一次取 `page_size=200`，覆盖单租户目录 |
+| `page` / `page_size` | 后端默认 1 / 20；前端**按 `total` 翻页取全量**（`page_size=200` 起步，上限 10 页）。单页口径作废：2026-11-08 实测 `total=463`，只取首页会让余下 263 条在 join 里缺席、被 §8.3 第 3 条当成 `numeric` 放行 |
 | `metric_group` / `keyword` | 本层**不传**：目录是全量 join 的输入，按组过滤会让「没查到」被误判成「文本指标」 |
 | 结果缓存 | 目录与设备无关，一个应用会话取一次（模块级缓存）；失败不缓存，下次进页面重试 |
 
@@ -269,10 +273,11 @@ export interface RawMetricEntry {
 
 | 目标 | 取值顺序 |
 | :--- | :--- |
-| 编码 | `code` → `metric_code` → `name`（丢弃空串） |
-| 类型 | `metric_type`；不在 `METRIC_TYPES` 里的值丢弃（当作没有证据） |
+| 编码 | `code` → `metric_code` → `name` → `metric_name`（丢弃空串） |
+| 类型 | `metric_type` → `data_type`（2026-11-08 实测字段名是 `data_type`，取值 `gauge` / `counter` / `string` / `enum`）；不在 `METRIC_TYPES` 里的值丢弃（当作没有证据） |
 | 是否有时序 | `has_series`；只采信布尔 |
-| 展示字段 | `cn_name` / `en_name` / `unit` / `category` / `description`，缺失留空串 |
+| 启用状态 | `enabled === false` 的条目**丢弃**（实测 1 条 `hwMstpInstanceID`）：未启用的指标采不到点，列进选择器只会多一张空图 |
+| 展示字段 | `cn_name` → `metric_name`、`en_name` → `metric_name_en`，再 `unit` / `category` / `description`，缺失留空串 |
 
 ### 8.3 三分类判定顺序（固定，不可调换）
 
@@ -302,6 +307,21 @@ export interface RawMetricEntry {
 | :---: | :--- |
 | S4 | 目录里 `metric_type=string` 的条目不出现在指标选择器的选项里 |
 | S5 | `/metric/definition` 失败时图表照常出图（有序列、无取数失败框）、出现「指标目录不可用」提示且不吐出目录原话，选择器同时退化为只按名字判断（显示名消失、文本指标混入）（`check:ui` A17 ~ A18） |
+| S8 | 目录条目带的是实测字段名（`data_type=string`）时，该条目同样不出现在选择器里（`check:ui` A10q）—— S4 钉的是假上游的 `metric_type` 形态，这条钉真实字段名 |
+| S9 | 名字清单为空（`/metric/name` 回 `metrics: []`）时选择器**仍可用**、出现「候选来自指标目录」提示，且选项里有只在目录里出现的指标（`check:ui` A10p） |
+
+### 8.6 选择器候选集（并集口径）
+
+候选 = **目录里的 `numeric` 条目**（与设备无关）∪ **名字清单里的名字**（§七；目录里没有的那些仍按 `name-only` 放行）。顺序固定为「清单命中项（按清单原序）→ 只有目录证据的项（按目录原序）」：清单命中的最可能是用户想画的那条，指标页的「首个可绘图项」因此仍落在设备真的报过名字的指标上，不会被目录里排在前面的无线指标顶掉（监控页的深链落到指标页后走同一套顺序）。
+
+| 情形 | 候选 | 页面 | 断言 |
+| :--- | :--- | :--- | :--- |
+| 清单与目录都在 | 并集，清单命中项在前 | 正常出选择器 | A10 / A11 |
+| 清单为空、目录在（§七 实测的 24 台） | 只有目录里的 `numeric` 条目 | 选择器可用 + 「候选来自指标目录」提示；选中后窗口内没点就按 §6.3 走 `no_datapoints` 空态，**不**硬画直线 | A10p |
+| 目录失败（§8.4） | 只有清单（名字判据） | 选择器退化、目录提示（§8.4） | A17 / A18 |
+| 两者都空 | 空 | 选择器禁用 + 空态文案（`no_metric_names`） | — |
+
+`has_series` **不**参与这条并集：目录里没有这个字段时它是 `null`，若用「清单没报」去填 `false`，会命中 §8.3 第 2 条，把整份目录判成 `text`，等于修复一个缺口又造出另一个。
 
 ---
 
@@ -316,3 +336,5 @@ export interface RawMetricEntry {
 | 2026-11-06 | 0.5.0 | **实测推翻「`results` 恒一条」并增「§6.9 多序列：`ifIndex` 接口维度与同源去重」**：直连上游（`192.168.1.55:8888`，`10.0.0.249` × `ifInOctets` / `ifOperStatus` / `sysUpTime`）取证——`range` 实测返回 2 条（设备级指标 × 两个采集 job）到 4 条（接口级指标 × 2 个 `ifIndex` × 2 个 `job`），`ifIndex` 标签确实存在（接口维度可用），`rate=true` 时无 `__name__`。§五 补齐标签实测清单；§6.9 定死三条规则（给了 `ifIndex` 只取该接口、同 `ip`+`ifIndex` 跨 `job` 逐时间戳取均值、未给 `ifIndex` 时组键升序取第一组），删除「取 `results[0]`」的错误假设，并新增断言 S6。 |
 | 2026-11-06 | 0.5.1 | **§6.7 补充「三个入口一视同仁 + 纯失败态不画图」**：`device-metrics` 与 `monitor` 详情栏（后者经 `useNodeTrend` 薄封装）此前在上游信封失败时仍会渲染图表，「该时间窗内无采集数据」与「指标取数失败」并排出现，等于把「取不到」说成「没采到」；现在纯失败态（没有可保留的旧序列）整个图表容器不渲染，只有同设备重取失败才留图并标 stale。新增断言 S7 锁定三个入口的一致性。 |
 | 2026-11-06 | 0.6.0 | **§8.4 / S5 从「写了」变成「测了」**：目录失败此前只有一句规定（不阻塞出图、不冒充取数失败），`check:ui` 没有对应断言 —— 现在假上游新增 `__control/catalog-error`（`/metric/definition` 回 HTTP 200 + `code !== 0`），A17 断言图表照常出（`data-series-count=2`）、出现「指标目录不可用」提示、无取数失败框、目录原话零上屏；A18 断言降级的**后果**：选择器只剩编码（`en_name` 随目录一起消失）、`sys_name` 这种文本指标真的混进选项 —— 提示不再是装饰。 |
+| 2026-11-08 | 0.7.0 | **实测推翻「空清单 = 该设备暂无可查指标」，候选集改成并集口径（§8.6）**：直连上游（`192.168.1.55:8888`）把 36 台设备的 `/metric/name` 逐台问了一遍 —— 18 台胖 AP、3 台接入交换机、3 台汇聚交换机的 `metrics` 都是 `[]`，而 `10.0.0.249` 的 `ifInOctets` 仍回 4 条序列、`10.0.0.250` 的 `hwEntityCpuUsage` 仍回 2 条：空清单只说明这次查询没给出名字，不说明设备没有数据，按它禁用选择器等于把 24 台设备的选择器焊死（用户 2026-11-08 报的「路由器 / 二三层交换机 / AP 选不了指标」）。同一次实测还发现两处同源根因：① 目录字段名是 `metric_code` / `data_type` / `metric_name` / `metric_name_en`，而解析只认 `metric_type` / `cn_name` / `en_name`，于是 76 条 `string` 指标（`hwEntityBoardName` / `ifDescr` 等）在路由器上混进选择器、画成恒 1 直线；② 目录 `total=463`，前端只取 `page_size=200` 一页，余下 263 条一律落 `name-only` 当 `numeric` 放行。改法 —— §四 的 `meta_source` 增 `catalog-only`（`has_series` 仍只记目录证据，不用「清单没报」填 `false`）；§七 的空清单行改为「候选交给 §8.6，选择器照常可用 + 提示候选来自目录」；§8.1 改为按 `total` 翻页取全量（上限 10 页）；§8.2 的类型取值加 `data_type`、展示字段加 `metric_name` / `metric_name_en`、`enabled === false` 的条目丢弃；新增 §8.6 并集候选与顺序（清单命中项在前，目录项在后）。断言 S8 / S9 落地为 `check:ui` A10q（`data_type=string` 的条目不进选择器）/ A10p（清单为空时选择器仍可用且出现「候选来自指标目录」），计数 210 → 212。 |
+| 2026-11-08 | 0.7.1 | **`monitor` 退出「三个入口」：失败语义只在两个指标页（§6.7 / S7）**：监控页详情栏不再自绘折线、也不再打 `/api/metric/*`（`useNodeTrend.ts` 已删，`NMCPS-DESIGN-001` §6.5）—— 它手上没有序列，就不可能区分「没采到」与「没取到」，因此既不出错误块也不写空态文案（`check:ui` A15 改为钉这一点）。§6.7 的「三个入口一视同仁」收成「两个入口」，S7 同步，另注明监控页的深链落到指标页后仍走 §8.6 的候选顺序。 |
