@@ -1,21 +1,13 @@
 <template>
 	<div class="flex min-h-0 flex-1 flex-col gap-3 p-3">
-		<!-- 工具栏（NMCPS-ARCH-006 §4）：左区集合域动作，右区仿真控制（写入口未开放时整体 disabled） -->
+		<!--
+			工具栏（NMCPS-ARCH-006 §4）：左区集合域动作 + 这张图的呈现控件，右区页头读数。
+			2026-11-09 用户调整：左区顺序 = 布局下拉 → 旋转 → 缩放 → 显示名称 → 恢复默认配置 → 更新；
+			旋转「复位」与缩放「复位」两枚小按钮下线 —— 同一个动作在「恢复默认配置」里已经三合一，
+			一排放三个同款 `carbon:reset` 只会让人不确定该点哪一个。
+		-->
 		<Teleport to="#app-toolbar-left">
-			<UTooltip :text="$t('pages.topology-monitor.refresh')">
-				<UButton
-					data-testid="topology-refresh"
-					size="sm"
-					color="neutral"
-					variant="ghost"
-					icon="carbon:renew"
-					:loading="refreshing"
-					:aria-label="$t('pages.topology-monitor.refresh')"
-					@click="refresh()"
-				/>
-			</UTooltip>
-
-			<!-- 2D 布局切换（§6.8）：词表只有三种，都是 2.0 自己算得出来的几何 -->
+			<!-- 2D 布局切换（§6.8）：词表只有两档（径向扇 / 层级树），图标与词表同源（`TOPOLOGY_LAYOUT_ICONS`） -->
 			<UDropdownMenu :items="layoutItems" :content="{ align: 'start' }">
 				<UButton
 					data-testid="topology-layout-switcher"
@@ -23,95 +15,166 @@
 					size="sm"
 					color="neutral"
 					variant="ghost"
-					icon="carbon:flow"
+					:icon="layoutIcon"
 					trailing-icon="carbon:chevron-down"
 					:label="$t(`pages.topology-monitor.layouts.${layoutMode}`)"
 				/>
 			</UDropdownMenu>
+			<!--
+				画布控件排（§6.15 / 2026-11-09 用户调整）：旋转 / 缩放**搬进工具栏左区**，
+				与布局下拉同一行 —— 它们读的都是「这张图怎么呈现」（几何 + 视口），与左区的集合域动作
+				同属「对这张图做什么」；原先压在画布右上角会盖住最上层的节点与连线（A48）。
+			-->
+			<div
+				data-testid="topology-controls"
+				class="flex flex-wrap items-center gap-1"
+			>
+				<!-- 径向扇旋转控件（§6.8，1.0 v0.28 同款）：只在 `radial` 布局出现 ——
+					其它布局不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」 -->
+				<div v-if="canRotate" data-testid="topology-rotate" class="flex items-center gap-1">
+					<USlider
+						:model-value="rotationDeg"
+						:min="TOPOLOGY_ROTATE_MIN"
+						:max="TOPOLOGY_ROTATE_MAX"
+						:step="1"
+						size="sm"
+						class="w-24"
+						:aria-label="$t('pages.topology-monitor.rotate.label')"
+						@update:model-value="onRotate"
+					/>
+					<UBadge size="sm" variant="outline" color="neutral" class="min-w-10 justify-center tabular-nums">
+						{{ rotationDeg }}°
+					</UBadge>
+					<UFieldGroup size="sm">
+						<UButton
+							data-testid="topology-rotate-ccw"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							icon="carbon:rotate-counterclockwise"
+							:aria-label="$t('pages.topology-monitor.rotate.ccw')"
+							@click="nudgeRotation(TOPOLOGY_ROTATE_STEP)"
+						/>
+						<UButton
+							data-testid="topology-rotate-cw"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							icon="carbon:rotate-clockwise"
+							:aria-label="$t('pages.topology-monitor.rotate.cw')"
+							@click="nudgeRotation(-TOPOLOGY_ROTATE_STEP)"
+						/>
+					</UFieldGroup>
+				</div>
+
+				<!-- 视口缩放（键盘与无滚轮设备可达）：读数同时也是一处「现在是几倍」。
+					缩放「复位」已下线（2026-11-09）：复位视口是「恢复默认配置」的第三步，单摆一枚
+					同款 `carbon:reset` 只会让人不确定两个 reset 差在哪 -->
+				<UButton
+					data-testid="topology-zoom-out"
+					size="xs"
+					color="neutral"
+					variant="subtle"
+					icon="carbon:subtract"
+					:aria-label="$t('pages.topology-monitor.zoomOut')"
+					@click="canvasRef?.zoomOut()"
+				/>
+				<UBadge data-testid="topology-zoom" size="sm" variant="subtle" color="neutral" class="tabular-nums">
+					{{ zoomPercent }}%
+				</UBadge>
+				<UButton
+					data-testid="topology-zoom-in"
+					size="xs"
+					color="neutral"
+					variant="subtle"
+					icon="carbon:add"
+					:aria-label="$t('pages.topology-monitor.zoomIn')"
+					@click="canvasRef?.zoomIn()"
+				/>
+
+				<!-- 显示名称（§七）：关掉后只剩节点与状态圆点 —— 塔型最宽层有 20+ 台设备时，
+					名称仍会盖住相邻节点，看层级的人可以一键清空文字（不是隐藏数据，只是不画标签） -->
+				<UTooltip :text="$t('pages.topology-monitor.labels.toggleHint')">
+					<UButton
+						data-testid="topology-labels-toggle"
+						:data-labels="showLabels"
+						:aria-pressed="showLabels"
+						size="xs"
+						color="neutral"
+						:variant="showLabels ? 'subtle' : 'ghost'"
+						:icon="showLabels ? 'carbon:view' : 'carbon:view-off'"
+						:label="$t('pages.topology-monitor.labels.toggle')"
+						@click="showLabels = !showLabels"
+					/>
+				</UTooltip>
+
+				<!-- 恢复默认配置（§6.9，1.0 v0.36 同款三合一）：清位移 → 旋转角回默认 → 视口复位 -->
+				<UTooltip
+					:text="canResetView
+						? $t('pages.topology-monitor.resetView.label')
+						: $t('pages.topology-monitor.resetView.hint')"
+				>
+					<UButton
+						data-testid="topology-reset-view"
+						:data-offsets="nodeOffsetCount"
+						size="xs"
+						color="neutral"
+						variant="subtle"
+						icon="carbon:reset"
+						:label="$t('pages.topology-monitor.resetView.label')"
+						:disabled="!canResetView"
+						@click="resetViewConfig()"
+					/>
+				</UTooltip>
+
+				<!--
+					更新（原工具栏左区第一枚「刷新拓扑」，2026-11-09 用户调整）：补上文字并挪到左区最后 ——
+					最常用的一枚动作放在排尾（紧贴右侧读数），前面几枚都是「这张图怎么画」的设置。
+				-->
+				<UTooltip :text="$t('pages.topology-monitor.refresh')">
+					<UButton
+						data-testid="topology-refresh"
+						size="xs"
+						color="neutral"
+						variant="subtle"
+						icon="carbon:renew"
+						:loading="refreshing"
+						:label="$t('pages.topology-monitor.refreshLabel')"
+						:aria-label="$t('pages.topology-monitor.refresh')"
+						@click="refresh()"
+					/>
+				</UTooltip>
+			</div>
 		</Teleport>
 
 		<Teleport to="#app-toolbar-right">
-			<!-- 仿真写入口（NMCPS-DESIGN-001 §6.2）：两个节点动作，权限来自 `/api/sim/channel` 的 `writeEnabled` -->
-			<UTooltip :text="simControlHint">
-				<span class="inline-flex">
-					<UButton
-						data-testid="sim-action"
-						data-action="stop"
-						size="sm"
-						color="neutral"
-						variant="outline"
-						icon="carbon:stop-outline"
-						:label="$t('pages.topology-monitor.simControls.nodeStop')"
-						:disabled="!canOperate"
-						:loading="acting === 'stop'"
-						@click="askAction('stop')"
-					/>
-				</span>
-			</UTooltip>
-			<UTooltip :text="simControlHint">
-				<span class="inline-flex">
-					<UButton
-						data-testid="sim-action"
-						data-action="restart"
-						size="sm"
-						color="neutral"
-						variant="outline"
-						icon="carbon:restart"
-						:label="$t('pages.topology-monitor.simControls.nodeRestart')"
-						:disabled="!canOperate"
-						:loading="acting === 'restart'"
-						@click="askAction('restart')"
-					/>
-				</span>
-			</UTooltip>
-		</Teleport>
-
-		<!-- 页头计数：全部来自已取到的数据，无数据时显示「—」而不是 0 -->
-		<div class="flex flex-wrap gap-2">
-			<GraphSparkStat
-				:label="$t('pages.topology-monitor.stats.nodes')"
-				:value="graph ? nodeCount : null"
-				icon="carbon:network-4"
-			/>
-			<GraphSparkStat
-				:label="$t('pages.topology-monitor.stats.links')"
-				:value="graph ? linkCount : null"
-				icon="carbon:connect"
-			/>
-			<GraphSparkStat
-				:label="$t('pages.topology-monitor.stats.combos')"
-				:value="graph ? comboCount : null"
-				icon="carbon:group-objects"
-			/>
-			<GraphSparkStat
-				:label="$t('pages.topology-monitor.stats.simulated')"
-				:value="simState === 'ok' ? simulatedCount : null"
-				:color="running ? 'success' : 'neutral'"
-				icon="carbon:simulation"
-			/>
-			<!-- 告警读数（§6.1）：通道没起来时显示「—」，不显示 0（0 条告警是结论，不是缺省） -->
-			<div data-testid="topology-stat-alarms">
-				<GraphSparkStat
-					:label="$t('pages.topology-monitor.stats.alarms')"
-					:value="alarmState === 'ok' ? alarmFiringCount : null"
-					:color="alarmFiringCount > 0 ? 'error' : 'neutral'"
-					icon="carbon:warning-alt"
+			<!--
+				页头读数（1.0 顶栏版式，§七）：节点 / 链路 / 组合 / 告警四档**全在工具栏右区**，
+				不再占一行卡片（那一行 100px 高只为装几个数字，把画布往下推）。
+				口径不变：全部来自已取到的数据，缺数据写「—」而不是 0（告警通道没起来时 0 条是误读）。
+			-->
+			<div data-testid="topology-stats" class="flex items-center gap-1">
+				<LayoutToolbarBadge
+					v-for="stat in statBadges"
+					:key="stat.key"
+					:data-testid="`topology-stat-${stat.key}`"
+					:data-stat-value="stat.text"
+					variant="subtle"
+					:color="stat.color"
+					:icon="stat.icon"
+					:label="`${stat.label} ${stat.text}`"
 				/>
 			</div>
-		</div>
+		</Teleport>
 
-		<!-- 仿真通道降级：讲清「缺哪一路、影响哪些区块、能否重试」（§八 硬性要求） -->
+		<!--
+			仿真通道降级（§八 硬性要求）：只保留「不可达」这一条 —— 它说的是「本可以工作但现在坏了、可重试」。
+			「未配置」不再挂告警条：那是**部署形态**而不是故障，链路动作按钮已整体置灰、tooltip 写明原因
+			（`linkActionHint` 的 `simulator_not_configured` 分支），页头再压一条 100px 高的常驻告警
+			等于把「没装仿真平台」当成缺陷报给用户（1.0 的顶栏也没有这条）。
+		-->
 		<UAlert
-			v-if="simState === 'disabled'"
-			data-testid="sim-degraded"
-			color="neutral"
-			variant="subtle"
-			icon="carbon:plug"
-			:title="$t('pages.topology-monitor.degraded.disabledTitle')"
-			:description="$t('pages.topology-monitor.degraded.disabledBody')"
-		/>
-		<UAlert
-			v-else-if="simState === 'unreachable'"
+			v-if="simState === 'unreachable'"
 			data-testid="sim-degraded"
 			color="warning"
 			variant="subtle"
@@ -171,25 +234,35 @@
 			</div>
 		</div>
 		<div v-else class="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
-			<!-- 画布：布局由纯函数注入，交互收敛在 `useGraphInteraction()` -->
-			<div class="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-(--ui-border) bg-(--ui-bg)">
+			<!-- 画布：布局由纯函数注入，交互收敛在 `useGraphInteraction()`。
+				背景**透明**（2026-11-09 用户裁决）：画布不再自带一块 `--ui-bg` 底色，直接透出页面底色，
+				节点与连线因此浮在同一层「纸」上；边框与圆角保留 —— 那说明的是「这张图的边界在哪」。 -->
+			<div class="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-(--ui-border)">
 				<GraphTopologyCanvas
 					ref="canvasRef"
 					:nodes="layout.nodes"
 					:links="layout.links"
 					:width="layout.width"
 					:height="layout.height"
-					:selected-id="selectedId"
+					:selected-id="canvasSelectedId"
 					:selected-link-key="selectedLinkKey"
+					:highlight-link-keys="highlight.linkKeys"
+					:highlight-node-ids="highlight.neighborIds"
+					:collapsed-ids="collapsedNodes"
+					:child-counts="collapseChildCounts"
 					:link-title="linkTitle"
 					:markers="markers"
 					:alarms="alarmIndex"
 					:offsets="nodeOffsets"
+					:show-labels="showLabels"
 					:label="$t('pages.topology-monitor.canvasLabel')"
-					@select="selectNode"
+
+					@select="pickNode"
 					@select-link="selectLink"
+					@toggle-collapse="toggleCollapse"
 					@offset-change="moveNode"
 					@viewport-change="(dirty: boolean) => (viewportDirty = dirty)"
+					@zoom-change="(percent: number) => (zoomPercent = percent)"
 				/>
 
 				<!-- 角标列：裁剪（§八）与被收起的区域分组（§6.11）都只说明「眼前这张图少了什么」 -->
@@ -212,6 +285,117 @@
 					>
 						{{ $t("pages.topology-monitor.groups.collapsedBadge", { count: collapsedNodeCount, groups: collapsedCombos.length }) }}
 					</UBadge>
+					<!--
+						区域分组（§6.11）：折叠 / 聚焦 / 组计数收进画布左上角的一枚浮层。
+						它决定的是「这张图包括谁」，属于**画布的读法**；侧栏只留选中对象的事实卡
+						（一个分组列表不会因为点了某台设备而改变，摆在事实卡堆里只会挡路）。
+					-->
+					<UPopover v-if="comboGroups.length" :content="{ align: 'start' }">
+						<UButton
+							data-testid="topology-groups-toggle"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							icon="carbon:group-objects"
+							class="pointer-events-auto"
+							:label="$t('pages.topology-monitor.groups.title')"
+							:aria-label="$t('pages.topology-monitor.groups.title')"
+						/>
+						<template #content>
+							<div data-testid="topology-groups" class="w-72 p-3">
+								<div class="mb-2 flex items-baseline justify-between gap-2">
+									<h2 class="text-sm font-semibold">
+										{{ $t("pages.topology-monitor.groups.title") }}
+									</h2>
+									<UButton
+										v-if="collapsedCombos.length"
+										data-testid="topology-groups-expand"
+										size="xs"
+										color="neutral"
+										variant="ghost"
+										:label="$t('pages.topology-monitor.groups.expandAll')"
+										@click="expandAllCombos()"
+									/>
+								</div>
+								<!-- `counts` 是上游自报，`visible` 是画布真实成员：折叠只摘画布，不改计数 -->
+								<ul class="flex flex-col gap-1 text-xs">
+									<li v-for="group in comboGroups" :key="group.id" class="flex items-start justify-between gap-2">
+										<div class="min-w-0 flex-1">
+											<div class="flex items-center gap-1">
+												<span class="truncate font-medium">{{ group.label }}</span>
+												<UBadge v-if="group.collapsed" size="sm" variant="subtle" color="neutral">
+													{{ $t("pages.topology-monitor.groups.collapsed") }}
+												</UBadge>
+												<UBadge v-if="focusedCombo === group.id" size="sm" variant="subtle" color="primary">
+													{{ $t("pages.topology-monitor.groups.focused") }}
+												</UBadge>
+											</div>
+											<p
+												:data-testid="`topology-group-counts-${group.id}`"
+												class="text-(--ui-text-muted)"
+											>
+												{{ countsText(group.counts) }}
+											</p>
+											<p class="text-(--ui-text-muted)">
+												{{ $t("pages.topology-monitor.groups.members", { visible: group.visible, declared: group.declared ?? group.visible }) }}
+											</p>
+										</div>
+										<UTooltip :text="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')">
+											<UButton
+												data-testid="topology-combo-toggle"
+												:data-combo-id="group.id"
+												:data-collapsed="group.collapsed"
+												size="xs"
+												color="neutral"
+												variant="ghost"
+												:icon="group.collapsed ? 'carbon:view' : 'carbon:view-off'"
+												:aria-label="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')"
+												@click="toggleCombo(group.id)"
+											/>
+										</UTooltip>
+										<!-- 「只看该组」：折叠是「摘掉」，聚焦是「只留」，两个方向都要有入口 -->
+										<UTooltip :text="$t('pages.topology-monitor.groups.focus')">
+											<UButton
+												data-testid="topology-combo-focus"
+												:data-combo-id="group.id"
+												:data-focused="focusedCombo === group.id"
+												size="xs"
+												color="neutral"
+												variant="ghost"
+												icon="carbon:center-circle"
+												:aria-label="$t('pages.topology-monitor.groups.focus')"
+												@click="focusCombo(group.id)"
+											/>
+										</UTooltip>
+									</li>
+								</ul>
+								<p class="mt-2 text-xs text-(--ui-text-muted)">
+									{{ $t("pages.topology-monitor.groups.hint") }}
+								</p>
+							</div>
+						</template>
+					</UPopover>
+					<!-- 收起下级（§6.15）：「已收起 N 台」读数 + 一键全部展开（与分组折叠的徽标分开写，两件事） -->
+					<div v-if="collapsedHiddenCount > 0" class="pointer-events-auto flex items-center gap-1">
+						<UBadge
+							data-testid="topology-node-collapsed-badge"
+							:data-hidden-count="collapsedHiddenCount"
+							size="sm"
+							color="neutral"
+							variant="subtle"
+						>
+							{{ $t("pages.topology-monitor.collapse.hiddenBadge", { count: collapsedHiddenCount }) }}
+						</UBadge>
+						<UButton
+							v-if="hasCollapsedNodes"
+							data-testid="topology-expand-all"
+							size="xs"
+							color="neutral"
+							variant="subtle"
+							:label="$t('pages.topology-monitor.collapse.expandAll')"
+							@click="expandAllCollapsed()"
+						/>
+					</div>
 					<!-- 告警叠加读数（§6.1）：条数 + 设备数，两个数不可互换，所以并排写出来 -->
 					<UBadge
 						v-if="hasAlarms"
@@ -242,86 +426,37 @@
 					/>
 				</div>
 
-				<!-- 径向扇旋转控件（§6.8，1.0 v0.28 同款）：只在 `radial` 布局出现 ——
-					其它布局不读这个角度，摆一个置灰的滑块等于暗示「拖了会有区别」 -->
+				<!--
+					图例（§七 / §6.15 要求 5，2026-11-08 用户裁决「右下角图例去掉多余说明」）：
+					只留**这张图实际出现**的层色一行（`presentRoles()`：没有选举出根就不列「边界层」）。
+					原先的三段（层色标题 / 状态圆点组 / 「虚线 = 仿真」提示）已删：状态由每台节点中心的
+					圆点直接读出、仿真节点自带标记，图例只需要回答「外圈这几种颜色分别是哪一层」。
+				-->
 				<div
-					v-if="canRotate"
-					data-testid="topology-rotate"
-					class="absolute top-2 right-2 flex items-center gap-1 rounded-md border border-(--ui-border) bg-(--ui-bg)/90 px-1.5 py-1"
+					data-testid="topology-legend"
+					class="pointer-events-none absolute right-2 bottom-2 rounded-md border border-(--ui-border) bg-(--ui-bg)/90 px-2 py-1 text-[11px]"
 				>
-					<USlider
-						:model-value="rotationDeg"
-						:min="TOPOLOGY_ROTATE_MIN"
-						:max="TOPOLOGY_ROTATE_MAX"
-						:step="1"
-						size="sm"
-						class="w-24"
-						:aria-label="$t('pages.topology-monitor.rotate.label')"
-						@update:model-value="onRotate"
-					/>
-					<UBadge size="sm" variant="outline" color="neutral" class="min-w-10 justify-center tabular-nums">
-						{{ rotationDeg }}°
-					</UBadge>
-					<UFieldGroup size="sm">
-						<UButton
-							data-testid="topology-rotate-ccw"
-							size="xs"
-							color="neutral"
-							variant="subtle"
-							icon="carbon:rotate-ccw"
-							:aria-label="$t('pages.topology-monitor.rotate.ccw')"
-							@click="nudgeRotation(TOPOLOGY_ROTATE_STEP)"
-						/>
-						<UButton
-							data-testid="topology-rotate-cw"
-							size="xs"
-							color="neutral"
-							variant="subtle"
-							icon="carbon:rotate-cw"
-							:aria-label="$t('pages.topology-monitor.rotate.cw')"
-							@click="nudgeRotation(-TOPOLOGY_ROTATE_STEP)"
-						/>
-					</UFieldGroup>
-					<UTooltip :text="$t('pages.topology-monitor.rotate.reset')">
-						<UButton
-							data-testid="topology-rotate-reset"
-							size="xs"
-							color="neutral"
-							variant="ghost"
-							icon="carbon:reset"
-							:disabled="rotationDeg === RADIAL_ROTATE_DEG"
-							:aria-label="$t('pages.topology-monitor.rotate.reset')"
-							@click="resetRotation()"
-						/>
-					</UTooltip>
-				</div>
-
-				<!-- 恢复默认配置（§6.9，1.0 v0.36 同款三合一）：清位移 → 旋转角回默认 → 视口复位。
-					放在画布左下角而不是顶栏：它只作用于这张画布，顶栏左区留给「刷新 + 布局」两个集合域动作。 -->
-				<div class="absolute bottom-2 left-2">
-					<UTooltip
-						:text="canResetView
-							? $t('pages.topology-monitor.resetView.label')
-							: $t('pages.topology-monitor.resetView.hint')"
-					>
-						<UButton
-							data-testid="topology-reset-view"
-							:data-offsets="nodeOffsetCount"
-							size="xs"
-							color="neutral"
-							variant="subtle"
-							icon="carbon:reset"
-							:label="$t('pages.topology-monitor.resetView.label')"
-							:disabled="!canResetView"
-							@click="resetViewConfig()"
-						/>
-					</UTooltip>
+					<ul data-testid="topology-legend-roles" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+						<li v-for="role in legendRoles" :key="role" class="flex items-center gap-1">
+							<span
+								class="size-2.5 rounded-full border-2 bg-(--ui-bg-elevated)"
+								:class="[roleDotClass(role)]"
+								:data-role="role"
+								:data-role-color="roleColor(role)"
+							/>
+							{{ $t(roleI18nKey(role)) }}
+						</li>
+					</ul>
 				</div>
 			</div>
 
-			<!-- 详情栏：选中节点 → 现网口径 + 仿真标记；未选中给图例 -->
+			<!--
+				详情栏：选中节点 / 链路 → 现网口径 + 仿真标记；未选中给一句指引（图例在画布右下角）。
+				**二选一**（§6.15 要求 2）：选中链路时右栏整块切到链路详情，节点的无线 / 告警 / LLDP
+				卡片全部让位 —— 两套事实上下堆在一起，用户分不清「这条告警是链路的还是设备的」。
+			-->
 			<aside class="flex w-full shrink-0 flex-col gap-3 lg:w-72">
-				<div class="rounded-lg border border-(--ui-border) p-3">
+				<div v-if="!selectedLink" class="rounded-lg border border-(--ui-border) p-3">
 					<h2 class="mb-2 text-sm font-semibold">
 						{{ $t("pages.topology-monitor.detail.title") }}
 					</h2>
@@ -333,6 +468,7 @@
 								{{ $t(statusI18nKey(selected.status)) }}
 							</UBadge>
 						</div>
+
 						<dl class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
 							<dt class="text-(--ui-text-muted)">
 								{{ $t("pages.topology-monitor.detail.ip") }}
@@ -439,6 +575,36 @@
 								{{ simState === "ok" ? $t("pages.topology-monitor.detail.notSimulated") : $t("pages.topology-monitor.detail.simUnavailable") }}
 							</p>
 						</div>
+
+						<!--
+							跳到设备遥测指标页（§6.15）：深链带的是**管理 IP**（拓扑侧真有的身份），
+							指标页用自己已取到的台账把它解析成 `device_code` 再写 `?id`。
+							没有管理 IP 的节点不发一枚「点了会到空页」的按钮：禁用并在 tooltip 说明原因。
+
+							位置在卡片**最底部**、`primary` 实心（2026-11-09 用户裁决）：这是离开本页的动作，
+							压在事实之后当「下一步」，不再插在标题下面把事实挤走。
+						-->
+						<UTooltip
+							:text="selected.ip
+								? $t('pages.topology-monitor.detail.openMetricsHint')
+								: $t('pages.topology-monitor.detail.openMetricsNoIp')"
+						>
+							<span class="mt-3 block">
+								<UButton
+									data-testid="topology-node-metrics"
+									:data-mgmt-ip="selected.ip"
+									size="xs"
+									color="primary"
+									variant="soft"
+									icon="carbon:chart-line"
+									block
+									class="justify-center"
+									:label="$t('pages.topology-monitor.detail.openMetrics')"
+									:disabled="!selected.ip"
+									@click="openDeviceMetrics()"
+								/>
+							</span>
+						</UTooltip>
 					</template>
 
 					<p v-else class="text-xs text-(--ui-text-muted)">
@@ -451,23 +617,17 @@
 					利用率 / 丢包 / 误码四项在现网恒为 0（＝没算），因此**整块写「未计算」**而不是列 4 行 0%。
 				-->
 				<div v-if="selectedLink && linkFacts" data-testid="topology-link-card" class="rounded-lg border border-(--ui-border) p-3">
-					<div class="mb-1 flex items-start justify-between gap-2">
-						<h2 class="text-sm font-semibold">
-							{{ $t("pages.topology-monitor.link.title") }}
-						</h2>
-						<UButton
-							data-testid="topology-link-close"
-							size="xs"
-							color="neutral"
-							variant="ghost"
-							icon="carbon:close"
-							:aria-label="$t('pages.topology-monitor.link.close')"
-							@click="closeLink"
-						/>
-					</div>
+					<!--
+						标题没有关闭按钮（2026-11-09 用户裁决）：链路是「当前项」，退出靠**再点一次这条线**
+						或点一台设备。一枚叉把「关掉卡片」和「取消选中」混成两件事，还让人以为卡片是个弹窗。
+					-->
+					<h2 class="mb-1 text-sm font-semibold">
+						{{ $t("pages.topology-monitor.link.title") }}
+					</h2>
 					<p class="mb-2 truncate text-xs text-(--ui-text-muted)" :title="linkEndpoints">
 						{{ linkEndpoints }}
 					</p>
+
 					<dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
 						<template v-for="row in linkRows" :key="row.key">
 							<dt class="truncate text-(--ui-text-muted)">
@@ -512,10 +672,31 @@
 							{{ linkActionHint }}
 						</p>
 					</div>
+
+					<!--
+						跳到链路遥测指标页（§6.15）：深链带两端的管理 IP，链路页用它反查 `link_id`。
+						与设备卡片同一口径：压在最底部、`primary`（2026-11-09 用户裁决「指标按钮挪到最下面、
+						用主色」）—— 读完全部事实再决定往下走。
+					-->
+					<UTooltip :text="$t('pages.topology-monitor.link.openMetricsHint')">
+						<span class="mt-3 block">
+							<UButton
+								data-testid="topology-link-metrics"
+								size="xs"
+								color="primary"
+								variant="soft"
+								icon="carbon:chart-line"
+								block
+								class="justify-center"
+								:label="$t('pages.topology-monitor.link.openMetrics')"
+								@click="openLinkMetrics()"
+							/>
+						</span>
+					</UTooltip>
 				</div>
 
 				<!-- 无线事实（AP，§6.11）：字段一个都没有就不画这块（否则等于宣称「这台 AP 的 SSID 取不到」） -->
-				<div v-if="wifiFacts" data-testid="topology-wifi-card" class="rounded-lg border border-(--ui-border) p-3">
+				<div v-if="wifiFacts && !selectedLink" data-testid="topology-wifi-card" class="rounded-lg border border-(--ui-border) p-3">
 					<h2 class="mb-2 text-sm font-semibold">
 						{{ $t("pages.topology-monitor.wifi.title") }}
 					</h2>
@@ -535,7 +716,7 @@
 					当前告警（§6.1）：只列**能 join 到这台设备**的 firing 事件。
 					告警通道不可用时写原因（`alarmReason` 是上游原话），不写「无告警」—— 那是结论，不是缺省。
 				-->
-				<div v-if="selected" data-testid="topology-alarm-card" class="rounded-lg border border-(--ui-border) p-3">
+				<div v-if="selected && !selectedLink" data-testid="topology-alarm-card" class="rounded-lg border border-(--ui-border) p-3">
 					<div class="mb-2 flex items-center justify-between gap-2">
 						<h2 class="text-sm font-semibold">
 							{{ $t("pages.topology-monitor.alarms.cardTitle") }}
@@ -595,7 +776,7 @@
 					`ok` 且空数组（上游明确说没有邻居）/ `error`（只给原因，不写「没有邻居」）。
 				-->
 				<div
-					v-if="selected"
+					v-if="selected && !selectedLink"
 					data-testid="topology-lldp-card"
 					:data-lldp-state="neighborState"
 					:data-lldp-count="neighborRows.length"
@@ -657,151 +838,10 @@
 					</p>
 				</div>
 
-				<!-- 区域分组（§6.11）：`counts` 是上游自报，`visible` 是画布真实成员；折叠只摘画布，不改计数 -->
-				<div v-if="comboGroups.length" data-testid="topology-groups" class="rounded-lg border border-(--ui-border) p-3">
-					<div class="mb-2 flex items-baseline justify-between gap-2">
-						<h2 class="text-sm font-semibold">
-							{{ $t("pages.topology-monitor.groups.title") }}
-						</h2>
-						<UButton
-							v-if="collapsedCombos.length"
-							data-testid="topology-groups-expand"
-							size="xs"
-							color="neutral"
-							variant="ghost"
-							:label="$t('pages.topology-monitor.groups.expandAll')"
-							@click="expandAllCombos()"
-						/>
-					</div>
-					<ul class="flex flex-col gap-1 text-xs">
-						<li v-for="group in comboGroups" :key="group.id" class="flex items-start justify-between gap-2">
-							<div class="min-w-0 flex-1">
-								<div class="flex items-center gap-1">
-									<span class="truncate font-medium">{{ group.label }}</span>
-									<UBadge v-if="group.collapsed" size="sm" variant="subtle" color="neutral">
-										{{ $t("pages.topology-monitor.groups.collapsed") }}
-									</UBadge>
-									<UBadge v-if="focusedCombo === group.id" size="sm" variant="subtle" color="primary">
-										{{ $t("pages.topology-monitor.groups.focused") }}
-									</UBadge>
-								</div>
-								<p
-									:data-testid="`topology-group-counts-${group.id}`"
-									class="text-(--ui-text-muted)"
-								>
-									{{ countsText(group.counts) }}
-								</p>
-								<p class="text-(--ui-text-muted)">
-									{{ $t("pages.topology-monitor.groups.members", { visible: group.visible, declared: group.declared ?? group.visible }) }}
-								</p>
-							</div>
-							<UTooltip :text="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')">
-								<UButton
-									data-testid="topology-combo-toggle"
-									:data-combo-id="group.id"
-									:data-collapsed="group.collapsed"
-									size="xs"
-									color="neutral"
-									variant="ghost"
-									:icon="group.collapsed ? 'carbon:view' : 'carbon:view-off'"
-									:aria-label="group.collapsed ? $t('pages.topology-monitor.groups.expand') : $t('pages.topology-monitor.groups.collapse')"
-									@click="toggleCombo(group.id)"
-								/>
-							</UTooltip>
-							<!-- 「只看该组」：折叠是「摘掉」，聚焦是「只留」，两个方向都要有入口 -->
-							<UTooltip :text="$t('pages.topology-monitor.groups.focus')">
-								<UButton
-									data-testid="topology-combo-focus"
-									:data-combo-id="group.id"
-									:data-focused="focusedCombo === group.id"
-									size="xs"
-									color="neutral"
-									variant="ghost"
-									icon="carbon:center-circle"
-									:aria-label="$t('pages.topology-monitor.groups.focus')"
-									@click="focusCombo(group.id)"
-								/>
-							</UTooltip>
-						</li>
-					</ul>
-					<p class="mt-2 text-xs text-(--ui-text-muted)">
-						{{ $t("pages.topology-monitor.groups.hint") }}
-					</p>
-				</div>
-
-				<!-- 节点趋势（NMCPS-DESIGN-001 §6.5 / A3）：选中节点 → `/api/metric/name` 挑编码 →
-					`/api/metric/datapoint` 取近 1 小时序列 → `TrendChart` 自绘折线 -->
-				<div class="rounded-lg border border-(--ui-border) p-3">
-					<div class="mb-2 flex items-baseline justify-between gap-2">
-						<h2 class="text-sm font-semibold">
-							{{ $t("pages.topology-monitor.trend.title") }}
-						</h2>
-						<span v-if="selected && trendMetricCode" class="truncate font-mono text-xs text-(--ui-text-muted)">
-							{{ trendMetricCode }}
-						</span>
-					</div>
-
-					<template v-if="selected">
-						<USkeleton v-if="trendLoading" class="h-24 w-full rounded-md" />
-						<!--
-							纯失败态（手上没有可保留的旧序列）不画图：否则图里写着「该时间窗内无采集数据」、
-							下面的告警写着「指标取数失败」，两句互相矛盾（NMCPS-CONTRACT-002 §6.7 / A15）。
-							上游抖动但还有上次成功的数据时（`stale`）照旧画，另有一行 stale 提示。
-						-->
-						<GraphTrendChart
-							v-else-if="!trendError || trendPoints.length > 0"
-							:points="trendPoints"
-							:label="$t('pages.topology-monitor.trend.chartLabel', { name: selected.label, metric: trendMetricCode || '—' })"
-							:empty-text="trendEmptyText"
-						/>
-						<!-- 失败语义（CONTRACT-002 §6.7）：上游原话逐字给出 + 重试，不静默降级成「无数据」 -->
-						<div v-if="trendError" data-testid="trend-error" class="mt-2">
-							<UAlert
-								color="error"
-								variant="subtle"
-								icon="carbon:warning-alt"
-								:title="$t('pages.topology-monitor.trend.errorTitle')"
-								:description="trendError.message"
-							>
-								<template #actions>
-									<UButton
-										size="sm"
-										color="neutral"
-										variant="subtle"
-										:label="$t('pages.topology-monitor.error.retry')"
-										@click="reloadTrend()"
-									/>
-								</template>
-							</UAlert>
-						</div>
-						<p v-else-if="trendDropped > 0" class="mt-2 text-xs text-(--ui-text-muted)">
-							{{ $t("pages.topology-monitor.trend.dropped", { count: trendDropped }) }}
-						</p>
-						<p v-if="trendStale" class="mt-2 text-xs text-(--ui-warning)">
-							{{ $t("pages.topology-monitor.trend.stale") }}
-						</p>
-					</template>
-
-					<p v-else class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.topology-monitor.trend.selectNode") }}
-					</p>
-				</div>
-
-				<!-- 图例：与画布同一套语义色（`topologyStatusStyle.ts`） -->
-				<div class="rounded-lg border border-(--ui-border) p-3">
-					<h2 class="mb-2 text-sm font-semibold">
-						{{ $t("pages.topology-monitor.legend.title") }}
-					</h2>
-					<ul class="flex flex-col gap-1 text-xs">
-						<li v-for="status in legendStatuses" :key="status" class="flex items-center gap-2">
-							<span class="size-2.5 rounded-full" :class="nodeFillClass(status)" />
-							{{ $t(statusI18nKey(status)) }}
-						</li>
-					</ul>
-					<p class="mt-2 text-xs text-(--ui-text-muted)">
-						{{ $t("pages.topology-monitor.legend.simulatedHint") }}
-					</p>
-				</div>
+				<!--
+					图例已搬到画布右下角（§6.15）：它读的是「画布上这些颜色代表什么」，
+					放在侧栏里等于让人先移开视线再对色号；侧栏留给「选中对象的事实」。
+				-->
 			</aside>
 		</div>
 
@@ -859,17 +899,18 @@
 	// 主数据源 8888 `/api/topology/graph`，第二数据源 8001 `runtime-inventory`（只读叠加）。
 	// 仿真通道未配置 / 不可达时页面照常只读：拓扑与统计继续渲染，仿真区块单独降级。
 	import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
+	import type { StatusColor } from "~~/app/utils/graph/topologyStatusStyle";
 	import type {
-		SimulatorAction,
 		SimulatorActionResult,
 		SimulatorChannelState,
-		SimulatorLinkAction,
-		SimulatorNodeAction
+		SimulatorLinkAction
 	} from "~~/layers/topology/app/composables/useTopologyMonitor";
-	import type { TopologyCombo, TopologyGraphLink, TopologyNodeStatus } from "~~/shared/types/topology";
+	import type { TopologyCombo, TopologyGraphLink } from "~~/shared/types/topology";
 	import { alarmBadgeFillClass, alarmEventsShown, alarmSeverityColor, alarmsOfNode, alarmTimeText } from "~~/app/utils/graph/topologyAlarms";
+	import { highlightOf } from "~~/app/utils/graph/topologyHighlight";
 	import {
 		RADIAL_ROTATE_DEG,
+		TOPOLOGY_LAYOUT_ICONS,
 		TOPOLOGY_LAYOUT_MODES,
 		TOPOLOGY_ROTATE_MAX,
 		TOPOLOGY_ROTATE_MIN,
@@ -878,7 +919,10 @@
 	import { linkFactsOf, linkHasUtilization } from "~~/app/utils/graph/topologyLinkFacts";
 	import { nodeFactsOf, topologyNeighborsOf, wifiFactsOf } from "~~/app/utils/graph/topologyNodeFacts";
 	import { topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
+	import { presentRoles, roleColor, roleDotClass, roleI18nKey } from "~~/app/utils/graph/topologyRoleStyle";
 	import { linkStatusColor, nodeFillClass, nodeStatusColor, statusI18nKey } from "~~/app/utils/graph/topologyStatusStyle";
+
+	import { deviceMetricsDeepLink, linkMetricsDeepLink } from "~~/app/utils/metric/metricDeepLink";
 	import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 	definePageMeta({ sort: 1, icon: "carbon:network-3" });
@@ -895,8 +939,6 @@
 		simState,
 		simReason,
 		markers,
-		running,
-		simulatedCount,
 		selectedId,
 		selected,
 		selectNode,
@@ -904,7 +946,6 @@
 		writeEnabled,
 		canWrite,
 		acting,
-		performNodeAction,
 		nodeCount,
 		linkCount,
 		comboCount,
@@ -924,6 +965,12 @@
 		collapsedNodeCount,
 		toggleCombo,
 		expandAllCombos,
+		collapsedNodes,
+		collapseChildCounts,
+		collapsedHiddenCount,
+		hasCollapsedNodes,
+		toggleCollapse,
+		expandAllCollapsed,
 		focusedCombo,
 		focusCombo,
 		clearComboFocus,
@@ -942,10 +989,53 @@
 		SIMULATOR_LINK_ACTIONS
 	} = useTopologyMonitor();
 
-	/** 画布组件实例：只为「恢复默认配置」的视口复位（`resetViewport()`）暴露 */
-	const canvasRef = ref<{ resetViewport: () => void } | null>(null);
+	/** 画布组件实例：只为「恢复默认配置」的视口复位与缩放按钮（`resetViewport()` / `zoomIn()` / `zoomOut()`）暴露 */
+	const canvasRef = ref<{ resetViewport: () => void, zoomIn: () => void, zoomOut: () => void } | null>(null);
 	/** 视口是否已被缩放 / 平移（画布 `viewportChange` 上报）：复位按钮的禁用态要诚实反映它 */
 	const viewportDirty = ref(false);
+	/** 当前缩放百分比（画布 `zoomChange` 上报）：缩放控件在画布右上那一排，读数是页面渲染的（§6.15） */
+	const zoomPercent = ref(100);
+
+	// ── 链路事实（§6.11）：点中画布上的一条链路 → 详情栏给基础事实 + 两个方向的流量 ──────────────
+	// 利用率 / 丢包 / 误码四项现网恒为 0（`traffic_out: 16.18` 而 `out_util_pct: 0`）＝没算，
+	// 因此这四格既不出 `0%` 也不出 `—`，统一写「未计算」（口径在 `topologyLinkFacts.ts` 文件头）。
+	/** 选中链路的 key：用 `topologyLinkKey()` 记，跨轮询按 key 认人，上游换序不会认错 */
+	const selectedLinkKey = ref<string | null>(null);
+
+	/** 选中链路本身：从**当前布局**的链路里按 key 解析（刷新后不残留上一轮的对象） */
+	const selectedLink = computed<TopologyGraphLink | null>(() => {
+		if (!selectedLinkKey.value)
+			return null;
+		return layout.value.links.find((link, index) => topologyLinkKey(link, index) === selectedLinkKey.value) ?? null;
+	});
+
+	/**
+	 * 画布看到的「当前节点」：**链路选中时为空**（右栏与画布都只认一个当前项）。
+	 *
+	 * 节点选中本身不丢（`selectedId` 仍是那台设备）：链路是叠在设备之上的临时读法，
+	 * 再点一次那条线 / 点一台设备就回到设备视图 —— 不需要「关闭」这种中间态（2026-11-09 用户裁决）。
+	 */
+	const canvasSelectedId = computed<string | null>(() => (selectedLink.value ? null : selectedId.value));
+
+	/**
+	 * 选中节点的关联高亮（§6.15）：画布只按 key 上样式，判定在纯函数 `highlightOf()` 里。
+	 * 与「点选链路」共用同一把 key（`topologyLinkKey()`）—— 同一根线在两处被认成两个东西就是 bug 温床。
+	 *
+	 * 读的是 `canvasSelectedId` 而不是 `selectedId`：点中一条链路时，画布上的「当前项」就是那条线，
+	 * 节点侧的关联环必须让位（否则一条主色线 + 一片层色环同时在说「当前」，用户分不清谁被选中）。
+	 */
+	const highlight = computed(() => highlightOf(layout.value.links, canvasSelectedId.value));
+
+	/** 跳到设备遥测指标页：深链带该节点的管理 IP（拓扑节点 id 本身就是管理 IP） */
+	function openDeviceMetrics(): void {
+		void navigateTo(deviceMetricsDeepLink(selected.value?.ip));
+	}
+
+	/**
+	 * 是否画节点名称（画布左下角「显示名称」开关，§七）。
+	 * 只影响**渲染**，不影响布局 / 几何 / 位移表 —— 关掉再打开，塔型和用户拖过的位移都必须原样还在。
+	 */
+	const showLabels = ref(true);
 
 	/** 是否还有可复位的用户改动（位移 / 旋转角偏离默认 / 视口被动过）—— 三者在同一处判定 */
 	const canResetView = computed(() =>
@@ -964,16 +1054,21 @@
 
 	/**
 	 * 布局下拉项（§6.8）：一项一个 `checked`，当前布局打勾 —— 下拉本身就是「当前在哪一档」的读数。
-	 * 词表来自 `TOPOLOGY_LAYOUT_MODES`（页面不自己列），未复刻的 force / grid / circular 不出现在这里。
+	 * 词表来自 `TOPOLOGY_LAYOUT_MODES`、图标来自 `TOPOLOGY_LAYOUT_ICONS`（页面不自己列），
+	 * 未复刻的 force / grid / circular 不出现在这里。
 	 */
 	const layoutItems = computed(() => [
 		TOPOLOGY_LAYOUT_MODES.map((mode: TopologyLayoutMode) => ({
 			label: t(`pages.topology-monitor.layouts.${mode}`),
+			icon: TOPOLOGY_LAYOUT_ICONS[mode],
 			type: "checkbox" as const,
 			checked: layoutMode.value === mode,
 			onSelect: () => setLayoutMode(mode)
 		}))
 	]);
+
+	/** 当前布局的图标：与下拉项同源（径向扇 = 关系图，层级树 = 分类阶层） */
+	const layoutIcon = computed(() => TOPOLOGY_LAYOUT_ICONS[layoutMode.value]);
 
 	/** 滑块回调（`USlider` 的 modelValue 可能是 `undefined` ⇒ 忽略，别把角度写成 NaN） */
 	function onRotate(value: number | number[] | undefined): void {
@@ -982,30 +1077,59 @@
 		rotateTo(value);
 	}
 
-	/** 图例固定四档 + 未知：与 `TopologyNodeStatus` 同集合，新增档位必须同时改这里与 i18n */
-	const legendStatuses: readonly TopologyNodeStatus[] = ["online", "warning", "critical", "offline"];
+	/**
+	 * 图例只画层色（§6.15 要求 5）：状态不再进图例，改由每台节点中心的圆点直接读出。
+	 * 原先的状态档位表（`legendStatuses`）随之删除 —— 留一个没人读的常量等于给下一个人留坑。
+	 */
 
-	// 节点趋势（A3）：选中节点的管理 IP 是唯一入参 —— 交给 8888 的永远是设备管理 IP，不是节点 id
-	const {
-		metricCode: trendMetricCode,
-		points: trendPoints,
-		dropped: trendDropped,
-		reason: trendReason,
-		error: trendError,
-		loading: trendLoading,
-		stale: trendStale,
-		reload: reloadTrend
-	} = useNodeTrend(computed(() => selected.value?.ip ?? ""));
+	/** 图例的层级档位：只列**这张图实际出现**的角色（没有选举出根就不该列出「根节点」），由高到低 */
+	const legendRoles = computed(() => presentRoles(layout.value.nodes.map((node) => node.role)));
 
-	/** 空态文案按原因分流：没指标名 / 该时段没数据，是两件事，别写成一句「无数据」 */
-	const trendEmptyText = computed(() => (trendReason.value === "no_metric_names"
-		? t("pages.topology-monitor.trend.noMetricNames")
-		: t("pages.topology-monitor.trend.empty")));
+	// ── 页头读数（工具栏右区徽标，§七）：四档全部来自已取到的数据。────────────────────────
+	// 「仿真中节点」这一档已按 2026-11-09 用户裁决删除：仿真节点在画布上自带标记、详情栏也逐台
+	// 写「仿真中」，一个跨页头常驻的计数既重复又要依赖 `/api/sim/channel` 的可用性（通道不通时
+	// 写「—」，读者会以为拓扑里没有仿真节点）。
+	//
+	// 缺数据一律 `—`：拓扑没加载出来时写 0、告警通道没起来时写 0 条，都是把「不知道」说成「没有」。
+	const statBadges = computed<{ key: string, label: string, icon: string, text: string, color: StatusColor }[]>(() => [
+		{
+			key: "nodes",
+			label: t("pages.topology-monitor.stats.nodes"),
+			icon: "carbon:network-4",
+			text: graph.value ? String(nodeCount.value) : "—",
+			color: "neutral"
+		},
+		{
+			key: "links",
+			label: t("pages.topology-monitor.stats.links"),
+			icon: "carbon:connect",
+			text: graph.value ? String(linkCount.value) : "—",
+			color: "neutral"
+		},
+		{
+			key: "combos",
+			label: t("pages.topology-monitor.stats.combos"),
+			icon: "carbon:group-objects",
+			text: graph.value ? String(comboCount.value) : "—",
+			color: "neutral"
+		},
+		{
+			key: "alarms",
+			label: t("pages.topology-monitor.stats.alarms"),
+			icon: "carbon:warning-alt",
+			text: alarmState.value === "ok" ? String(alarmFiringCount.value) : "—",
+			color: alarmFiringCount.value > 0 ? "error" : "neutral"
+		}
+	]);
 
 	// ── 节点事实（NMCPS-DESIGN-001 §6.5，复刻 1.0 的详情栏口径）─────────────────────────────
 	// 1.0 把 `cpu / memory / interfaces / traffic` 直接铺在节点 `data` 上、用 `-1` 表示取不到，
 	// 详情栏据此画进度条与三张 KPI 卡。2.0 把读表收进 `nodeFactsOf()`：**未知一律 `null`**，
 	// 展示成「—」而不是 `0%`（CONTRACT-002 §6.3 不补 0）。
+	//
+	// 本页**不再自绘折线**（§6.5）：序列只在指标页画，详情栏给一枚深链按钮（`topology-node-metrics`）
+	// 把人带到 `/topology/device-metrics`。同一张图里既画拓扑又画一段时间序列，两边都读不准，
+	// 而且监控页一旦挂上取数，失败语义就得在原地图表里再实现一遍（三个入口三份口径）。
 	const selectedFacts = computed(() => nodeFactsOf(selected.value?.node));
 
 	/** 邻居从**当前画布**的链路推导（与 1.0 的「邻居数」同源），不是上游自报的 `neighbors` */
@@ -1037,19 +1161,9 @@
 		return comboGroups.value.find((group) => group.id === id)?.label ?? id;
 	});
 
-	// ── 链路事实（§6.11）：点中画布上的一条链路 → 详情栏给基础事实 + 两个方向的流量 ──────────────
-	// 利用率 / 丢包 / 误码四项现网恒为 0（`traffic_out: 16.18` 而 `out_util_pct: 0`）＝没算，
-	// 因此这四格既不出 `0%` 也不出 `—`，统一写「未计算」（口径在 `topologyLinkFacts.ts` 文件头）。
-	/** 选中链路的 key：用 `topologyLinkKey()` 记，跨轮询按 key 认人，上游换序不会认错 */
-	const selectedLinkKey = ref<string | null>(null);
+	// ── 链路事实（§6.11）与节点高亮共用的当前项：`selectedLinkKey` / `selectedLink` 在 `highlight` 之前定义 ──
 
-	/** 选中链路本身：从**当前布局**的链路里按 key 解析（刷新后不残留上一轮的对象） */
-	const selectedLink = computed<TopologyGraphLink | null>(() => {
-		if (!selectedLinkKey.value)
-			return null;
-		return layout.value.links.find((link, index) => topologyLinkKey(link, index) === selectedLinkKey.value) ?? null;
-	});
-
+	/** 选中链路时右栏与画布都让位给那条线，这里只在详情栏渲染事实 */
 	const linkFacts = computed(() => (selectedLink.value ? linkFactsOf(selectedLink.value) : null));
 
 	/** 两端名称：图上叫得出来的名字优先，退回管理 IP（`id` 本身就是管理 IP，见 §6.10） */
@@ -1061,13 +1175,31 @@
 		return `${labels.get(link.source) ?? link.source} ↔ ${labels.get(link.target) ?? link.target}`;
 	});
 
-	/** 点链路：再点同一条即取消（链路上没有别的出口，鼠标用户得有回头路） */
+	/**
+	 * 点链路：再点同一条即回到设备视图（链路上没有关闭按钮，2026-11-09 用户裁决
+	 * 「链路卡片不要右上角叉」—— 回头路是「再点一次这条线」或「点一台设备」）。
+	 *
+	 * 选中链路时**不动节点选中**：右栏是二选一（`selectedLink` 为真则节点卡片让位），
+	 * 画布侧由 `canvasSelectedId` 让位；退出链路视图时那台设备原样还在，不会掉回空态。
+	 */
 	function selectLink(key: string): void {
 		selectedLinkKey.value = selectedLinkKey.value === key ? null : key;
 	}
 
-	function closeLink(): void {
+	/**
+	 * 点节点：先摘掉链路选中（右栏要切回设备事实），再走 composable 的「恒有一台选中」语义。
+	 */
+	function pickNode(id: string | null): void {
 		selectedLinkKey.value = null;
+		selectNode(id);
+	}
+
+	/** 跳到链路遥测指标页：深链带两端的管理 IP（画布节点 id = 管理 IP） */
+	function openLinkMetrics(): void {
+		const link = selectedLink.value;
+		if (!link)
+			return;
+		void navigateTo(linkMetricsDeepLink(link.source, link.target));
 	}
 
 	/** 未知 → 「—」；「未计算」单独一档，两者在同一个格子里绝不混着写 */
@@ -1205,91 +1337,48 @@
 		return value > 80 ? "error" : value > 60 ? "warning" : "primary";
 	}
 
-	// ── 写入口（§6.2）：节点动作与链路动作共用「选中 → 二次确认 → 下发」这一条流程 ──────────────
-	/** 动作作用域：端点、确认文案、结果提示三处都不同，用一个字段分流 */
-	type ActionScope = "node" | "link";
-
+	// ── 写入口（§6.2）：只保留链路动作这一条流程（选中 → 二次确认 → 下发）─────────────────────
+	// 节点级的「停止节点 / 重启节点」两枚按钮已按 2026-11-09 用户裁决从工具栏删除：它们的可用性
+	// 建立在「工具栏上选中了哪台设备」之上，而工具栏与选中对象隔着一整张画布 —— 最高危的动作
+	// 挂在最不显眼的位置，停掉一台设备后也没有任何画布内的位置能把它拉回来。写能力本身仍由
+	// `/api/sim/channel` 的 `writeEnabled` 决定，链路动作（断开 / 恢复 / 来回切）留在链路事实卡里。
 	/** 动作文案（键表放在一处：模板、提示、弹窗标题都从这里取，避免同一动作三种叫法） */
-	const ACTION_LABEL_KEY: Record<SimulatorAction, string> = {
-		stop: "pages.topology-monitor.simControls.nodeStop",
-		restart: "pages.topology-monitor.simControls.nodeRestart",
+	const ACTION_LABEL_KEY: Record<SimulatorLinkAction, string> = {
 		down: "pages.topology-monitor.simControls.linkDown",
 		up: "pages.topology-monitor.simControls.linkUp",
 		toggle: "pages.topology-monitor.simControls.linkToggle"
 	};
 
 	/** 下发成功的结果提示 */
-	const ACTION_DONE_KEY: Record<SimulatorAction, string> = {
-		stop: "pages.topology-monitor.simControls.stopped",
-		restart: "pages.topology-monitor.simControls.restarted",
+	const ACTION_DONE_KEY: Record<SimulatorLinkAction, string> = {
 		down: "pages.topology-monitor.simControls.linkDownDone",
 		up: "pages.topology-monitor.simControls.linkUpDone",
 		toggle: "pages.topology-monitor.simControls.linkToggleDone"
 	};
 
-	/** 节点动作目标：选中节点在仿真侧的那一条（没有就说明这个节点不在仿真里，写不了） */
-	const actionTarget = computed(() => selected.value?.marker ?? null);
-
 	/** 链路动作目标：选中链路在仿真侧的那一条（`undefined` = 这条线不在仿真里） */
 	const linkTarget = computed(() => simulatorLinkFor(selectedLink.value));
 
-	const pendingAction = ref<SimulatorAction | null>(null);
-	const pendingScope = ref<ActionScope>("node");
+	const pendingAction = ref<SimulatorLinkAction | null>(null);
 	const confirmOpen = ref(false);
 	const actionError = ref("");
 
 	/** 两个条件缺一不可：通道 + 写开关（`canWrite`），以及一个可下发的目标 */
-	const canOperate = computed(() => canWrite.value && !!actionTarget.value && !acting.value);
 	const canOperateLink = computed(() => canWrite.value && !!linkTarget.value && !acting.value);
 
 	const pendingLabel = computed(() => (pendingAction.value ? t(ACTION_LABEL_KEY[pendingAction.value]) : ""));
 
-	/** 确认弹窗的正文：目标（名字 + 仿真 id）+ 动作，缺一样都别让人按下去 */
+	/** 确认弹窗的正文：目标（两端 + 仿真 id）+ 动作，缺一样都别让人按下去 */
 	const confirmDescription = computed(() => {
 		const action = pendingAction.value;
-		if (!action)
+		const target = linkTarget.value;
+		if (!action || !target)
 			return "";
-
-		if (pendingScope.value === "link") {
-			const target = linkTarget.value;
-			if (!target)
-				return "";
-			return t("pages.topology-monitor.simControls.linkConfirmDescription", {
-				action: pendingLabel.value,
-				name: linkEndpoints.value,
-				id: target.simId
-			});
-		}
-
-		const target = actionTarget.value;
-		if (!target)
-			return "";
-		return t("pages.topology-monitor.simControls.confirmDescription", {
+		return t("pages.topology-monitor.simControls.linkConfirmDescription", {
 			action: pendingLabel.value,
-			name: target.name,
+			name: linkEndpoints.value,
 			id: target.simId
 		});
-	});
-
-	/**
-	 * 按钮禁用原因：按「通道 → 写开关 → 选中 → 是否在仿真里」的顺序各说一句话。
-	 * 顺序即优先级——先说缺的那一层，用户才知道该找运维开开关还是先去点节点。
-	 */
-	const simControlHint = computed(() => {
-		const state: SimulatorChannelState = simState.value;
-		if (state === "loading")
-			return t("pages.topology-monitor.simControls.loading");
-		if (state === "disabled")
-			return t("pages.topology-monitor.simControls.disabled");
-		if (state === "unreachable")
-			return t("pages.topology-monitor.simControls.unreachable");
-		if (!writeEnabled.value)
-			return t("pages.topology-monitor.simControls.writeDisabled");
-		if (!selected.value)
-			return t("pages.topology-monitor.simControls.selectNode");
-		if (!actionTarget.value)
-			return t("pages.topology-monitor.simControls.notSimulated");
-		return t("pages.topology-monitor.simControls.ready", { name: actionTarget.value.name });
 	});
 
 	/** 链路动作图标：`up` / `down` 是方向，`toggle` 是来回（图标只画语义，不画结果） */
@@ -1300,8 +1389,8 @@
 	}
 
 	/**
-	 * 链路按钮的禁用原因：与节点同一套优先级（通道 → 写开关 → 选中 → 是否在仿真里），
-	 * 只说缺的那一层 —— 用户才知道该找运维开开关，还是先去点一条链路。
+	 * 链路按钮的禁用原因：按「通道 → 写开关 → 选中 → 是否在仿真里」的顺序各说一句话。
+	 * 顺序即优先级 —— 只说缺的那一层，用户才知道该找运维开开关，还是先去点一条链路。
 	 */
 	const linkActionHint = computed(() => {
 		const state: SimulatorChannelState = simState.value;
@@ -1331,44 +1420,23 @@
 		return message;
 	}
 
-	function askAction(action: SimulatorNodeAction): void {
-		if (!canOperate.value)
-			return;
-
-		actionError.value = "";
-		pendingScope.value = "node";
-		pendingAction.value = action;
-		confirmOpen.value = true;
-	}
-
-	/** 链路动作同样先弹二次确认：动作直接作用在正在跑的仿真上（§6.2 / A9） */
+	/** 链路动作先弹二次确认：动作直接作用在正在跑的仿真上（§6.2 / A35） */
 	function askLinkAction(action: SimulatorLinkAction): void {
 		if (!canOperateLink.value)
 			return;
 
 		actionError.value = "";
-		pendingScope.value = "link";
 		pendingAction.value = action;
 		confirmOpen.value = true;
 	}
 
 	async function submitAction(): Promise<void> {
 		const action = pendingAction.value;
-		if (!action || acting.value)
+		const target = linkTarget.value;
+		if (!action || !target || acting.value)
 			return;
 
-		let result: SimulatorActionResult;
-		if (pendingScope.value === "link") {
-			const target = linkTarget.value;
-			if (!target)
-				return;
-			result = await performLinkAction(action as SimulatorLinkAction, target.simId);
-		} else {
-			const target = actionTarget.value;
-			if (!target)
-				return;
-			result = await performNodeAction(action as SimulatorNodeAction, target.simId);
-		}
+		const result: SimulatorActionResult = await performLinkAction(action, target.simId);
 
 		if (!result.ok) {
 			actionError.value = describeActionError(result.message);
@@ -1377,7 +1445,7 @@
 
 		toast.add({
 			title: t(ACTION_DONE_KEY[action]),
-			description: pendingScope.value === "link" ? linkEndpoints.value : actionTarget.value?.name ?? "",
+			description: linkEndpoints.value,
 			color: "success"
 		});
 		confirmOpen.value = false;

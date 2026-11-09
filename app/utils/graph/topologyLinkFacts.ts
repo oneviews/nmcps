@@ -66,6 +66,58 @@ function readBandwidth(value: unknown): string | null {
 }
 
 /**
+ * 带宽原文 → Mbps（画布的线宽要一个可比的数字，详情栏仍展示原文）。
+ *
+ * 实测口径是**带单位的字符串**（`"100 Mbps"` / `"1 Gbps"` / `"4 Gbps"`），单位前缀换算到 Mbps：
+ * `k` → 1e-3、空 → 1、`m` → 1、`g` → 1e3、`t` → 1e6。三条例外都不编数：
+ *   · 缺省 / `0` / 非有限数 → `null`（上游缺真值，见文件头口径 ②）；
+ *   · 认不出单位的字符串（`"fast"`）→ `null`；
+ *   · **数字**形态（契约的 `number | string`）按 Mbps 读 —— 数字口径只有老上游会给，它没有单位可带，
+ *     而现网 48/48 都是字符串，所以这条例外只影响「本来就没单位」的那种输入。
+ */
+export function bandwidthMbps(value: unknown): number | null {
+	if (typeof value === "number")
+		return Number.isFinite(value) && value > 0 ? value : null;
+
+	if (typeof value !== "string")
+		return null;
+
+	const match = /^(\d+(?:\.\d+)?)\s*([kmgt]?)i?bps$/i.exec(value.trim());
+	if (match) {
+		const factors: Record<string, number> = { "": 1, k: 1e-3, m: 1, g: 1e3, t: 1e6 };
+		const factor = factors[match[2]!.toLowerCase()];
+		const amount = Number(match[1]);
+		if (factor === undefined || !Number.isFinite(amount) || amount <= 0)
+			return null;
+		return amount * factor;
+	}
+
+	// 只有数字的字符串（`"1000"`）：同样按 Mbps 读，理由与数字形态一致
+	const bare = Number(value.trim());
+	return Number.isFinite(bare) && bare > 0 ? bare : null;
+}
+
+/**
+ * 是否**空口**链路（画布据此画虚线，§6.15 要求 4）。
+ *
+ * 判据取 `medium` 与 `linkType` 两列：实测 `medium` 给介质（`wifi5` / `wifi24` / `optical` /
+ * `copper1g`），而部分样本只给 `linkType: "wireless"`（自检的 mesh 样本就是这样）。
+ * 词表只认「明确说了是无线」的三种写法，其余一律当有线 —— 猜错方向会把有线画成虚线。
+ */
+export function linkIsWireless(link: TopologyGraphLink | undefined | null): boolean {
+	if (!link)
+		return false;
+	const medium = (readText(link.medium) ?? "").toLowerCase();
+	const type = (readText(link.linkType) ?? "").toLowerCase();
+	return medium.startsWith("wifi")
+		|| medium === "wireless"
+		|| medium === "radio"
+		|| type === "wireless"
+		|| type === "wifi"
+		|| type === "radio";
+}
+
+/**
  * 链路事实读表（入参是**拍平后**的读模型，上游 `data` 外壳见 §6.10）。
  *
  * `telemetry` 整个对象可能缺（老样本 / 非现网上游）：此时四个「未计算」维度与两个流量都是 `null`，

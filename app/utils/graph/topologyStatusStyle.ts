@@ -16,13 +16,25 @@ const NODE_FILL: Record<TopologyNodeStatus, string> = {
 	unknown: "fill-(--ui-text-dimmed)"
 };
 
+/**
+ * 链路描边类：**一律中性灰、且比正文灰更淡**（2026-11-08 用户两次裁决：「连接线的颜色改为灰色」、
+ * 「降低链路颜色的饱和度」）。
+ *
+ * 旧实现按状态给六种色（绿 / 橙 / 红 / 蓝…），三层叠加后画布上一片彩色，层级反而读不出来；
+ * 灰色让「节点层色」成为画面里唯一的彩色信号。灰走 `--topology-link` 而不是写死的 hex：
+ * 它由 `--ui-text-muted` 派生出**同亮度、色度 35%** 的一支（定义在 `app/assets/css/main.css`），
+ * 浅色 / 深色模式都自动跟随，且永远比节点层色更安静 —— 连线是背景关系，层色才是主角。
+ *
+ * 状态信息没有丢：`offline` 改用**虚线**（见 `linkDashArray()`），其余状态在链路详情栏、
+ * 邻居徽标与 `<title>` 悬停提示里照旧逐字给出 —— 语义由文字承载，不靠色相猜。
+ */
 const LINK_STROKE: Record<TopologyLinkStatus, string> = {
-	online: "stroke-(--ui-success)/60",
-	degraded: "stroke-(--ui-warning)/70",
-	congested: "stroke-(--ui-error)/70",
-	switching: "stroke-(--ui-info)/70",
-	offline: "stroke-(--ui-text-dimmed)",
-	unknown: "stroke-(--ui-text-dimmed)/60"
+	online: "stroke-(--topology-link)",
+	degraded: "stroke-(--topology-link)",
+	congested: "stroke-(--topology-link)",
+	switching: "stroke-(--topology-link)",
+	offline: "stroke-(--topology-link)",
+	unknown: "stroke-(--topology-link)"
 };
 
 const NODE_COLOR: Record<TopologyNodeStatus, StatusColor> = {
@@ -50,6 +62,16 @@ export function nodeFillClass(status: TopologyNodeStatus): string {
 /** 链路描边类 */
 export function linkStrokeClass(status: TopologyLinkStatus): string {
 	return LINK_STROKE[status];
+}
+
+/**
+ * 链路虚线样式：灰色是统一底色，**唯有 `offline` 用虚线**区分「这条线不通」。
+ *
+ * 为什么不给每种状态各配一种线型：线型种类越多越像「装饰」，而这里只需要回答一个问题 ——
+ * 这条链路是不是断的。`undefined` = 实线（SVG 不写 `stroke-dasharray`）。
+ */
+export function linkDashArray(status: TopologyLinkStatus): string | undefined {
+	return status === "offline" ? "6 4" : undefined;
 }
 
 /** 节点徽标语义色 */

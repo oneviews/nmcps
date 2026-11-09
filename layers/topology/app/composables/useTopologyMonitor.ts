@@ -17,6 +17,7 @@ import type { SimulatorChannelInfo, SimulatorLldpNeighbor, SimulatorLldpNeighbor
 import type { TopologyGraph } from "~~/shared/types/topology";
 import { buildSimulatorIndex, buildSimulatorLinkIndex, simulatorLinkOf, simulatorMarkerOf } from "~~/app/utils/graph/simulatorOverlay";
 import { alarmIndexOf, normalizeAlarmEvents } from "~~/app/utils/graph/topologyAlarms";
+import { childIndex, collapsePlanOf } from "~~/app/utils/graph/topologyCollapse";
 import { pruneCollapsedCombos, readCollapsedCombos, writeCollapsedCombos } from "~~/app/utils/graph/topologyComboPrefs";
 import { layoutTopology, RADIAL_ROTATE_DEG, TOPOLOGY_ROTATE_MAX, TOPOLOGY_ROTATE_MIN } from "~~/app/utils/graph/topologyLayout";
 import { neighborCanvasCount, neighborRowsOf } from "~~/app/utils/graph/topologyNeighbors";
@@ -93,7 +94,7 @@ export function useTopologyMonitor() {
 	/** 正在下发的动作（按钮 `loading` 与重复提交的门闩；节点与链路动作共用） */
 	const acting = ref<SimulatorAction | null>(null);
 	/** 2D 布局形态（§6.8）：默认分层网格，与 1.0 的默认 radial 不同 —— 2.0 的径向扇是可选视图 */
-	const layoutMode = ref<TopologyLayoutMode>("layered");
+	const layoutMode = ref<TopologyLayoutMode>("radial");
 	/** 径向扇整体旋转（度，视觉逆时针为正；仅 `radial` 布局读取） */
 	const rotationDeg = ref<number>(RADIAL_ROTATE_DEG);
 	/**
@@ -146,19 +147,114 @@ export function useTopologyMonitor() {
 		return (graph.value?.combos ?? []).some((combo) => combo.id === focusComboId.value) ? focusComboId.value : null;
 	});
 
-	/** 归一链路 + 布局（纯函数，同一份数据 + 同一组选项恒得同一张图） */
-	const layout = computed(() => {
-		const all = graph.value?.nodes ?? [];
-		const links = topologyLinksOf(graph.value);
+	// ── 收起 / 展开下级（§6.15，G6 v5 `collapse-expand` 的等价实现，2026-11-08）────────────
+	//
+	// 状态只有一份：被收起的节点 id 数组。**隐藏哪些元素**的规则在纯函数 `collapsePlanOf()` 里
+	// （`app/utils/graph/topologyCollapse.ts`）：收起的节点自己留着、它的下级与只连着下级的边摘掉。
+	// 为什么不像分组那样持久化：收起的是一棵子树，上游删掉那台设备 / 它已经没有下级时这份偏好在
+	// 本会话内自动失效（见下面的 `watch`），落盘只会把失效状态带到下一次会话。
+	const collapsedNodes = ref<string[]>([]);
+
+	/** 区域分组折叠 / 聚焦之后的节点集合：收起下级的计数与方向都基于这份「眼前这张图」 */
+	const nodesAfterCombos = computed(() => {
 		const collapsed = new Set(collapsedCombos.value);
 		const focus = focusedCombo.value;
-		const nodes = all.filter((node) => {
+		return (graph.value?.nodes ?? []).filter((node) => {
 			if (node.combo && collapsed.has(node.combo))
 				return false;
 			return !focus || node.combo === focus;
 		});
+	});
 
-		return layoutTopology(nodes, links, { mode: layoutMode.value, rotateDeg: rotationDeg.value });
+	/** 收起计划：布局、角标读数、失效修剪三处共用同一份结果 */
+	const collapsePlan = computed(() => collapsePlanOf(
+		nodesAfterCombos.value,
+		topologyLinksOf(graph.value),
+		collapsedNodes.value
+	));
+
+	/** 节点 id → 收起后会遮住的台数（画布角标 `+N` 与详情栏按钮共用） */
+	const collapseChildCounts = computed<Record<string, number>>(() => {
+		const result: Record<string, number> = {};
+		for (const [id, count] of collapsePlan.value.hiddenCounts) {
+			if (count > 0)
+				result[id] = count;
+		}
+		return result;
+	});
+
+	/** 当前被收起遮住的节点数（画布角标「已收起 N 台」） */
+	const collapsedHiddenCount = computed(() => collapsePlan.value.hiddenNodes);
+
+	/** 是否存在可收起的节点（「全部展开」按钮的禁用态） */
+	const hasCollapsedNodes = computed(() => collapsedNodes.value.length > 0);
+
+	/**
+	 * 收起 / 展开一个节点的下级；没有下级的节点**不做任何事**（它不是可收起对象）。
+	 *
+	 * 几何按完整集合算（见 `layout`），收起只摘元素不挪人 —— 因此位移增量**不清空**：
+	 * 节点留在原地，用户拖过的位置也留在原地（收起不是「重新排版」）。
+	 */
+	function toggleCollapse(id: string): void {
+		if ((collapsePlan.value.childIds.get(id)?.length ?? 0) === 0)
+			return;
+
+		collapsedNodes.value = collapsedNodes.value.includes(id)
+			? collapsedNodes.value.filter((item) => item !== id)
+			: [...collapsedNodes.value, id];
+
+		// 选中项被这次收起藏起来了 ⇒ 落回默认根（右栏不能挂着一台画布上不存在的设备，也不能空着；
+		// 「根恒可见」由布局保证：收起只摘它的下级，根自己永远留在画布上）
+		if (selectedId.value && !collapsePlan.value.nodes.some((node) => node.id === selectedId.value))
+			selectedId.value = defaultSelectionId();
+	}
+
+	/** 全部展开（独立动作，画布角标那一枚按钮用；不动旋转角与视口） */
+	function expandAllCollapsed(): void {
+		if (collapsedNodes.value.length === 0)
+			return;
+		collapsedNodes.value = [];
+	}
+
+	/** 上游一变就修剪：设备没了 / 它已经没有下级时，收起条目不参与任何计算 */
+	watch(graph, () => {
+		if (collapsedNodes.value.length === 0)
+			return;
+		const childIds = childIndex(graph.value?.nodes ?? [], topologyLinksOf(graph.value));
+		const next = collapsedNodes.value.filter((id) => (childIds.get(id)?.length ?? 0) > 0);
+		if (next.length !== collapsedNodes.value.length)
+			collapsedNodes.value = next;
+	});
+
+	/**
+	 * 归一链路 + 布局（纯函数，同一份数据 + 同一组选项恒得同一张图）。
+	 *
+	 * 两级「看不见」按顺序叠：① 区域分组折叠 / 聚焦（§6.11，按 combo 摘）；② 收起下级
+	 * （§6.15，按子树摘）。两者的区别只在**几何从哪来**：
+	 *
+	 * - ① 是「换范围」，几何按剩下的人重新铺（只看一组时这张图就是那一组）；
+	 * - ② 是「收起一棵子树」，几何仍然按**收起前**的完整集合算，收起后直接摘掉那些元素 ——
+	 *   于是留下节点的坐标逐点不变，层级（第几层、谁在谁上面）也不会因为收起而跳一下。
+	 *   旧实现把子树从布局输入里摘掉后整行重排，收起一个叶子会让整张图挪位，看着像「点了另一张图」。
+	 *
+	 * 链路一律由裁剪逻辑丢掉两端不全的那些，画布不会留悬空边。
+	 */
+	const layout = computed(() => {
+		const base = layoutTopology(nodesAfterCombos.value, topologyLinksOf(graph.value), {
+			mode: layoutMode.value,
+			rotateDeg: rotationDeg.value
+		});
+
+		// 收起下级：几何已经算好，只决定「画哪几个」（`collapsePlan.nodes` 就是留下的人）
+		const visible = new Set(collapsePlan.value.nodes.map((node) => node.id));
+		if (visible.size === base.nodes.length)
+			return base;
+
+		return {
+			...base,
+			nodes: base.nodes.filter((node) => visible.has(node.id)),
+			links: base.links.filter((link) => visible.has(link.source) && visible.has(link.target))
+		};
 	});
 
 	/**
@@ -389,9 +485,56 @@ export function useTopologyMonitor() {
 		};
 	});
 
-	function selectNode(id: string | null): void {
-		selectedId.value = id && id !== selectedId.value ? id : null;
+	/**
+	 * 默认选中项 = **这张图的根**，右栏因此永远有内容（2026-11-09 用户裁决「打开就选中根节点，详情栏不允许出现空态」）。
+	 *
+	 * 「根」在两种布局里是同一个概念、两个来源：
+	 * ① 层级树里由 `resolveLayeredRanks()` 选举出来的那一台（`role === "root"`，层号被改写为 `ROOT_TIER`）；
+	 * ② 顶端带只有一台时选举不触发（`rootId` 为 `null`），此时「根」就是**最上一档** —— 径向扇里它就是
+	 *    扇心 / 圆心（`fans[].apexId` 的口径：tier 最小，并列取度数最大、再按 id 断），层级树里就是塔尖。
+	 *    只按 `role === "root"` 找会让径向扇退化成「入参第一台」，那台未必在最里圈 —— 选中一台中圈设备
+	 *    再说「这是图的开头」就是编事实。
+	 *
+	 * 为什么要有默认值：右栏是「当前这台设备」的事实面板，空态只是把画布右侧留白 —— 用户看到的是一张图
+	 * 配一块空板，还得先猜点哪里。打开即选中根，右栏立刻有内容，画布上也立刻有一台高亮，等于替用户说出
+	 * 「先看总出口」这条默认读法。
+	 */
+	function defaultSelectionId(): string | null {
+		const nodes = layout.value.nodes;
+		if (nodes.length === 0)
+			return null;
+
+		const elected = nodes.find((node) => node.role === "root");
+		if (elected)
+			return elected.id;
+
+		const topTier = Math.min(...nodes.map((node) => node.tier));
+		const degreeOf = (id: string): number =>
+			layout.value.links.filter((link) => link.source === id || link.target === id).length;
+		const top = nodes
+			.filter((node) => node.tier === topTier)
+			.sort((a, b) => degreeOf(b.id) - degreeOf(a.id) || a.id.localeCompare(b.id));
+		return top[0]?.id ?? nodes[0]?.id ?? null;
 	}
+
+	/**
+	 * 选中项**恒非空**（有图就有一台）：重复点同一台不再取消选中，传 `null` 落回默认根。
+	 *
+	 * 「取消选中」在 2026-11-09 被用户砍掉：右栏是设备事实面板，没有「未选中」这种合法状态，
+	 * 真正的「换一个对象」是点另一台设备或点一条链路（链路选中在页面层，见 `selectedLinkKey`）。
+	 */
+	function selectNode(id: string | null): void {
+		selectedId.value = id ?? defaultSelectionId();
+	}
+
+	/**
+	 * 图一变就校正选中项：布局重算后若当前 id 不在画布上（收起把它藏了 / 上游把它删了），
+	 * 立刻落回默认根 —— 右栏不能挂着一台画布上不存在的设备，也不能空着。
+	 */
+	watch(() => layout.value.nodes.map((node) => node.id).join(","), () => {
+		if (!selectedId.value || !layout.value.nodes.some((node) => node.id === selectedId.value))
+			selectedId.value = defaultSelectionId();
+	}, { immediate: true });
 
 	// ── 邻接发现（LLDP，§6.13 取证 / §6.14 落地，2026-11-07） ────────────────────────
 	//
@@ -633,6 +776,13 @@ export function useTopologyMonitor() {
 		collapsedNodeCount,
 		toggleCombo,
 		expandAllCombos,
+		/** 收起 / 展开下级（§6.15）：被收起的节点 / 每台的下级台数 / 遮住的台数 / 开关 */
+		collapsedNodes,
+		collapseChildCounts,
+		collapsedHiddenCount,
+		hasCollapsedNodes,
+		toggleCollapse,
+		expandAllCollapsed,
 		/** 分组聚焦（§6.11「只看这一组」）：当前焦点 / 切换 / 清除 */
 		focusedCombo,
 		focusCombo,

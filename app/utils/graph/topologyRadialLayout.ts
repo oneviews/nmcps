@@ -132,6 +132,25 @@ export const RADIAL_SWEEP_DEG = 60;
  * ★ 余量即组间距的唯一来源：加宽的部分（`ringSweep − 基线`）用于组间留白，**组内间距不会被吃小**。
  */
 export const RADIAL_SWEEP_BY_TIER: Readonly<Record<number, number>> = { 2: 75, 3: 75, 4: 65 };
+/** 逐档张角的两档取值：**最外档** = 65°、**其余非顶点档** = 75°（`RADIAL_SWEEP_BY_TIER` 就是层数 = 4 时的特例） */
+export const RADIAL_SWEEP_OUTER_DEG = 65;
+export const RADIAL_SWEEP_INNER_DEG = 75;
+
+/**
+ * 逐档张角按**带号**生成（`NMCPS-DESIGN-001` §6.8）：最外档 65°、其余非顶点档 75°、顶点档不列（回落基线 60°）。
+ *
+ * 为什么需要它：`RADIAL_SWEEP_BY_TIER` 是按「4 档」写死的 —— 层数不再等于 4 时
+ * （根节点选举会多出一层、无下级节点下移会合并两层）按固定档号取张角就会错位：
+ * 5 档图的最外档会拿不到 65° 而回落到 60°，比它里面那档（65°）还窄。
+ * 层数 = 4 时 `radialSweepForBands(4)` 与 `RADIAL_SWEEP_BY_TIER` **逐项相同**（回归不变）。
+ */
+export function radialSweepForBands(bandCount: number): Record<number, number> {
+	const sweep: Record<number, number> = {};
+	const last = Number.isFinite(bandCount) ? Math.max(1, Math.floor(bandCount)) : 1;
+	for (let band = 2; band <= last; band++)
+		sweep[band] = band === last ? RADIAL_SWEEP_OUTER_DEG : RADIAL_SWEEP_INNER_DEG;
+	return sweep;
+}
 /**
  * **同档按父节点分组的组间目标间距（px，v0.25）**：组与组之间在弧上额外留出这么多像素。
  *   实际值受「该档张角余量」钳制（`余量弧长 ÷ (组数 − 1)`），不足 `RADIAL_MIN_GROUP_GAP` 则**退回纯等间隔**。

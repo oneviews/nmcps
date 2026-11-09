@@ -58,6 +58,20 @@
 			:description="$t('pages.topology-metrics.degradedBody')"
 		/>
 
+		<!--
+			名字清单为空不是「没有可画的指标」（§七 / §8.6）：候选来自目录，选择器照常可用。
+			不解释一句，用户会以为「选项是从哪冒出来的」。
+		-->
+		<UAlert
+			v-if="nameListEmpty && pickerItems.length > 0"
+			data-testid="metric-name-list-empty"
+			color="info"
+			variant="subtle"
+			icon="carbon:information"
+			:title="$t('pages.topology-metrics.nameListEmptyTitle')"
+			:description="$t('pages.topology-metrics.nameListEmptyBody', { count: pickerItems.length })"
+		/>
+
 		<!-- 没有管理 IP：链路 / 设备都可能走到这里，缺的是请求入参，不是数据（不发空 `mgmt_ip` 请求） -->
 		<p v-if="!hasIp" data-testid="metric-no-ip" class="py-6 text-center text-xs text-(--ui-text-muted)">
 			{{ missingIpText }}
@@ -150,7 +164,7 @@
 	const rate = ref(false);
 	const ifIndexRef = computed(() => props.ifIndex ?? null);
 
-	const { options, points, dropped, rateAvailable, degraded, reason, error, loading, stale, reload, seriesIfIndex, seriesCount }
+	const { options, points, dropped, rateAvailable, degraded, nameListEmpty, reason, error, loading, stale, reload, seriesIfIndex, seriesCount }
 		= useMetricSeries(ip, { code: selectedCode, rate, ifIndex: ifIndexRef });
 
 	/** 过滤键（字符串；`""` = 不过滤）。页面断言用，避免正文里再复述一遍索引 */

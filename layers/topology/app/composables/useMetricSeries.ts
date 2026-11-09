@@ -24,8 +24,10 @@ import { buildMetricCatalog, pickPaintableMetricCode, selectableMetrics, toDefin
 const WINDOW_MS = 60 * 60 * 1000;
 /** 聚合步长（秒）：1 小时 → 60s 一个点，60 个点足够看清趋势且不放大请求 */
 const STEP_SECONDS = 60;
-/** 目录一次取多少条：覆盖单租户目录，避免「翻页丢了条目」被当成「目录里没有」（§8.1） */
+/** 目录一次取多少条（起始页大小）：按 `total` 翻页取全量，见 `fetchCatalogPages` */
 const CATALOG_PAGE_SIZE = 200;
+/** 翻页上限：目录再大也不无限拉，10 × 200 = 2000 条已覆盖单租户（实测 463 条） */
+const CATALOG_MAX_PAGES = 10;
 
 /** 「没有可画的序列」的四种正常原因（不是错误，不显示上游文案） */
 export type MetricSeriesReason = "" | "no_metric_names" | "no_paintable_metric" | "no_datapoints" | "no_interface_series";
@@ -55,11 +57,34 @@ export interface MetricSeriesOptions {
  */
 let catalogPromise: Promise<RawMetricDefinition[] | null> | null = null;
 
-function catalogFrom(api: ReturnType<typeof useApi>): Promise<RawMetricDefinition[] | null> {
+/**
+ * 按 `total` 翻页把整份目录取回来（`NMCPS-CONTRACT-002` §8.1）。
+ *
+ * 单页口径作废：2026-11-08 实测 `total=463`，只取首页会让余下 263 条在 join 里缺席，被 §8.3
+ * 第 3 条当成 `numeric` 放行 —— 选择器里既缺条目、又混进没类型证据的。上限 `CATALOG_MAX_PAGES`
+ * 页，避免目录异常大时无限翻页。
+ */
+async function fetchCatalogPages(api: ReturnType<typeof useApi>): Promise<RawMetricDefinition[]> {
+	const rows: RawMetricDefinition[] = [];
+
+	for (let page = 1; page <= CATALOG_MAX_PAGES; page += 1) {
+		const query: ApiRequestOptions["query"] = { page, page_size: CATALOG_PAGE_SIZE };
+		const data = await api.get<MetricDefinitionData>("/api/metric/definition", { query });
+		const list = data?.list ?? [];
+
+		rows.push(...list);
+
+		const total = typeof data?.total === "number" ? data.total : rows.length;
+		if (list.length < CATALOG_PAGE_SIZE || rows.length >= total)
+			break;
+	}
+
+	return rows;
+}
+
+export function metricCatalogDefinitions(api: ReturnType<typeof useApi>): Promise<RawMetricDefinition[] | null> {
 	if (!catalogPromise) {
-		const query: ApiRequestOptions["query"] = { page: 1, page_size: CATALOG_PAGE_SIZE };
-		catalogPromise = api.get<MetricDefinitionData>("/api/metric/definition", { query })
-			.then((data) => data?.list ?? [])
+		catalogPromise = fetchCatalogPages(api)
 			.catch(() => {
 				catalogPromise = null;
 				return null;
@@ -80,6 +105,11 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 	const catalog = ref<MetricCatalogItem[]>([]);
 	/** 目录不可用（§8.4）：只有名字证据，页面提示一句但不进错误态 */
 	const degraded = ref(false);
+	/**
+	 * 这台设备的指标名清单为空（§七）：候选只能来自指标目录，页面提示一句。
+	 * **不是**「没有可画的指标」—— 实测有这种设备（清单空、序列在），所以选择器照常可用。
+	 */
+	const nameListEmpty = ref(false);
 	const points = ref<MetricSeriesPoint[]>([]);
 	const dropped = ref(0);
 	const reason = ref<MetricSeriesReason>("");
@@ -111,6 +141,7 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 	function reset(): void {
 		catalog.value = [];
 		degraded.value = false;
+		nameListEmpty.value = false;
 		points.value = [];
 		dropped.value = 0;
 		seriesIfIndex.value = "";
@@ -153,7 +184,7 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 		loading.value = true;
 
 		try {
-			const definitions = await catalogFrom(api);
+			const definitions = await metricCatalogDefinitions(api);
 			if (token !== sequence)
 				return;
 
@@ -164,6 +195,8 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 
 				namesFor = target;
 				namesRaw = names?.metrics ?? [];
+				/** 清单为空只影响提示（§七），不影响候选集（§8.6）：目录里的 numeric 条目照样可选 */
+				nameListEmpty.value = namesRaw.length === 0;
 			}
 
 			const built = buildMetricCatalog(namesRaw, definitions ? toDefinitionMap(definitions) : null);
@@ -269,6 +302,8 @@ export function useMetricSeries(ip: Ref<string>, options: MetricSeriesOptions = 
 		rateAvailable,
 		/** 目录不可用（§8.4）：只提示，不当作取数失败 */
 		degraded,
+		/** 该设备的指标名清单为空（§七）：候选来自指标目录，页面提示一句 */
+		nameListEmpty,
 		points,
 		/** 被丢弃的非法点数（`""` / `"NaN"` / `null`；不补 0，只计数） */
 		dropped,

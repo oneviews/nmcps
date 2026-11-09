@@ -68,6 +68,23 @@ export function useMetricLedger<TFact>(endpoint: MetricLedgerEndpoint, options: 
 		}
 	}
 
+	/**
+	 * 取**指定页**且不改当前页状态（深链解析用，`metricDeepLink.resolveDeepLink()`）。
+	 *
+	 * 为什么不复用 `load()`：那会把用户看到的页码挪走。这里也不碰 `sequence` —— 用户正在翻页时
+	 * 扫描不应该把那次请求判成过期。失败返回 `null`（扫描就此停止，见 `resolveDeepLink()` 的约定）。
+	 */
+	async function fetchPage(target: number): Promise<TFact[] | null> {
+		try {
+			const data = await api.get<MetricLedgerData<TFact>>(endpoint, {
+				query: { page: target, page_size: pageSize.value }
+			});
+			return data?.list ?? [];
+		} catch {
+			return null;
+		}
+	}
+
 	/** 翻页 / 改页大小都重取；`?id` 不参与请求键（`NMCPS-ARCH-006` §5.2） */
 	watch([page, pageSize], () => void load());
 	onMounted(() => void load());
@@ -80,6 +97,8 @@ export function useMetricLedger<TFact>(endpoint: MetricLedgerEndpoint, options: 
 		pageCount,
 		loading,
 		error,
-		reload: load
+		reload: load,
+		/** 深链解析专用：按页取事实，不动当前页 */
+		fetchPage
 	};
 }

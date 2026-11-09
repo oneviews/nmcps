@@ -156,19 +156,41 @@ export function seriesExtent(points: MetricSeriesPoint[]): { min: number, max: n
 }
 
 /**
- * 一条 `results` 入口的分组键：`ifIndex` 标签（`NMCPS-CONTRACT-002` §6.9）。
+ * 一条 `results` 入口的分组键：接口维度标签（`NMCPS-CONTRACT-002` §6.9）。
  *
- * 空串 = 该序列**没有** `ifIndex` 标签，即设备级（`sysUpTime` 这类）；接口级指标才有值。
- * 只认 `ifIndex`，不看 `job` / `auth` / `sys_name` / `node_uuid` —— 同一接口在两个 job 下是
+ * 空串 = 该序列**没有**接口维度标签，即设备级（`sysUpTime` 这类）；接口级指标才有值。
+ * 只认接口索引标签，不看 `job` / `auth` / `sys_name` / `node_uuid` —— 同一接口在两个 job 下是
  * **同一个物理对象**，拿 `job` 当身份会把一条曲线画成两条。
+ *
+ * 标签名不唯一（2026-11-08 实测 `metric_code=simIfaceInKbps` 回的是 `simIfaceMetricIndex`，
+ * 不是 `ifIndex`）：优先 `ifIndex`，其次唯一的 `*Index` 标签。**出现多个 `*Index` 标签时不猜**，
+ * 如实回落设备级（宁可少一个端口表，也不把两条不同口径的索引混成一组）。
  */
 export function seriesGroupKey(metric: Record<string, unknown> | null | undefined): string {
-	const raw = metric?.ifIndex;
-	if (typeof raw === "string")
-		return raw.trim();
-	if (typeof raw === "number" && Number.isFinite(raw))
-		return String(raw);
-	return "";
+	if (!metric)
+		return "";
+
+	const direct = labelText(metric.ifIndex);
+	if (direct)
+		return direct;
+
+	const indexLabels = Object.keys(metric).filter((key) => key.endsWith("Index"));
+	if (indexLabels.length !== 1)
+		return "";
+
+	return labelText(metric[indexLabels[0] as string]) ?? "";
+}
+
+/** 标签值 → 组键：字符串原样 trim、有限数字转字符串，其余（缺 / null / 对象）为空 */
+function labelText(value: unknown): string | null {
+	if (typeof value === "string") {
+		const text = value.trim();
+		return text || null;
+	}
+	if (typeof value === "number" && Number.isFinite(value))
+		return String(value);
+
+	return null;
 }
 
 /** 选组结果：一条可画的曲线 + 它是谁（页面据此如实标注「端口级 / 设备级」） */
@@ -273,6 +295,68 @@ export function selectMetricSeries(
 		ifIndex: key,
 		seriesCount: lists.length
 	};
+}
+
+/**
+ * 逐端口一行（`Metric/Telemetry/DeviceInterfaces.vue` 的表格行）：一个 `ifIndex` 一组。
+ *
+ * 与 `selectMetricSeries()` 的区别只在**输出粒度**：那个选一组画一条线，这个把每组都留下来，
+ * 「接口列表」Tab 才有逐端口的值可列。合并规则完全一致（`NMCPS-CONTRACT-002` §6.9）：
+ * 同 `ifIndex` 跨 job 重复上报 ⇒ 按时间戳取均值，绝不相加。
+ */
+export interface MetricInterfaceValue {
+	/** `ifIndex` 字符串；空串 = 该指标**没有接口维度**（设备级），不是某个端口 */
+	ifIndex: string
+	/** 该组最后一个合法采样值；`null` = 窗口内没有合法点（不补 0） */
+	value: number | null
+	/** 该值的时间（毫秒）；`null` = 无合法点 */
+	t: number | null
+	/** 组内非法点丢弃计数（不补 0，只计数） */
+	dropped: number
+	/** 参与合并的原始序列条数（> 1 = 同端口被多个 job 采集） */
+	seriesCount: number
+}
+
+/**
+ * `results` → 逐组（`ifIndex`）最新值，组键升序（设备级 `""` 最前，数字索引按数值）。
+ * 空 `results` ⇒ `[]`（合法空，不是错误）。
+ */
+export function groupSeriesByInterface(
+	results: Array<{ metric?: Record<string, unknown>, values?: MetricPointPair[] }> | undefined | null
+): MetricInterfaceValue[] {
+	const groups = new Map<string, MetricPointPair[][]>();
+
+	for (const entry of (results ?? []).filter(Boolean)) {
+		const key = seriesGroupKey(entry.metric);
+		const bucket = groups.get(key);
+
+		if (bucket)
+			bucket.push(entry.values ?? []);
+		else
+			groups.set(key, [entry.values ?? []]);
+	}
+
+	return [...groups.keys()].sort(compareGroupKeys).map((key) => {
+		const lists: MetricSeriesPoint[][] = [];
+		let dropped = 0;
+
+		for (const pairs of groups.get(key) ?? []) {
+			const unpacked = unpackSeries(pairs);
+			dropped += unpacked.dropped;
+			lists.push(unpacked.points);
+		}
+
+		const points = averageSeriesPoints(lists);
+		const last = points.at(-1);
+
+		return {
+			ifIndex: key,
+			value: last?.v ?? null,
+			t: last?.t ?? null,
+			dropped,
+			seriesCount: lists.length
+		};
+	});
 }
 
 /** 组键比较：空串（设备级）最前，数字按数值，其余按字典序 */

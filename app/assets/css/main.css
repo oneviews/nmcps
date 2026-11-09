@@ -36,6 +36,30 @@
 		--split-list-w: 22rem;
 		--split-list-min-w: 18rem;
 		--split-list-max-w: 28rem;
+
+		/* 画布连线墨色（`NMCPS-DESIGN-001` §6.15.2）：与 `--ui-text-muted` **同亮度**、色度压到 35%。
+		   灰是画布上唯一的「连接关系」色，但它不该比节点层色更抢眼（2026-11-08 用户裁决
+		   「降低链路颜色的饱和度」）—— 只去饱和、不动明度，两种模式下与背景的对比度都不变。
+		   相对色语法是**渐进增强**：不支持 `oklch(from …)` 的浏览器回落到 muted 本身，
+		   连线不会退化成 currentColor（黑色）。 */
+		--topology-link: var(--ui-text-muted);
+
+		/* 五档层色（2026-11-09 用户指定，唯一源；`NMCPS-DESIGN-001` §6.15.6）：
+		   边界 #f33 / 核心 #f3c / 汇聚 #c63 / 接入 #369 / 终端 #0c6。
+		   为什么自建一套而不复用 `--ui-*` 语义色：语义色只有 error / warning / info / success 四档，
+		   而层级有五档（根单独一档，见 `ROOT_TIER`）⇒ 必然有两层同色；这五个值又来自 1.0 的层色板
+		   与用户实测，与「严重程度」无关。消费方只有 `topologyRoleStyle.ts` 的两套类名表。 */
+		--topology-tier-boundary: #f33;
+		--topology-tier-core: #f3c;
+		--topology-tier-distro: #c63;
+		--topology-tier-access: #369;
+		--topology-tier-terminal: #0c6;
+	}
+
+	@supports (color: oklch(from white l c h)) {
+		:root {
+			--topology-link: oklch(from var(--ui-text-muted) l calc(c * 0.35) h);
+		}
 	}
 
 	/* 细滚动条：跨平台统一视觉，减小桌面端占用（Tauri WebView 为 Chromium） */
@@ -85,6 +109,13 @@
 	}
 	.absolute-center-v {
 		@apply top-1/2 transform -translate-y-1/2;
+	}
+	/* 列表栏选中行（`NMCPS-ARCH-006` §3.6）：主色半透明底 + 左缘 2px 主色竖条。
+	   全站六个 listbox（`/system/{user,policy,permission,log}`、`/topology/{device,link}-metrics`）
+	   都挂这一个类，不再各写 `bg-accented`；底色半透明是为了压在面板白底 / 深色底上都读出
+	   「选中了哪条」，同时不与悬停的 `bg-elevated` 抢同一档（悬停 < 选中）。 */
+	.list-row-selected {
+		@apply border-primary bg-primary/15;
 	}
 }
 
