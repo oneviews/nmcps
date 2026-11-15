@@ -4,7 +4,7 @@
 // 无外部依赖、不起服务，纯静态检查（与 `pnpm check:doc-system` 同级，互不替代）。
 //
 // 断言分组：
-//   ① 文件集：`01-`~`05-` 五份规则齐全且非空
+//   ① 文件集：`01-`~`05-` 五份基础规则齐全；额外规则必须带 paths frontmatter
 //   ② 结构：每份恰好一个 H1、UTF-8 无 BOM、行尾 LF、文件以换行结尾
 //   ③ 后续建议：A/B/C 选项的每条要求都必须写成列表项（Markdown 会把软换行折叠成一行，
 //      散文式写法在渲染后就读不出「每条分行」）
@@ -17,7 +17,7 @@ import { join } from "node:path";
 import process from "node:process";
 
 const RULES_DIR = ".clinerules";
-const EXPECTED = ["01-next-steps.md", "02-coding-conventions.md", "03-git-workflow.md", "04-docs.md", "05-rust.md"];
+const REQUIRED = ["01-next-steps.md", "02-coding-conventions.md", "03-git-workflow.md", "04-docs.md", "05-rust.md"];
 
 const results = [];
 
@@ -43,11 +43,22 @@ try {
 	log(`${RULES_DIR} 目录可读`, false, "目录不存在");
 }
 
-log("规则文件齐全（5 份）", files.length === EXPECTED.length && EXPECTED.every((name) => files.includes(name)), files.join(", ") || "无");
+log("基础规则文件齐全（5 份）", REQUIRED.every((name) => files.includes(name)), files.join(", ") || "无");
+
+/** 额外规则必须按路径生效，避免 Python / Lab 规则污染全仓库 */
+function hasPathsFrontmatter(text) {
+	const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? "";
+	return /^paths:\s*$/m.test(frontmatter) && /^\s+- ".+"$/m.test(frontmatter);
+}
+
+// `00-` 是始终加载的项目地图；其余额外规则必须声明 paths。
+for (const name of files.filter((item) => !REQUIRED.includes(item) && !item.startsWith("00-"))) {
+	log(`${name} 按路径生效（paths frontmatter）`, hasPathsFrontmatter(read(name)));
+}
 
 // ── ② 结构 ───────────────────────────────────────────
 const texts = new Map();
-for (const name of EXPECTED.filter((n) => files.includes(n))) {
+for (const name of files) {
 	const text = read(name);
 	texts.set(name, text);
 

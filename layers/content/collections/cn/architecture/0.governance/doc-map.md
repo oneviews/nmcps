@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.39.33
+version: 0.40.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-05"
+updatedAt: "2026-11-15"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -115,6 +115,8 @@ tags:
 | NMCPS-ADR-0017 | 数据表单交互基准 | 5 | informative | rec.adr.0017 | baseline | records/adr/adr-0017.md |
 | NMCPS-ADR-0018 | 后端代际切换 | 5 | informative | rec.adr.0018 | baseline | records/adr/adr-0018.md |
 | NMCPS-ADR-0019 | 六层迁移前置裁决 | 5 | informative | rec.adr.0019 | baseline | records/adr/adr-0019.md |
+| NMCPS-ADR-0020 | Mininet 只读 BFF 通道 | 5 | informative | rec.adr.0020 | baseline | records/adr/adr-0020.md |
+| NMCPS-ADR-0021 | 仿真网络租户隔离 | 5 | informative | rec.adr.0021 | baseline | records/adr/adr-0021.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -224,3 +226,7 @@ tags:
 | 2026-11-05 | 0.39.31 | **落码前义务 3 已履行：两份契约文档补全取数口径，并顺手修正 ADR-0019 白名单的四个动词错误**。① `NMCPS-CONTRACT-001`（0.2.0 → 0.3.0）增「§六 仿真平台实体契约」：登记 `shared/types/simulator.ts` 的十个实体类型，固化本族五条例外（`snake_case` 原样透传、`bandwidth` / `delay` / `loss` 保持带单位字符串、可空显式 `\| null`、未取证子对象用 `SimulatorOpaqueObject`、枚举与线格式分离 + `unknown` 兜底），并按 2026-11-05 实测登记 `SimulatorRuntimeInventory` / `SimulatorRuntimeNode` / `SimulatorRuntimeLink` 的关键字段形状。② `NMCPS-CONTRACT-002`（0.1.0 → 0.2.0）增「§六 `/metric/datapoint` 取数口径」：请求参数（含 `ips` / `codes` 批量，以及 `from` / `to` 请求发 ISO 字符串、响应回整数 Unix 秒的类型落差）、响应信封、点对解包硬约束（字符串值必须数值化、非法点丢弃且不补 0）、realtime/range 互斥、`rate` 判定、规范化管线（解包→升序→去重→格式化→像素降采样）、失败语义与三条断言 S1~S3。③ **用实测 `openapi.json` 复核时发现 ADR-0019 §4.2 白名单动词错了四处**：`/api/network/runtime/{nodes,links}` 实为 POST、其 `{id}` 子路径实为 DELETE（只读全量是 `GET /api/network/runtime-inventory`，按旧表取列表得 405）；`tc` / `radio` / `ip` 是 PATCH；`POST /api/configs` 不存在；`POST /api/protocol/compare` 是写语义端点。ADR 中英文两份已按实测改正并附更正注记，`NMCPS-DESIGN-001` 的 §6.2 数据源表同步改为「`runtime-inventory` 一次取全量」+ `PATCH` 归写动作。 |
 | 2026-11-05 | 0.39.32 | **落码前义务 4 已履行：`NMCPS-ARCH-002` 的 ⑨ 组守卫随 P1 代码落地（0.2.0 → 0.3.0）**。新增 `scripts/fixtures/simulator-openapi.json`（上游 `/openapi.json` 的机械投影：113 条路径 → 动词列表 + `_meta.source/capturedAt`，刷新入口唯一：`NUXT_SIMULATOR_BASE_URL=<上游> pnpm check:bff --refresh-simulator-snapshot`，超 180 天只告警）；`check:bff` 增第 ⑨ 组 21 个检查点并以 `127/127` 全绿收尾——⑨-1 未配 `baseUrl` 的 503 `simulator_not_configured` 与 `/api/sim`、`/api/sim/` 的 400 `bff_path_missing`；⑨-2 白名单内外与永久排除项（`browser` / `execute` / `test`）的 404、动词不符 405；⑨-3 编码穿越 400；⑨-4 `allowWrite` 两侧（关：405 且上游零命中，开：方法与路径原样到达）；⑨-5 在**假上游侧**记录请求头证明出站不带 `authorization`、不把 `nmcps_at` 转 Bearer；⑨-6 白名单 23 条 ⊆ 快照。另补 `server/api/sim/index.ts`（无路径段回 400，否则落到主网关会误报 `bff_resource_not_allowed`）与 `SIMULATOR_MESSAGES` 词汇表（§6.5）。反向验证：把一条模板改成 `/api/network/stats-v2`，⑨-6 立刻点名变红。 |
 | 2026-11-05 | 0.39.33 | **拓扑监控 `monitor` 页落码，同时还清类型契约的两处文档欠账**。① `NMCPS-CONTRACT-001` 0.4.0：增「§七 8888 拓扑图契约」并落盘 `shared/types/topology.ts`（节点 `id` 是管理 IP、`status` 数值口径 `1/2/0`、`bandwidth: 0` 是「没测到」而不是零带宽），并把此前只在文档里登记、文件尚未存在的 `shared/types/simulator.ts` 按 §6.3 实测形状补齐。② `NMCPS-DESIGN-001` 0.3.0：`/topology/monitor` 接两条通道（8888 `/topology/graph` + 8001 `runtime-inventory` / `stats`，按管理 IP 对齐后叠虚线外环标记），图形落 `app/components/Graph/{TopologyCanvas,SparkStat}.vue`、纯函数在 `app/utils/graph/*`、交互收敛在 `useGraphInteraction()`（无 rAF）；§九 补落地状态（A1/A2/A4~A8 进 `check:ui`，A3 与 LLDP / 台账 / 告警角标留 P1）。③ `check:ui` 增第 11 段与「仿真通道已配置」对照面：自建实例不配 `NUXT_SIMULATOR_BASE_URL` → 拓扑照常渲染、仿真动作全 disabled、写端点 405、`/ready` 仍 200；再起一个带仿真地址的实例，断言按 IP 对齐的「仿真中」标记真的画出来、降级条消失。假上游补 `/api/v1/topology/graph` 与 `__control/topology-{empty,full}`。 |
+| 2026-11-15 | 0.40.0 | 登记记录层 ADR `NMCPS-ADR-0020`「Mininet 实验后端的只读 BFF 通道」：独立第三上游 `/api/lab/**`、17 条 GET 查询白名单、出站不携带 authorization/cookie、导出与全部写操作/WebSocket 暂不开放；多用户隔离与 BFF 鉴权仍待裁决，26 项 `check:lab-bff` 守卫随阶段 A 落地。 |
+| 2026-11-15 | 0.41.0 | 登记记录层 ADR `NMCPS-ADR-0021`「仿真网络的租户隔离与访问裁决」：需求方选择**每租户独立运行实例**（方案 A），`/api/lab/**` 与 `/api/sim/**` 共用一套租户资源模型；租户只来自 BFF 签名会话，`x-tenant-id` / 请求体 / 查询参数不参与归属；权限位为 `lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`，租户普通用户默认只读、租户管理员额外增删改、终端与抓包单独授权；跨租户统一 404，平台管理员默认无运行态权限（只做元数据 / 配额 / 审计），单租户同引擎最多一张运行中网络（409）；BFF 台账与每租户实例注册表作为权限边界，上游 `sim_id` 不再当凭据。P0 同时落 `shared/constants/labPermissions.ts` 纯函数矩阵与 `check:lab-tenancy` 17 项断言；写操作、终端、抓包与 WS 在 P1~P4 完成前继续关闭。 |
+| 2026-11-15 | 0.42.0 | **ADR-0021 P1 落码**：登录 / 刷新签发 `nmcps_sess`（HMAC-SHA256、HttpOnly、SameSite=Lax、Path=/，`ath` 绑定访问令牌，双密钥验证窗口）；`/api/lab/**` 先校验签名会话与 `ath`，再经 IAM `subject-roles → roles/{id}` 解析角色并强制 `role.tenant_id === 会话 tid`，失败回 503 `bff_role_resolution_failed`，平台管理员回 403；Mininet 改为按 `NUXT_MININET_INSTANCES` 租户实例注册表路由，未命中回 503 `tenant_runtime_unavailable`，不回退全局 `baseUrl`；主网关出站头白名单移除 `x-tenant-id`。`check:lab-bff` 26 → 39 项（真实登录拿签名 cookie、无会话 401、篡改 / 凭据错配 401、平台 403、无实例 503、角色失败 503、缺密钥 503、租户实例零命中）；`check:bff` 128/128。P2 台账与跨租户资源 404 仍未落地。 |
+| 2026-11-15 | 0.43.0 | **ADR-0021 P2 落码并迁移仿真页**：`labLedger.ts` 以签名会话的 `tenant_id` + `engine` + BFF 资源 ID 为键记录网络归属，列表出口只保留本租户网络，节点 / 链路在台账未命中或清单外统一回 `404 lab_resource_not_found` 且上游零命中；无实例租户仍回 `503 tenant_runtime_unavailable`。`check:lab-bff` 39 → 51 项（⑥ 台账与清单出口、⑦ 台账未命中与空列表）。Mininet 路由 `/api/lab/**`、`MININET_ROUTES`、通道类型、BFF 实现（`labGuard` / `labLedger` / `labEgress` / `mininet*`）与自查脚本整体迁入 `layers/scenario`，删除空壳 `layers/lab`；新增 `/scenario/simulator`（读取台账 + 五类节点 + 链路，投影到 `TopologyCanvas`），旧 `/scenario/sim-generation` 仅保留重定向。 |

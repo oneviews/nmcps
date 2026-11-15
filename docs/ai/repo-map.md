@@ -1,0 +1,64 @@
+# AI 项目地图
+
+本仓库是**一个 Git 根目录 + 多个部署单元**的 monorepo。目录可以分开，AI 上下文必须统一。
+本文件是给 AI 的最短事实源；细节以对应代码和 `.clinerules` 为准。
+
+## 系统边界
+
+| 路径 | 职责 | 部署 |
+|---|---|---|
+| `app/`、`layers/*/app/` | Nuxt 4 前端与业务页面 | Nuxt 构建 |
+| `server/`、`layers/*/server/` | Nitro BFF，浏览器唯一出口 | 随 Nuxt 构建 |
+| `services/mininet-api/` | FastAPI + Mininet 实验后端 | 独立 Linux 服务/容器 |
+| `packages/contracts/` | FastAPI OpenAPI 生成快照 | 随前端构建消费 |
+| `packages/mininet-client/` | 下一阶段的 Lab REST/WS 客户端（尚未创建） | 随前端构建 |
+| `layers/scenario/` | 场景筹划 + 仿真网页面、`/api/lab/**` BFF 路由、路由白名单与自查脚本 | Nuxt 构建 |
+| `_reference/` | 只读参考代码 | 不部署 |
+
+旧 Vite 前端不在本仓库内，位于外部归档目录；**不要把它当作事实源**。
+
+## 数据流
+
+```text
+Browser/Tauri
+  → /api/**        → Nitro BFF → 主 API :8888
+  → /api/sim/**    → Nitro BFF → 仿真平台 :8001
+  → /api/lab/**    → Nitro BFF → Mininet API :8000（只读 GET）
+  → /lab-ws/*      → 反向代理 → Mininet API WebSocket（计划中，未开放）
+```
+
+浏览器**不得**直连 `:8000`。所有 Lab 写操作、终端、抓包都必须经过 BFF 鉴权与审计。
+
+## 常用命令
+
+| 命令 | 用途 |
+|---|---|
+| `pnpm dev` / `pnpm dev:web` | 启动 Nuxt |
+| `pnpm dev:lab-api` | 启动 Mininet FastAPI（`127.0.0.1:8000`） |
+| `pnpm lab:check` | 导入后端并校验 HTTP/WS 路由 |
+| `pnpm check:lab-bff` | 校验 `/api/lab/**` 只读 BFF 通道（需先 `build:server`） |
+| `pnpm contracts:gen` | 重新生成 Mininet OpenAPI 快照 |
+| `pnpm contracts:check` | 校验快照是否过期 |
+| `pnpm lint` | ESLint |
+| `pnpm typecheck` | vue-tsc |
+| `pnpm check:governance` | 文档 / 规则 / CI 治理守卫 |
+
+## 改动影响矩阵
+
+| 改动 | 必须同步 |
+|---|---|
+| Mininet 路由或 Pydantic schema | `packages/contracts/openapi/mininet.json`、BFF 白名单、client |
+| Lab REST 调用 | `packages/mininet-client` → `layers/scenario`，禁止页面内 axios |
+| Lab WebSocket | BFF/反代配置、ticket 鉴权、client 重连逻辑 |
+| 新增 Lab 文案 | `i18n/locales/{cn,en}.json`，跑 `pnpm check:i18n` |
+| 新增 Lab 页面 | `layers/scenario/app/pages/scenario`、导航、权限 meta |
+| 后端特权操作 | 权限位、审计、二次确认、`allowWrite` 开关 |
+
+## 禁止事项
+
+- 不新增第二个 Git 根、submodule 或跨仓库相对引用。
+- 不在 `.vue` / composable 里硬编码 `http://...:8000`。
+- 不把旧 Vite 组件整页复制进 `layers/scenario`。
+- 不把生产拓扑模型 `TopologyGraph` 和实验拓扑模型混用（仿真网页面只做只读投影）。
+- 不手改生成文件 `packages/contracts/openapi/mininet.json`。
+- 不在未隔离的多用户环境中暴露全局 `reset` / 终端 / 抓包。
