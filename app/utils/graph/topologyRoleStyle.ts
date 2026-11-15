@@ -29,7 +29,7 @@ export type RoleColor = "boundary" | "core" | "distro" | "access" | "terminal";
 export const TOPOLOGY_NODE_ROLES: readonly TopologyNodeRole[] = ["root", "core", "distro", "access", "terminal"];
 
 /**
- * 层色（画布外圈 `stroke-*` / 图例色块 `border-*` 两张类名并列写在 `ROLE_TONE` 里）。
+ * 层色（画布外圈 `stroke-*` / 图例色块 `border-*` / 圆内设备图标 `text-*` 三张类名并列写在 `ROLE_TONE` 里）。
  *
  * 五档色（2026-11-09 用户指定）：边界 `#f33` / 核心 `#f3c` / 汇聚 `#c63` / 接入 `#369` / 终端 `#0c6`。
  * 根（网控中心）现在有自己的第五档红（`#f33`），不再借用中性深色 —— 五层各自一色，
@@ -38,12 +38,12 @@ export const TOPOLOGY_NODE_ROLES: readonly TopologyNodeRole[] = ["root", "core",
  * 值本身在 `app/assets/css/main.css` 的 `--topology-tier-*`（唯一源）：Tailwind 的
  * `stroke-(--x)` / `border-(--x)` 语法直接吃 CSS 变量，组件的类名表里不留 hex。
  */
-const ROLE_TONE: Record<TopologyNodeRole, { stroke: string, dot: string }> = {
-	root: { stroke: "stroke-(--topology-tier-boundary)", dot: "border-(--topology-tier-boundary)" },
-	core: { stroke: "stroke-(--topology-tier-core)", dot: "border-(--topology-tier-core)" },
-	distro: { stroke: "stroke-(--topology-tier-distro)", dot: "border-(--topology-tier-distro)" },
-	access: { stroke: "stroke-(--topology-tier-access)", dot: "border-(--topology-tier-access)" },
-	terminal: { stroke: "stroke-(--topology-tier-terminal)", dot: "border-(--topology-tier-terminal)" }
+const ROLE_TONE: Record<TopologyNodeRole, { stroke: string, dot: string, text: string }> = {
+	root: { stroke: "stroke-(--topology-tier-boundary)", dot: "border-(--topology-tier-boundary)", text: "text-(--topology-tier-boundary)" },
+	core: { stroke: "stroke-(--topology-tier-core)", dot: "border-(--topology-tier-core)", text: "text-(--topology-tier-core)" },
+	distro: { stroke: "stroke-(--topology-tier-distro)", dot: "border-(--topology-tier-distro)", text: "text-(--topology-tier-distro)" },
+	access: { stroke: "stroke-(--topology-tier-access)", dot: "border-(--topology-tier-access)", text: "text-(--topology-tier-access)" },
+	terminal: { stroke: "stroke-(--topology-tier-terminal)", dot: "border-(--topology-tier-terminal)", text: "text-(--topology-tier-terminal)" }
 };
 
 /** 图例色块 / 徽标语义色（与描边同源，避免「图例和画布不是一个颜色」） */
@@ -76,6 +76,9 @@ const ROLE_RADIUS: Record<TopologyNodeRole, number> = {
  * 1.0 是「圆点直径 = 节点直径 × 0.2」（`statusDotSizeOf()`）；2.0 的塔型画布会被 `viewBox`
  * 缩到 0.3~0.5 倍，×0.2 在屏幕上只剩 1px（状态等于看不见），故按 2 倍放大 —— 语义不变
  * （状态只走圆点、不改外圈），只是把 1.0 在 1:1 画布上的可读比例搬过来。
+ *
+ * 位置：2026-11-15 起圆心让给设备图标，圆点沿 45° 落到**圆环右下角**（距离 `r × √2/2`），
+ * 半径仍是本系数 × 节点半径 —— 变的只是落点，状态语义与比例都没动（§七）。
  */
 export const STATUS_DOT_RATIO = 0.38;
 
@@ -170,6 +173,17 @@ export function roleDotClass(role: TopologyNodeRole): string {
 	return ROLE_TONE[role].dot;
 }
 
+/**
+ * 圆内设备图标的**前景色**类（SVG `<svg>` 根上的 `color`）。
+ *
+ * Carbon 图标体用的是 `currentColor`，所以 `text-*` 这一档就是图标颜色 —— 与描边共用
+ * `ROLE_TONE` 的同一张表，保证「外圈是什么颜色，里面的图标就是什么颜色」（一处色板、
+ * 两处上色）。画布上不能写 hex（§七），这里只给类名。
+ */
+export function roleTextClass(role: TopologyNodeRole): string {
+	return ROLE_TONE[role].text;
+}
+
 /** 角色语义色（图例 `UBadge` / 列表色块） */
 export function roleColor(role: TopologyNodeRole): RoleColor {
 	return ROLE_COLOR[role];
@@ -178,6 +192,21 @@ export function roleColor(role: TopologyNodeRole): RoleColor {
 /** 角色半径（画布逻辑单位） */
 export function nodeRadiusOf(role: TopologyNodeRole): number {
 	return ROLE_RADIUS[role];
+}
+
+/**
+ * 圆内设备图标的边长 = 节点半径 × 本系数。
+ *
+ * Carbon 的图形体在 32×32 视图盒里自带内边距（多数笔画落在 2~30 之间），所以「视图盒边长」
+ * 不等于「看得见的笔画宽度」：×1.4 时图标只占圆的一半，屏幕上认不出是什么设备；×1.6 之后
+ * 笔画半径约 `0.7r`，仍完整落在圆环以内，图形既认得出来又不会顶出外圈（§七）。
+ * 视图盒是透明的，四个角超出圆环也看不见。取整到整像素，避免嵌套 `<svg>` 的 `x/y` 半像素抖动。
+ */
+export const NODE_ICON_RATIO = 1.6;
+
+/** 圆内设备图标的边长（画布逻辑单位） */
+export function nodeIconSizeOf(role: TopologyNodeRole): number {
+	return Math.round(ROLE_RADIUS[role] * NODE_ICON_RATIO);
 }
 
 /** 中心状态圆点半径（随节点半径等比缩放） */

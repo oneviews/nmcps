@@ -1767,6 +1767,44 @@ export async function startUpstream(port) {
 			});
 		}
 
+		/**
+		 * Mininet 实验后端形状（NMCPS-ADR-0020 / 2026-11-15）：给 `/scenario/simulator`
+		 * 的端到端自查用。五类节点分别回对象字典（真实上游口径），链路回数组；
+		 * 节点带 `x` / `y`，页面会按这些坐标投影到 `TopologyCanvas`。
+		 */
+		if (url.pathname === "/api/mininet/hosts" && req.method === "GET") {
+			return send(200, {
+				h1: { name: "h1", ip: "10.0.0.1", mac: "00:00:00:00:00:01", x: 80, y: 120 },
+				h2: { name: "h2", ip: "10.0.0.2", mac: "00:00:00:00:00:02", x: 80, y: 260 }
+			});
+		}
+		if (url.pathname === "/api/mininet/switches" && req.method === "GET") {
+			return send(200, {
+				sw1: { name: "sw1", x: 260, y: 190, ports: 4 }
+			});
+		}
+		if (url.pathname === "/api/mininet/routers" && req.method === "GET") {
+			return send(200, {
+				r1: { name: "r1", x: 440, y: 190 }
+			});
+		}
+		if (url.pathname === "/api/mininet/nats" && req.method === "GET") {
+			return send(200, {
+				nat1: { name: "nat1", x: 620, y: 120 }
+			});
+		}
+		if (url.pathname === "/api/mininet/controllers" && req.method === "GET") {
+			return send(200, {
+				c0: { name: "c0", x: 620, y: 260 }
+			});
+		}
+		if (url.pathname === "/api/mininet/links" && req.method === "GET") {
+			return send(200, [
+				{ from: "h1", to: "sw1" },
+				{ from: "sw1", to: "r1" }
+			]);
+		}
+
 		if (url.pathname === "/device/ok")
 			return send(200, { id: "dev-1", name: "ok" });
 		if (url.pathname === "/device/envelope")
@@ -1780,7 +1818,8 @@ export async function startUpstream(port) {
 		if (url.pathname === "/device/echo") {
 			return send(200, {
 				authorization: req.headers.authorization ?? null,
-				evil: req.headers["x-evil"] ?? null
+				evil: req.headers["x-evil"] ?? null,
+				tenant: req.headers["x-tenant-id"] ?? null
 			});
 		}
 		if (url.pathname === "/device/stream") {

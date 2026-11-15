@@ -804,9 +804,45 @@
 			"description": "Five-step topology wizard: define layers and devices, plan terminal IPs, generate and save a Mininet scenario YAML (consumed by Simulation validation).",
 			"title": "Task planning"
 		},
-		"scenario-sim-generation": {
-			"description": "Minimal console: scene picking, session start/stop, three topology modes and Mininet CLI triage.",
-			"title": "Simulation"
+		"scenario-simulator": {
+			"description": "Live Mininet topology from the lab ledger: hosts, switches, routers, NAT and controllers with their links.",
+			"title": "Simulation",
+			"toolbar": {
+				"refresh": "Refresh",
+				"labels": "Labels"
+			},
+			"stats": {
+				"network": "Network",
+				"nodes": "Nodes",
+				"links": "Links"
+			},
+			"empty": {
+				"title": "No simulation network",
+				"body": "The lab ledger has no network visible to this account. Start a simulation first, then refresh.",
+				"topology": "This network has no hosts, switches or links yet."
+			},
+			"error": {
+				"title": "Unable to read the simulation network"
+			},
+			"canvasLabel": "Simulation topology",
+			"network": {
+				"title": "Network",
+				"id": "ID",
+				"engine": "Engine",
+				"state": "State",
+				"nodeCount": "Nodes"
+			},
+			"detail": {
+				"title": "Details",
+				"hint": "Select a node or a link on the canvas.",
+				"id": "ID",
+				"ip": "IP",
+				"mac": "MAC",
+				"links": "Links",
+				"link": "Link",
+				"from": "From",
+				"to": "To"
+			}
 		},
 		"device": {
 			"description": "Manage communication device links.",

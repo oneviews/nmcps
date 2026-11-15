@@ -172,14 +172,43 @@
 						class="fill-(--ui-bg-elevated)"
 						:class="roleStrokeClass(item.role)"
 					/>
-					<!-- 中心状态圆点：状态语义的唯一载体（1.0 `statusDotNode`，§七） -->
+					<!--
+						设备类型图标（§七，2026-11-15）：`<UIcon mode="svg">` 渲染成**嵌套 `<svg>`**
+						（Vue 把 `svg` 命名空间透传进组件子树，`x` / `y` 落在它自己的根上），图标集合取
+						本地 `@iconify-json/carbon` —— 离线可用、不联网取图标。颜色是本层层色
+						（`roleTextClass()`，与描边同源）；`pointer-events-none` 把命中留给节点 `<g>`，
+						`aria-hidden` 让屏幕阅读器只念 `<g>` 的 `aria-label`。
+						图标名由 `nodeIconOf(item.node, item.tier)` 决定：交换机分二层 / 三层、AP 分
+						末梢 / 三层 —— 层数**先看名称**（汇聚 / 核心 vs 接入）、再看 `type`（上游几乎全写成
+						`access`）；`item.tier` 只在两者都说不出时兜底（§七）。
+					-->
+					<UIcon
+						data-testid="topology-node-icon"
+						:data-node-icon="nodeIconOf(item.node, item.tier)"
+						:name="nodeIconOf(item.node, item.tier)"
+						mode="svg"
+						:width="nodeIconSize(item)"
+						:height="nodeIconSize(item)"
+						:x="item.x - nodeIconSize(item) / 2"
+						:y="item.y - nodeIconSize(item) / 2"
+						aria-hidden="true"
+						class="pointer-events-none"
+						:class="roleTextClass(item.role)"
+					/>
+					<!--
+						状态圆点：状态语义的唯一载体（1.0 `statusDotNode`，§七）。圆心让给设备图标之后，
+						沿 45° 落在**圆环右下角**（距离 `r × √2/2`），半径仍是 0.38r；1.5px 的
+						`--ui-bg-elevated` 描边把它从圆环上「咬」出来，与右上告警角标 / 左下收起角标
+						同一套「角标压在环上」的画法。状态变化只改这一枚的填色，外圈与图标都不动。
+					-->
 					<circle
 						data-testid="topology-node-dot"
 						:data-node-status="normalizeNodeStatus(item.node.status)"
-						:cx="item.x"
-						:cy="item.y"
+						:cx="item.x + statusDotOffset(item)"
+						:cy="item.y + statusDotOffset(item)"
 						:r="statusDotRadius(item.role)"
-						class="stroke-none"
+						stroke-width="1.5"
+						class="stroke-(--ui-bg-elevated)"
 						:class="nodeFillClass(normalizeNodeStatus(item.node.status))"
 					/>
 					<!--
@@ -282,10 +311,11 @@
 	import { alarmBadgeFillClass, alarmBadgeText } from "~~/app/utils/graph/topologyAlarms";
 	import { LABEL_GAP, LABEL_LINE_HEIGHT } from "~~/app/utils/graph/topologyLabelLayout";
 	import { linkDashPatternOf, linkHaloOpacityOf, linkHaloWidthOf, linkStrokeWidthOf } from "~~/app/utils/graph/topologyLinkStyle";
+	import { nodeIconOf } from "~~/app/utils/graph/topologyNodeIcon";
 	import { applyNodeOffsets } from "~~/app/utils/graph/topologyNodeOffsets";
 
 	import { normalizeLinkStatus, normalizeNodeStatus, topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
-	import { nodeRadiusOf, roleStrokeClass, statusDotRadius } from "~~/app/utils/graph/topologyRoleStyle";
+	import { nodeIconSizeOf, nodeRadiusOf, roleStrokeClass, roleTextClass, statusDotRadius } from "~~/app/utils/graph/topologyRoleStyle";
 	import { linkStrokeClass, nodeFillClass } from "~~/app/utils/graph/topologyStatusStyle";
 
 	const props = defineProps<{
@@ -643,6 +673,19 @@
 	/** 节点半径（按层级角色，§七）：外圈 / 仿真环 / 标签偏移三处共用同一个值 */
 	function nodeRadius(item: PositionedTopologyNode): number {
 		return nodeRadiusOf(item.role);
+	}
+
+	/** 圆内设备图标的边长（半径 × 1.6）：笔画仍落在圆环以内，图案不会顶出外圈（§七） */
+	function nodeIconSize(item: PositionedTopologyNode): number {
+		return nodeIconSizeOf(item.role);
+	}
+
+	/**
+	 * 状态圆点在圆环右下角的偏移：`r × √2/2` 正好是圆环上的 45° 点。
+	 * 圆心让给设备图标之后，状态点只挪落点、不挪语义（半径仍由 `statusDotRadius()` 给）。
+	 */
+	function statusDotOffset(item: PositionedTopologyNode): number {
+		return Math.round(nodeRadius(item) * Math.SQRT1_2 * 10) / 10;
 	}
 
 	/** 名称是否渲染（缺省开）：关掉后塔型只剩节点与状态圆点，窄屏更容易看出层级 */

@@ -1596,16 +1596,77 @@ if (upstreamPort) {
 		`${topoPath} / ${topoText.includes("拓扑监测") ? "标题已渲染" : "未见标题"}`
 	);
 
-	const shapes = await page.evaluate(() => {
+	/**
+	 * A2：拓扑渲染出画布，且**每台设备圆内都有一枚设备类型的 Carbon 图标**（§七，2026-11-15 加钉）。
+	 * 图标由 `<UIcon mode="svg">` 渲染成嵌套 `<svg>`，读数因此落在节点 `<g>` 里的
+	 * `[data-testid='topology-node-icon']` 的 `data-node-icon` 上（不是外层 `circle`）。
+	 * 默认样本逐台钉死：核心 → 路由、汇聚 → 三层交换、接入 → 二层交换、末梢 AP → `carbon:wifi`、
+	 * 终端 → 笔记本（判据表见 `app/utils/graph/topologyNodeIcon.ts`：层数**先看名称**再看 `type`，
+	 * 所以 `type: "access"` 的「汇聚交换机-1」仍是三层；AP 只有名称写明「三层」才是
+	 * `carbon:router-wifi`，样本里的 `10.0.0.4` 是末梢 AP，因此 `carbon:wifi`）。
+	 */
+	const canvasProbe = await page.evaluate(() => {
 		const svg = document.querySelector("[data-testid='topology-canvas']");
-		return svg
-			? { circles: svg.querySelectorAll("circle").length, paths: svg.querySelectorAll("path").length }
-			: null;
+		if (!svg)
+			return null;
+		const iconEl = (id) => svg.querySelector(`[data-testid='topology-node'][data-node-id='${id}'] [data-testid='topology-node-icon']`);
+		const iconEls = Array.from(svg.querySelectorAll("[data-testid='topology-node-icon']"));
+		const nodes = svg.querySelectorAll("[data-testid='topology-node']").length;
+		const icons = iconEls.map((el) => el.getAttribute("data-node-icon") ?? "");
+		/** 图标体真的画出来了吗：合法的 Carbon 名会渲染 `<path>`，非法名只留一个空 `<svg>`（A48 踩过） */
+		const core = svg.querySelector("[data-testid='topology-node'][data-node-id='10.0.0.1']");
+		const coreGlyph = core?.querySelector("[data-testid='topology-node-icon'] path, [data-testid='topology-node-icon'] circle, [data-testid='topology-node-icon'] rect, [data-testid='topology-node-icon'] line, [data-testid='topology-node-icon'] polygon");
+		const coreShape = core?.querySelector("[data-testid='topology-node-shape']");
+		return {
+			circles: svg.querySelectorAll("circle").length,
+			paths: svg.querySelectorAll("path").length,
+			nodes,
+			icons: icons.length,
+			carbon: icons.every((name) => name.startsWith("carbon:")),
+			drawn: iconEls.filter((el) => el.childElementCount > 0).length,
+			/** 图标颜色必须等于本层层色（Carbon 体用 `currentColor`，`roleTextClass()` 与描边同源） */
+			fill: coreGlyph ? getComputedStyle(coreGlyph).fill : "",
+			ring: coreShape ? getComputedStyle(coreShape).stroke : "",
+			mapping: ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"].map((id) => iconEl(id)?.getAttribute("data-node-icon") ?? "")
+		};
 	});
+	const expectedIcons = ["carbon:router", "carbon:switch-layer-3", "carbon:switch-layer-2", "carbon:wifi", "carbon:laptop"];
+	/**
+	 * A2 续（同一条用例，不新增计数）：**名称压过 `type`**。`__control/topology-same-tier` 的 8 台
+	 * 设备 `type` 全是 `access`（现网口径），逐台读图标即可证明判据顺序 —— 若 `type` 优先，
+	 * 「汇聚交换机-1」会是 `carbon:switch-layer-2`、「核心路由器-1」会是交换机图标（2026-11-15
+	 * 用户实测指出）；胖 AP 也必须留在 `carbon:wifi`（它带路由，但不是三层 AP）。
+	 * 只在自建模式跑（外部实例没有假上游的控制端点），读不到时该条不加钉。
+	 */
+	let sameTierIcons = null;
+	if (upstreamPort) {
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-same-tier`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(600);
+		sameTierIcons = await page.evaluate((ids) => {
+			const svg = document.querySelector("[data-testid='topology-canvas']");
+			if (!svg)
+				return null;
+			return ids.map((id) => svg.querySelector(`[data-testid='topology-node'][data-node-id='${id}'] [data-testid='topology-node-icon']`)?.getAttribute("data-node-icon") ?? "");
+		}, ["10.0.3.1", "10.0.3.2", "10.0.3.3", "10.0.3.4", "10.0.3.10", "10.0.3.21"]);
+		// 复位默认样本：后面的断言仍按 6 节点样本读数
+		await fetch(`http://${HOST}:${upstreamPort}/__control/topology-default`);
+		await page.reload({ waitUntil: "networkidle" });
+		await page.waitForTimeout(400);
+	}
+	const expectedSameTier = ["carbon:router", "carbon:switch-layer-3", "carbon:switch-layer-2", "carbon:switch-layer-2", "carbon:wifi", "carbon:laptop"];
+	const sameTierOk = !upstreamPort || (!!sameTierIcons && sameTierIcons.join(",") === expectedSameTier.join(","));
 	log(
-		"A2 拓扑渲染出 canvas（节点 circle + 链路 path > 0）",
-		!!shapes && shapes.circles > 0 && shapes.paths > 0,
-		shapes ? `circles=${shapes.circles} paths=${shapes.paths}` : "未找到 [data-testid='topology-canvas']"
+		"A2 拓扑渲染出 canvas（节点 circle + 链路 path > 0，且每台设备带 Carbon 图标）",
+		!!canvasProbe && canvasProbe.circles > 0 && canvasProbe.paths > 0
+		&& canvasProbe.nodes > 0 && canvasProbe.icons === canvasProbe.nodes
+		&& canvasProbe.carbon && canvasProbe.mapping.join(",") === expectedIcons.join(",")
+		&& canvasProbe.drawn === canvasProbe.icons
+		&& !!canvasProbe.fill && canvasProbe.fill === canvasProbe.ring
+		&& sameTierOk,
+		canvasProbe
+			? `circles=${canvasProbe.circles} paths=${canvasProbe.paths} icons=${canvasProbe.icons}/${canvasProbe.nodes} drawn=${canvasProbe.drawn} fill=${canvasProbe.fill} ring=${canvasProbe.ring} mapping=${canvasProbe.mapping.join(",")} 名称优先=${sameTierIcons ? sameTierIcons.join(",") : "外部实例未校验"}`
+			: "未找到 [data-testid='topology-canvas']"
 	);
 
 	// A6：自建实例没有 `NUXT_SIMULATOR_BASE_URL` → 拓扑照常渲染。（2026-11-09 起画布上不再有
@@ -4842,6 +4903,136 @@ if (upstreamPort) {
 	} finally {
 		await stopBff(writeBff);
 		await closeUpstream(writeSimulator);
+	}
+}
+
+// 11.3 实验网只读页（NMCPS-ADR-0021 P2 / NMCPS-ADR-0020）：`/scenario/simulator`
+// 的数据源是 `/api/lab/networks` + 五类节点 + 链路。这里分两个 BFF：
+//   ① 空台账：页面必须明确说「暂无仿真网络」，而不是画一张空画布；
+//   ② 有台账：节点 / 链路真的投影到画布，选中节点与链路时右侧详情跟着切换。
+// 假 Mininet 端点已由 `startUpstream()` 提供（对象字典 + 数组），不需要再起第三个上游。
+if (upstreamPort) {
+	const LAB_TENANT = "t_default";
+	const labSecret = "check-ui-lab-session-secret-0123456789abcdef";
+	const labSeed = [{
+		id: "net_ui",
+		tenant_id: LAB_TENANT,
+		engine: "mininet",
+		upstream_id: "mininet-t_default",
+		state: "running",
+		created_by: "u_alice",
+		created_at: "2026-11-15T00:00:00.000Z",
+		updated_at: "2026-11-15T00:00:00.000Z"
+	}];
+
+	const loginToLab = async (targetPage, base) => {
+		await targetPage.goto(`${base}/auth/login`, { waitUntil: "networkidle" });
+		await targetPage.locator("input[autocomplete='username']").fill(ACCOUNT);
+		await targetPage.locator("input[type='password']").fill(PASSWORD);
+		await targetPage.locator("button[type='submit']").first().click();
+		await targetPage.waitForURL((url) => url.pathname !== "/auth/login", { timeout: 20_000 }).catch(() => {});
+		await targetPage.goto(`${base}/scenario/simulator`, { waitUntil: "networkidle" });
+		await targetPage.waitForTimeout(800);
+	};
+
+	const emptyPort = await freePort();
+	const emptyBase = `http://${HOST}:${emptyPort}`;
+	const emptyBff = await startBff(emptyPort, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		NUXT_BFF_SESSION_SECRET: labSecret,
+		NUXT_LAB_LEDGER_FILE: `.data/check-ui-lab-empty-${process.pid}.json`,
+		NUXT_LAB_LEDGER_SEED: ""
+	});
+
+	try {
+		const emptyContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const emptyPage = await emptyContext.newPage();
+		await loginToLab(emptyPage, emptyBase);
+		const emptyProbe = await emptyPage.evaluate(() => ({
+			empty: !!document.querySelector("[data-testid='mininet-empty']"),
+			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+			error: !!document.querySelector("[data-testid='mininet-error']"),
+			text: (document.body.textContent ?? "").replace(/\s+/g, " ").trim()
+		}));
+		log(
+			"11.3 空台账显示「暂无仿真网络」，不画空画布也不报错",
+			emptyProbe.empty && !emptyProbe.canvas && !emptyProbe.error && emptyProbe.text.includes("暂无仿真网络"),
+			`empty=${emptyProbe.empty} canvas=${emptyProbe.canvas} error=${emptyProbe.error}`
+		);
+		await emptyContext.close();
+	} finally {
+		await stopBff(emptyBff);
+	}
+
+	const labPort = await freePort();
+	const labBase = `http://${HOST}:${labPort}`;
+	const labBff = await startBff(labPort, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		NUXT_BFF_SESSION_SECRET: labSecret,
+		NUXT_LAB_LEDGER_FILE: `.data/check-ui-lab-${process.pid}.json`,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify(labSeed),
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: `http://${HOST}:${upstreamPort}` } })
+	});
+
+	try {
+		const labContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const labPage = await labContext.newPage();
+		await loginToLab(labPage, labBase);
+
+		const topologyProbe = await labPage.evaluate(() => {
+			const statText = (id) => (document.querySelector(`[data-testid='${id}']`)?.textContent ?? "").replace(/\s+/g, " ").trim();
+			return {
+				nodes: document.querySelectorAll("[data-testid='topology-node']").length,
+				links: document.querySelectorAll("[data-testid='topology-link']").length,
+				network: statText("mininet-stat-network"),
+				nodeStat: statText("mininet-stat-nodes"),
+				linkStat: statText("mininet-stat-links"),
+				body: (document.body.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		log(
+			"11.3 有台账时五类节点与链路投影到画布，网络卡片显示台账事实",
+			topologyProbe.nodes === 6 && topologyProbe.links === 2
+			&& topologyProbe.nodeStat.includes("6") && topologyProbe.linkStat.includes("2")
+			&& topologyProbe.body.includes("net_ui") && topologyProbe.body.includes("running"),
+			`nodes=${topologyProbe.nodes} links=${topologyProbe.links}`
+			+ ` 状态=「${topologyProbe.network}」节点=「${topologyProbe.nodeStat}」链路=「${topologyProbe.linkStat}」`
+		);
+
+		await labPage.evaluate(() => {
+			document.querySelector("[data-testid='topology-node'][data-node-id='h1']")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await labPage.waitForTimeout(200);
+		const nodeDetail = await labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-detail']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+		);
+		log(
+			"11.3 选中节点后详情栏显示节点 id / IP / MAC / 直连链路数",
+			nodeDetail.includes("h1") && nodeDetail.includes("10.0.0.1")
+			&& nodeDetail.includes("00:00:00:00:00:01") && /链路\s*1/.test(nodeDetail),
+			nodeDetail.slice(0, 160) || "详情栏为空"
+		);
+
+		await labPage.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-testid='topology-link-hit']"))
+				.find((el) => (el.getAttribute("data-link-hit-key") ?? "").includes("h1"));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await labPage.waitForTimeout(200);
+		const linkDetail = await labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-detail']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+		);
+		log(
+			"11.3 选中链路后详情栏切换到链路起点 / 终点",
+			linkDetail.includes("h1") && linkDetail.includes("sw1")
+			&& linkDetail.includes("↔") && linkDetail.includes("起点") && linkDetail.includes("终点"),
+			linkDetail.slice(0, 160) || "详情栏为空"
+		);
+
+		await labContext.close();
+	} finally {
+		await stopBff(labBff);
 	}
 }
 
