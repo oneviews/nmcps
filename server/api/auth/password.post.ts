@@ -10,6 +10,7 @@ import {
 	respondAuth
 } from "~~/server/utils/bff/auth";
 import { authPasswordSchema, parseAuthBody } from "~~/server/utils/bff/authSchema";
+import { clearLabRoleCache } from "~~/server/utils/bff/iamRoles";
 
 /**
  * `POST /api/auth/password` → 上游 `PUT /api/v1/iam/password`（`{ old_password, new_password }`）。
@@ -48,6 +49,9 @@ export default defineEventHandler(async (
 	if (!isAuthSuccess(upstream)) {
 		return authFailureResponse(event, upstream, 400);
 	}
+
+	// 改密后角色授权可能已变化；缓存最多 60s，主动清一次
+	clearLabRoleCache();
 
 	return respondAuth(event, 200, "success", { data: { ok: true } });
 });

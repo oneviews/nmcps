@@ -9,6 +9,7 @@ import {
 	readSessionUser,
 	respondAuth
 } from "~~/server/utils/bff/auth";
+import { clearLabRoleCache } from "~~/server/utils/bff/iamRoles";
 
 /**
  * `POST /api/auth/logout` → 上游 `POST /api/v1/iam/logout`（Bearer + `{ user_id }`）。
@@ -36,6 +37,7 @@ export default defineEventHandler(async (event): Promise<ApiResponse<AuthOkResul
 	}
 
 	clearSessionCookies(event);
+	clearLabRoleCache();
 
 	return respondAuth(event, 200, "success", { data: { ok: true } });
 });

@@ -9,6 +9,13 @@
 	"license": "MIT",
 	"scripts": {
 		"dev": "nuxt dev",
+		"dev:web": "nuxt dev",
+		"dev:lab-api": "python3 -m uvicorn mininet_gui_backend.api:app --app-dir services/mininet-api --host 127.0.0.1 --port 8000",
+		"lab:check": "python3 scripts/check-mininet-api.py",
+		"check:lab-bff": "node layers/scenario/scripts/check-lab-bff.mjs",
+		"check:lab-tenancy": "tsx scripts/check-lab-tenancy.ts",
+		"contracts:gen": "python3 scripts/gen-mininet-contracts.py",
+		"contracts:check": "python3 scripts/gen-mininet-contracts.py --check",
 		"generate": "nuxt generate",
 		"build:server": "nuxt build",
 		"start": "node .output/server/index.mjs",

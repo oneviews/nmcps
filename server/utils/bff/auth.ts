@@ -13,6 +13,7 @@ import {
 } from "h3";
 import { getBffConfig, isOriginAllowed } from "./config";
 import { proxyToUpstream } from "./proxy";
+import { clearLabSessionCookie, issueLabSessionCookie } from "./session";
 
 /**
  * `/api/auth/*` 的会话实现：令牌落 HttpOnly cookie（web）/ 回传 body（桌面）。
@@ -178,6 +179,10 @@ export function applySessionCookies(event: H3Event, tokens: IamTokens, user?: Au
 			path: USER_COOKIE_PATH,
 			maxAge: toMaxAge(config.refreshTtlMs)
 		});
+
+		// 实验通道只认签名会话（NMCPS-ADR-0021 §4.1）；密钥缺失时这里静默跳过，
+		// 由 `/api/lab/**` 回 503 bff_auth_not_configured，不影响普通登录。
+		issueLabSessionCookie(event, user, tokens.access_token, config.sessionTtlMs);
 	}
 }
 
@@ -216,6 +221,7 @@ export function clearSessionCookies(event: H3Event): void {
 	deleteCookie(event, config.tokenCookieName, { path: ACCESS_COOKIE_PATH });
 	deleteCookie(event, config.refreshCookieName, { path: REFRESH_COOKIE_PATH });
 	deleteCookie(event, USER_COOKIE_NAME, { path: USER_COOKIE_PATH });
+	clearLabSessionCookie(event);
 }
 
 /**

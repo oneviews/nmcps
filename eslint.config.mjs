@@ -16,7 +16,11 @@ export default withNuxt(
 				"src-tauri/**",
 				"**/*.md",
 				"pnpm-workspace.yaml",
-				"_reference/**"
+				"_reference/**",
+				// Python 后端由 lab:check 校验，不归 ESLint
+				"services/**",
+				// 生成契约，由 contracts:check 校验，不手改
+				"packages/contracts/openapi/**"
 			],
 			rules: {
 				curly: "off",

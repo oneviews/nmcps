@@ -301,6 +301,9 @@ try {
 	const headerAllowlist = await request(proxyPort, "/api/device/echo", { headers: { "x-evil": "1" } });
 	log("非白名单请求头不转发给上游", headerAllowlist.json?.data?.evil === null, describe(headerAllowlist.json?.data?.evil));
 
+	const tenantHeader = await request(proxyPort, "/api/device/echo", { headers: { "x-tenant-id": "t_spoofed" } });
+	log("客户端 x-tenant-id 不转发给上游（租户只来自签名会话）", tenantHeader.json?.data?.tenant === null, describe(tenantHeader.json?.data?.tenant));
+
 	const noStore = await request(proxyPort, "/api/device/ok");
 	log("网关响应禁止缓存（cache-control: no-store）", noStore.headers.get("cache-control") === "no-store", describe(noStore.headers.get("cache-control")));
 } finally {

@@ -5,13 +5,17 @@ import { BFF_UPSTREAM_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { isApiEnvelope } from "~~/shared/utils/apiGuard";
 import { getBffConfig } from "./config";
 
-/** 允许透传给上游的客户端请求头（其余一律丢弃，避免协议走私） */
+/**
+ * 允许透传给上游的客户端请求头（其余一律丢弃，避免协议走私）。
+ *
+ * `x-tenant-id` 必须被剥离：租户只能来自 BFF 签名会话（NMCPS-ADR-0021 §4.1），
+ * 任何客户端自带的租户头都不可信。
+ */
 const FORWARDED_REQUEST_HEADERS = [
 	"accept",
 	"accept-language",
 	"content-type",
 	"user-agent",
-	"x-tenant-id",
 	"x-request-id"
 ];
 

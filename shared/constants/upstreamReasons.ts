@@ -53,3 +53,26 @@ export const SIMULATOR_MESSAGES = {
 } as const;
 
 export type SimulatorMessage = (typeof SIMULATOR_MESSAGES)[keyof typeof SIMULATOR_MESSAGES];
+
+/**
+ * Mininet 实验后端（第三上游）的失败词汇表。
+ *
+ * 与主上游 / 仿真平台分开命名：页面据此判断“实验床没开”而不是“主业务失败”。
+ * 依据 NMCPS-ADR-0020（layers/content/collections/cn/records/adr/adr-0020.md）。
+ */
+export const MININET_MESSAGES = {
+	/** 运维未配置 `NUXT_MININET_BASE_URL`（通道未启用，不是错误） */
+	notConfigured: "mininet_not_configured",
+	/** Mininet 后端不可达（DNS / 连接被拒 / 掉线） */
+	unreachable: "mininet_unreachable",
+	/** Mininet 后端在超时窗口内没有响应 */
+	timeout: "mininet_timeout",
+	/** 配置的基址不合法（拼接失败） */
+	baseInvalid: "mininet_base_invalid",
+	/** 会话租户没有对应实例（NMCPS-ADR-0021 §5.2；不得回退到别的租户实例） */
+	tenantRuntimeUnavailable: "tenant_runtime_unavailable",
+	/** 台账没有该资源，或资源属于别的租户（D4：不区分「不存在」与「别人的」） */
+	resourceNotFound: "lab_resource_not_found"
+} as const;
+
+export type MininetMessage = (typeof MININET_MESSAGES)[keyof typeof MININET_MESSAGES];

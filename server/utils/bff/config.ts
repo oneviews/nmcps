@@ -17,6 +17,14 @@ export interface BffConfig {
 	accessTtlMs: number
 	/** 刷新令牌有效期（毫秒；上游不返回刷新 TTL，只能配置兜底） */
 	refreshTtlMs: number
+	/** 签名会话 cookie 名（`nmcps_sess`；NMCPS-ADR-0021） */
+	sessionCookieName: string
+	/** 签名会话当前密钥（至少 32 字节；空串＝未配置，实验通道失败关闭） */
+	sessionSecret: string
+	/** 上一把签名密钥：只用于验证，不用于签发（轮换窗口） */
+	sessionSecretPrevious: string
+	/** 签名会话有效期（毫秒；默认沿用刷新令牌 TTL） */
+	sessionTtlMs: number
 	/** 上游就绪探针路径（拼在 `upstreamBase` 之后，以 `/` 开头） */
 	readinessPath: string
 	/** 上游就绪探针超时（毫秒，独立于业务超时，默认 2000） */
@@ -79,6 +87,20 @@ export function getBffConfig(event: H3Event): BffConfig {
 		? refreshTtlCandidate
 		: 7 * 24 * 60 * 60 * 1000;
 
+	const sessionCookieName = typeof bff.sessionCookieName === "string" && bff.sessionCookieName.trim()
+		? bff.sessionCookieName.trim()
+		: "nmcps_sess";
+
+	const sessionSecret = typeof bff.sessionSecret === "string" ? bff.sessionSecret.trim() : "";
+	const sessionSecretPrevious = typeof bff.sessionSecretPrevious === "string"
+		? bff.sessionSecretPrevious.trim()
+		: "";
+
+	const sessionTtlCandidate = Number(bff.sessionTtlMs);
+	const sessionTtlMs = Number.isFinite(sessionTtlCandidate) && sessionTtlCandidate >= 60_000
+		? sessionTtlCandidate
+		: refreshTtlMs;
+
 	const readinessPathRaw = typeof bff.readinessPath === "string" ? bff.readinessPath.trim() : "";
 	const readinessPath = readinessPathRaw
 		? (readinessPathRaw.startsWith("/") ? readinessPathRaw : `/${readinessPathRaw}`)
@@ -97,6 +119,10 @@ export function getBffConfig(event: H3Event): BffConfig {
 		refreshCookieName,
 		accessTtlMs,
 		refreshTtlMs,
+		sessionCookieName,
+		sessionSecret,
+		sessionSecretPrevious,
+		sessionTtlMs,
 		readinessPath,
 		readinessTimeoutMs
 	};

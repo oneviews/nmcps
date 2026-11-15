@@ -52,6 +52,12 @@ export default defineNuxtConfig({
 			// 令牌有效期兜底（毫秒）：访问令牌优先用上游 expiresIn，刷新令牌上游不返回 TTL
 			accessTtlMs: 1800000,
 			refreshTtlMs: 604800000,
+			// 仿真网络签名会话（NMCPS-ADR-0021）：密钥至少 32 字节，空串＝实验通道失败关闭
+			sessionCookieName: "nmcps_sess",
+			sessionSecret: "",
+			// 轮换窗口内用于验证旧 cookie；只验证不签发
+			sessionSecretPrevious: "",
+			sessionTtlMs: 604800000,
 			// 上游就绪探针路径（拼在 upstreamBase 之后）与超时，供 GET /ready 使用
 			readinessPath: "/health",
 			readinessTimeoutMs: 2000
@@ -64,6 +70,22 @@ export default defineNuxtConfig({
 			allowWrite: false,
 			timeoutMs: 15000,
 			readinessPath: "/api/health"
+		},
+		// Mininet 实验后端（第三出站通道，NMCPS-ADR-0020）：
+		// baseUrl 为空＝通道未启用（`/api/lab/**` 回 503 mininet_not_configured）；
+		// 白名单只有 GET，写操作 / 终端 / 抓包在后续决策前不开放。
+		mininet: {
+			baseUrl: "",
+			// 租户 → 实例注册表（JSON 字符串）：{"t_a":{"baseUrl":"http://127.0.0.1:8000"}}
+			// 配了注册表后，租户请求只查这里；未命中即 503 tenant_runtime_unavailable，绝不回退全局 baseUrl。
+			instances: "",
+			timeoutMs: 15000
+		},
+		// 仿真网络台账（NMCPS-ADR-0021 P2）：BFF 自有的资源归属记录。
+		// 文件不存在时读 seed；文件存在即只信文件，避免“删了又被 seed 复活”。
+		lab: {
+			ledgerFile: ".data/lab-ledger.json",
+			ledgerSeed: ""
 		},
 		public: {
 			// 前端访问 BFF 的基址：web 同源留空；桌面构建必须指向已部署的 BFF

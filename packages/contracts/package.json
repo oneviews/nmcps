@@ -1,0 +1,10 @@
+{
+	"name": "@nmcps/contracts",
+	"type": "module",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Generated API contracts shared by the Nuxt BFF and lab UI",
+	"exports": {
+		"./mininet-openapi": "./openapi/mininet.json"
+	}
+}
