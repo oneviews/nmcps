@@ -9,21 +9,32 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 终端、抓包、`reset`、`full_reset` 属于高权限操作。
 - 拓扑、节点位置、运行状态都归后端所有，前端不是事实源。
 
-## 阶段一约束
+## 阶段一约束（已被 NMCPS-ADR-0022 取代）
 
-- 后端只监听 `127.0.0.1` 或受控内网。
-- 不新增浏览器直连 `:8000` 的代码。
-- 旧 Vite 前端只作行为参考，不再扩展功能。
-- 先完成 BFF 通道和只读页面，再开放写操作。
+- 后端只监听 `127.0.0.1` 或受控内网（仍然有效）。
+- 不新增浏览器直连 `:8000` 的代码（仍然有效）。
+- ~~旧 Vite 前端只作行为参考，不再扩展功能~~ → 见下节：复刻验收后直接退役。
+- ~~先完成 BFF 通道和只读页面，再开放写操作~~ → 只读阶段已完成，写操作按 ADR-0022 W1~W4 分段开放。
+
+## 全量并入与旧前端退役（NMCPS-ADR-0022）
+
+- 目标：把旧 Vite 前端（`mininet_gui_frontend`）全部能力并入 `/scenario/simulator`，验收后删除该前端，`services/mininet-api` 只留纯后端。
+- 28 条写端点按 `(method, 模板)` 逐条登记进 `MININET_ROUTES`，一个端点一个权限位：`lab:create`（建网 / 加节点加链）、`lab:operate`（改网络、pingall、iperf、流表）、`lab:delete`（删节点）、`lab:sniffer`（抓包启停）；`full_reset` 与 `import_json` 需 `lab:delete` + `lab:create` 双权限。
+- `GET /api/lab/channel` 的 `writeEnabled` / `capabilities` 按会话计算；页面先读能力位再渲染，不再恒为 `false`。
+- 写操作先写审计 outbox（`.data/audit/lab-audit.jsonl`）再执行；写盘失败回 `503 audit_unavailable`。同一网络同时只允许一个在途写操作（`409 lab_operation_in_progress`）。
+- 四个 WebSocket 走同源 `/lab-ws/*`：`POST /api/lab/ws-ticket` 签 60 秒一次性 HMAC 票，绑定 `sub` / `tid` / `kind` / `target`；票过期、重放、绑定不符一律 `401 lab_ws_ticket_invalid`。
+- 导出走独立内容类型通道：`/api/lab/export/{json,script}` 为 `text/plain`，`/api/lab/export/pcap` 为二进制附件且需 `lab:sniffer`。
+- 旧前端删除前打 tag `legacy-mininet-gui-final`；上游 CORS 关闭，只经反代暴露。
 
 ## 已落地的只读通道（NMCPS-ADR-0020）
 
 - 浏览器入口只有 `/api/lab/**`；上游基址在 `runtimeConfig.mininet.instances`（`NUXT_MININET_INSTANCES`，租户 → 实例 JSON）。未配置实例的租户回 `503 tenant_runtime_unavailable`，不会回退全局 `baseUrl`。
-- `layers/scenario/shared/constants/mininetRoutes.ts` 只登记 17 个 GET 查询端点；写操作没有条目，不是被开关挡住。
+- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **45 条**端点：17 条查询 + 28 条写（ADR-0022 W1）；导出另走 `/api/lab/export/{json,script,pcap}` 三条静态路由。未登记路径回 404、动词不符回 405。
 - BFF 出站不读 `nmcps_at`、不转 `Bearer`、不转发 cookie；只带 `accept` / `user-agent` / `x-request-id`。
-- `GET /api/lab/channel` 返回 `configured` / `readOnly: true` / `writeEnabled: false` / `endpointCount`，不回传上游地址。
-- 导出（文本 / pcap）、四个 WebSocket、终端、抓包启停与所有写操作均未开放。
-- `pnpm build:server && pnpm check:lab-bff` 验证 51 项通道契约（含台账租户隔离、资源清单、401/403/503 与上游零命中）。
+- `GET /api/lab/channel` 返回 `configured` / `readOnly` / `writeEnabled` / `capabilities` / `endpointCount`，**按会话计算**，不回传上游地址。
+- 仍未开放：四个 WebSocket、终端、抓包启停与导出通道（W4 / W5）；写操作按权限位开放，页面先读能力位再渲染。
+- `pnpm build:server && pnpm check:lab-bff` 验证 69 项通道契约（含台账租户隔离、资源清单、401/403/503 与上游零命中）。`pnpm check:lab-flows` 另有 17 项纯函数断言（草稿三条校验 / 请求体省略规则 / 行号口径），不启 Nitro、不碰上游。
+- 拓扑编辑（`/scenario/simulator`，ADR-0022 W2 / W2b）只走 `/api/lab/**`：新增 / 删除节点、连线、拖动落库（`POST /node_position`）、OpenFlow 版本、流表读数（`GET /flows/{switch}`）与流表写入（`POST /flows` 加流、`DELETE /flows/{switch}/{flow_id}` 删单条）；删单条的 `flow_id` 是上游按「含 `actions=` 的行」数的 1 基序号，页面必须按同一口径计（`labFlowRowsOf()`）。`TopologyCanvas` 的 `draggable` 必须跟 `capabilities.operate` 走，否则拖动会「看起来成功但没落库」。
 
 ## 已落地的鉴权（NMCPS-ADR-0021 P1）
 

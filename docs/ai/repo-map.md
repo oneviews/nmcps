@@ -1,7 +1,8 @@
 # AI 项目地图
 
 本仓库是**一个 Git 根目录 + 多个部署单元**的 monorepo。目录可以分开，AI 上下文必须统一。
-本文件是给 AI 的最短事实源；细节以对应代码和 `.clinerules` 为准。
+本文件是给 AI 的最短事实源；细节以对应代码为准。
+`.clinerules/00-project-map.md` 只保留 Cline 入口与硬约束，目录 / 命令 / 影响矩阵以本文件为准。
 
 ## 系统边界
 
@@ -37,6 +38,7 @@ Browser/Tauri
 | `pnpm dev:lab-api` | 启动 Mininet FastAPI（`127.0.0.1:8000`） |
 | `pnpm lab:check` | 导入后端并校验 HTTP/WS 路由 |
 | `pnpm check:lab-bff` | 校验 `/api/lab/**` 只读 BFF 通道（需先 `build:server`） |
+| `pnpm check:lab-flows` | 校验流表编辑纯函数（草稿校验 / 请求体 / 行号口径） |
 | `pnpm contracts:gen` | 重新生成 Mininet OpenAPI 快照 |
 | `pnpm contracts:check` | 校验快照是否过期 |
 | `pnpm lint` | ESLint |
@@ -53,6 +55,16 @@ Browser/Tauri
 | 新增 Lab 文案 | `i18n/locales/{cn,en}.json`，跑 `pnpm check:i18n` |
 | 新增 Lab 页面 | `layers/scenario/app/pages/scenario`、导航、权限 meta |
 | 后端特权操作 | 权限位、审计、二次确认、`allowWrite` 开关 |
+
+## BFF 工具归属
+
+- `server/utils/bff/` 是主网关共享层：`auth` / `session` / `config` / `iamRoles` 等服务登录、刷新、
+  登出、改密和 Lab 鉴权共同使用，**留在根层**。
+- 只服务 Lab 的实现（`labGuard` / `labLedger` / `labEgress` / `mininet` / `mininetConfig`）放在
+  `layers/scenario/server/utils/bff/`。Nuxt 会把 scenario 层的 `/api/lab/**` 路由并入根应用，但根层
+  工具不得反向 import `layers/scenario`。
+- `iamRoles.ts` 的 `clearLabRoleCache()` 被 `server/api/auth/{password,logout}.post.ts` 直接调用，
+  因此不迁入 scenario 层；迁移会形成根层 → scenario 的反向依赖。
 
 ## 禁止事项
 

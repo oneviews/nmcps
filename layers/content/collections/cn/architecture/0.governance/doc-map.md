@@ -21,7 +21,7 @@ reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-15"
+updatedAt: "2026-11-16"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -117,6 +117,7 @@ tags:
 | NMCPS-ADR-0019 | 六层迁移前置裁决 | 5 | informative | rec.adr.0019 | baseline | records/adr/adr-0019.md |
 | NMCPS-ADR-0020 | Mininet 只读 BFF 通道 | 5 | informative | rec.adr.0020 | baseline | records/adr/adr-0020.md |
 | NMCPS-ADR-0021 | 仿真网络租户隔离 | 5 | informative | rec.adr.0021 | baseline | records/adr/adr-0021.md |
+| NMCPS-ADR-0022 | 实验台全量并入与旧前端退役 | 5 | informative | rec.adr.0022 | baseline | records/adr/adr-0022.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -230,3 +231,5 @@ tags:
 | 2026-11-15 | 0.41.0 | 登记记录层 ADR `NMCPS-ADR-0021`「仿真网络的租户隔离与访问裁决」：需求方选择**每租户独立运行实例**（方案 A），`/api/lab/**` 与 `/api/sim/**` 共用一套租户资源模型；租户只来自 BFF 签名会话，`x-tenant-id` / 请求体 / 查询参数不参与归属；权限位为 `lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`，租户普通用户默认只读、租户管理员额外增删改、终端与抓包单独授权；跨租户统一 404，平台管理员默认无运行态权限（只做元数据 / 配额 / 审计），单租户同引擎最多一张运行中网络（409）；BFF 台账与每租户实例注册表作为权限边界，上游 `sim_id` 不再当凭据。P0 同时落 `shared/constants/labPermissions.ts` 纯函数矩阵与 `check:lab-tenancy` 17 项断言；写操作、终端、抓包与 WS 在 P1~P4 完成前继续关闭。 |
 | 2026-11-15 | 0.42.0 | **ADR-0021 P1 落码**：登录 / 刷新签发 `nmcps_sess`（HMAC-SHA256、HttpOnly、SameSite=Lax、Path=/，`ath` 绑定访问令牌，双密钥验证窗口）；`/api/lab/**` 先校验签名会话与 `ath`，再经 IAM `subject-roles → roles/{id}` 解析角色并强制 `role.tenant_id === 会话 tid`，失败回 503 `bff_role_resolution_failed`，平台管理员回 403；Mininet 改为按 `NUXT_MININET_INSTANCES` 租户实例注册表路由，未命中回 503 `tenant_runtime_unavailable`，不回退全局 `baseUrl`；主网关出站头白名单移除 `x-tenant-id`。`check:lab-bff` 26 → 39 项（真实登录拿签名 cookie、无会话 401、篡改 / 凭据错配 401、平台 403、无实例 503、角色失败 503、缺密钥 503、租户实例零命中）；`check:bff` 128/128。P2 台账与跨租户资源 404 仍未落地。 |
 | 2026-11-15 | 0.43.0 | **ADR-0021 P2 落码并迁移仿真页**：`labLedger.ts` 以签名会话的 `tenant_id` + `engine` + BFF 资源 ID 为键记录网络归属，列表出口只保留本租户网络，节点 / 链路在台账未命中或清单外统一回 `404 lab_resource_not_found` 且上游零命中；无实例租户仍回 `503 tenant_runtime_unavailable`。`check:lab-bff` 39 → 51 项（⑥ 台账与清单出口、⑦ 台账未命中与空列表）。Mininet 路由 `/api/lab/**`、`MININET_ROUTES`、通道类型、BFF 实现（`labGuard` / `labLedger` / `labEgress` / `mininet*`）与自查脚本整体迁入 `layers/scenario`，删除空壳 `layers/lab`；新增 `/scenario/simulator`（读取台账 + 五类节点 + 链路，投影到 `TopologyCanvas`），旧 `/scenario/sim-generation` 仅保留重定向。 |
+| 2026-11-16 | 0.44.0 | 租户管理员 `tenantadmin` 的默认口令按需求方要求由 `Tenant@123456` 改为 `admin_2026`：只动单一事实源 `shared/constants/demoAccounts.ts`、`check:ui` 的预填断言与 IAM 架构 §7.7（`NMCPS-ARCH-003` → 0.8.1）；超级管理员 `admin` / `Admin@123456` 与预填机制不变，上游 IAM 账号口令需另行按其改密流程同步。 |
+| 2026-11-16 | 0.45.0 | 登记记录层 ADR `NMCPS-ADR-0022`「Mininet 实验台全量功能并入与旧前端退役」：把旧 Vite 前端（`mininet_gui_frontend`，13 组件 / 8704 行 / ~35 REST + 5 WS）的全部能力并入 `/scenario/simulator`，复刻验收后退役旧前端、`services/mininet-api` 只留纯后端。裁决包括：28 条写端点按 `(method, 模板)` 逐条登记并按 `lab:create` / `lab:operate` / `lab:delete` / `lab:sniffer` 分档（`full_reset`、`import_json` 双权限）；`channel` 能力位改为按会话计算；写操作先审计后执行（`.data/audit/lab-audit.jsonl`，失败回 `503 audit_unavailable`）；同一网络只允许一个在途写（`409 lab_operation_in_progress`）；四个 WebSocket 走同源 `/lab-ws/*` + 60 秒一次性 HMAC 票（`401 lab_ws_ticket_invalid`）；导出走独立内容类型通道（`text/plain` / pcap 附件）；上游 CORS 关闭。同时给出旧组件到新页面的逐项映射与 W1~W6 交付门禁。 |
