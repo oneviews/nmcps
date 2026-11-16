@@ -6,6 +6,7 @@
 import type { LabPrincipal, LabRoleGrant } from "../shared/constants/labPermissions.ts";
 import assert from "node:assert/strict";
 import process from "node:process";
+import { MININET_ROUTES } from "../layers/scenario/shared/constants/mininetRoutes.ts";
 import {
 	canAccessLabNetwork,
 	canSeeLabNetwork,
@@ -133,6 +134,46 @@ check("同租户资源按权限位判定", () => {
 check("无角色的租户主体仍可读取本租户网络", () => {
 	assert.equal(canAccessLabNetwork(principal("t_a"), "t_a", LAB_PERMISSIONS.READ), true);
 	assert.equal(canAccessLabNetwork(principal("t_a"), "t_a", LAB_PERMISSIONS.CREATE), false);
+});
+
+// ── 白名单权限位与矩阵一致（NMCPS-ADR-0022 D1/D2） ──
+const whitelistPermissions = [...new Set(MININET_ROUTES.flatMap((route) => route.permissions))].sort();
+const matrixPermissions = Object.values(LAB_PERMISSIONS).sort();
+
+check("白名单权限位都来自权限矩阵，且 HTTP 端点不使用 lab:terminal", () => {
+	assert.equal(whitelistPermissions.every((permission) => matrixPermissions.includes(permission)), true);
+	// terminal 只由 `/lab-ws/*` 的票使用，没有任何 HTTP 端点可以只凭它放行
+	assert.equal(whitelistPermissions.includes(LAB_PERMISSIONS.TERMINAL), false);
+});
+
+check("查询端点一律 lab:read，写端点一律不含 lab:read", () => {
+	for (const route of MININET_ROUTES) {
+		if (route.method === "GET") {
+			assert.deepEqual([...route.permissions], [LAB_PERMISSIONS.READ]);
+		} else {
+			assert.equal(route.permissions.includes(LAB_PERMISSIONS.READ), false);
+		}
+	}
+});
+
+check("写端点 28 条、查询端点 17 条（覆盖上游全部写动词）", () => {
+	assert.equal(MININET_ROUTES.filter((route) => route.method !== "GET").length, 28);
+	assert.equal(MININET_ROUTES.filter((route) => route.method === "GET").length, 17);
+});
+
+check("破坏性重建需要 lab:delete + lab:create 双权限", () => {
+	for (const template of ["/full_reset", "/import_json"]) {
+		const route = MININET_ROUTES.find((item) => item.template === template && item.method === "POST");
+		assert.ok(route, `缺少写端点 ${template}`);
+		assert.deepEqual([...route!.permissions].sort(), [LAB_PERMISSIONS.CREATE, LAB_PERMISSIONS.DELETE].sort());
+	}
+});
+
+check("抓包启停只认 lab:sniffer（不被 lab:operate 隐含）", () => {
+	for (const template of ["/sniffer/start", "/sniffer/stop"]) {
+		const route = MININET_ROUTES.find((item) => item.template === template);
+		assert.deepEqual([...(route?.permissions ?? [])], [LAB_PERMISSIONS.SNIFFER]);
+	}
 });
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);

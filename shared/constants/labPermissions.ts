@@ -122,6 +122,23 @@ export function hasLabPermission(principal: LabPrincipal, permission: LabPermiss
 	return labPermissionsOf(principal).has(permission);
 }
 
+/**
+ * 多权限位判定：**全部满足**才为真（`full_reset` / `import_json` 的双权限，NMCPS-ADR-0022 D2）。
+ *
+ * 空列表按「无需权限」为真 —— 调用方不应拿它当「放行一切」的捷径，白名单里每条端点都带权限位，
+ * `check:lab-tenancy` 断言这一点。角色集合只算一次，避免逐位重复 `labPermissionsOf()`。
+ */
+export function hasLabPermissions(
+	principal: LabPrincipal,
+	permissions: readonly LabPermission[]
+): boolean {
+	if (!permissions.length)
+		return true;
+
+	const granted = labPermissionsOf(principal);
+	return permissions.every((permission) => granted.has(permission));
+}
+
 /** 资源可见性：只允许同租户；跨租户与不存在共用 404 语义（D4） */
 export function canSeeLabNetwork(principal: LabPrincipal, networkTenantId: string): boolean {
 	return hasLabTenantScope(principal) && principal.tenantId === networkTenantId;

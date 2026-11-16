@@ -4,7 +4,7 @@ import type { ApiResponse } from "~~/shared/types/api";
 import { readAccessToken, respondAuth } from "~~/server/utils/bff/auth";
 import { resolveLabRoles } from "~~/server/utils/bff/iamRoles";
 import { hashAccessToken, readLabSession } from "~~/server/utils/bff/session";
-import { hasLabPermission } from "~~/shared/constants/labPermissions";
+import { hasLabPermission, hasLabPermissions } from "~~/shared/constants/labPermissions";
 
 /**
  * `/api/lab/**` 的统一鉴权入口（NMCPS-ADR-0021 P1）。
@@ -26,6 +26,42 @@ export async function authorizeLab(
 	event: H3Event,
 	permission: LabPermission
 ): Promise<LabAuthorization> {
+	const session = await authorizeLabSession(event);
+	if (!session.ok) {
+		return session;
+	}
+
+	if (!hasLabPermission(session.principal, permission)) {
+		return reject(event, 403, "lab_permission_denied");
+	}
+
+	return session;
+}
+
+/** 多权限位：全部满足才放行（`full_reset` / `import_json` 的双权限）；判定在纯函数里 */
+export async function authorizeLabAll(
+	event: H3Event,
+	permissions: readonly LabPermission[]
+): Promise<LabAuthorization> {
+	const session = await authorizeLabSession(event);
+	if (!session.ok) {
+		return session;
+	}
+
+	if (!hasLabPermissions(session.principal, permissions)) {
+		return reject(event, 403, "lab_permission_denied");
+	}
+
+	return session;
+}
+
+/**
+ * 只校验「会话 + 凭据同源 + 角色解析」，不判权限位。
+ *
+ * 顺序要求：先认证（401 / 503）→ 再解析路径（400 / 404 / 405）→ 再判权限（403）。
+ * 若先解析路径，未登录者就能用 404 / 405 探测白名单形状。
+ */
+export async function authorizeLabSession(event: H3Event): Promise<LabAuthorization> {
 	const session = readLabSession(event);
 
 	if (!session.ok) {
@@ -46,15 +82,12 @@ export async function authorizeLab(
 		return reject(event, roles.status, roles.message);
 	}
 
-	const principal: LabPrincipal = {
-		subjectId: session.payload.sub,
-		tenantId: session.payload.tid,
-		roles: roles.roles
+	return {
+		ok: true,
+		principal: {
+			subjectId: session.payload.sub,
+			tenantId: session.payload.tid,
+			roles: roles.roles
+		}
 	};
-
-	if (!hasLabPermission(principal, permission)) {
-		return reject(event, 403, "lab_permission_denied");
-	}
-
-	return { ok: true, principal };
 }

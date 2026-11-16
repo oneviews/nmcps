@@ -134,7 +134,7 @@ function buildMininetUrl(event: H3Event, baseUrl: string, match: MininetMatch): 
 	return url.toString();
 }
 
-function buildMininetHeaders(event: H3Event): Headers {
+function buildMininetHeaders(event: H3Event, hasBody = false): Headers {
 	const headers = new Headers();
 
 	for (const name of FORWARDED_REQUEST_HEADERS) {
@@ -146,6 +146,11 @@ function buildMininetHeaders(event: H3Event): Headers {
 
 	if (!headers.has("accept")) {
 		headers.set("accept", "application/json");
+	}
+
+	// 只声明我们自己转发的 JSON；不转发客户端原始 content-type（避免把表单 / multipart 带出去）
+	if (hasBody) {
+		headers.set("content-type", "application/json");
 	}
 
 	return headers;
@@ -166,15 +171,18 @@ function safeJsonParse(raw: string): unknown {
 export interface MininetProxyOptions {
 	/** 台账已解析的网络；提供时对成功响应做租户/资源清单出口过滤 */
 	network?: LabNetworkRecord
+	/** 已由调用方序列化的 JSON 请求体（仅写端点；不大于 `LAB_WRITE_BODY_LIMIT`） */
+	body?: string
 }
 
 /**
- * Mininet 通道的**唯一出站点**：转发白名单命中的 GET，并把响应归一成 `ApiResponse<T>`。
+ * Mininet 通道的**唯一出站点**：转发白名单命中的请求，并把响应归一成 `ApiResponse<T>`。
  *
  * - 通道未启用（`baseUrl` 为空）→ 503 `mininet_not_configured`，不静默返回空数据；
  * - 不可达 → 502 `mininet_unreachable`；超时 → 504 `mininet_timeout`；
  * - 上游非 2xx → 保留真实状态码（FastAPI 的 400 / 404 是页面要展示的诊断信息）；
- * - 客户端请求体一律不读：白名单只有 GET，读取只会让“没有写入口”变成口头承诺。
+ * - 写请求的请求体由调用方（`[...slug].ts`）在完成鉴权、审计与加锁后传入，
+ *   本函数不认识权限位，也不读客户端原始流，避免绕过守卫。
  */
 export async function proxyToMininet<T = unknown>(
 	event: H3Event,
@@ -189,10 +197,7 @@ export async function proxyToMininet<T = unknown>(
 		return respond(event, 503, envelope(503, "error", message));
 	}
 
-	// 防御性检查：即便将来有人误传写方法，这里也不读取请求体
-	if (match.route.method !== "GET") {
-		return respond(event, 405, envelope(405, "warning", "bff_method_not_allowed"));
-	}
+	const method = match.route.method;
 
 	let url: string;
 	try {
@@ -203,11 +208,13 @@ export async function proxyToMininet<T = unknown>(
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+	const headers = buildMininetHeaders(event, method !== "GET" && options.body !== undefined);
 
 	try {
 		const response = await fetch(url, {
-			method: "GET",
-			headers: buildMininetHeaders(event),
+			method,
+			headers,
+			...(options.body !== undefined && method !== "GET" ? { body: options.body } : {}),
 			signal: controller.signal,
 			redirect: "manual"
 		});

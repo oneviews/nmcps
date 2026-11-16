@@ -85,7 +85,9 @@ export default defineNuxtConfig({
 		// 文件不存在时读 seed；文件存在即只信文件，避免“删了又被 seed 复活”。
 		lab: {
 			ledgerFile: ".data/lab-ledger.json",
-			ledgerSeed: ""
+			ledgerSeed: "",
+			// 写操作审计 outbox（NMCPS-ADR-0022 D4）；按天分片写 JSONL
+			auditFile: ".data/audit/lab-audit.jsonl"
 		},
 		public: {
 			// 前端访问 BFF 的基址：web 同源留空；桌面构建必须指向已部署的 BFF

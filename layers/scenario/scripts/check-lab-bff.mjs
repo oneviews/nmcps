@@ -5,8 +5,9 @@
 // 假上游只实现白名单里那些端点的形状，并记录每次请求的 method / path / headers：
 // “出站不带 authorization / cookie”“写请求根本没到达上游”必须由上游侧取证。
 import { Buffer } from "node:buffer";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import path from "node:path";
 import process from "node:process";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, stopBff } from "../../../scripts/lib/bff-harness.mjs";
 
@@ -154,6 +155,7 @@ function labEnv(overrides = {}) {
 		NUXT_BFF_SESSION_SECRET: SESSION_SECRET,
 		NUXT_LAB_LEDGER_FILE: `.data/check-lab-bff-${process.pid}.json`,
 		NUXT_LAB_LEDGER_SEED: JSON.stringify(DEFAULT_LEDGER),
+		NUXT_LAB_AUDIT_FILE: `.data/check-lab-audit-${process.pid}/lab-audit.jsonl`,
 		...overrides
 	};
 }
@@ -167,15 +169,34 @@ function readMininetWhitelist() {
 	const end = text.indexOf("] as const;", start);
 	const body = end === -1 ? text.slice(start) : text.slice(start, end);
 
-	return [...body.matchAll(/\{\s*method:\s*"([A-Z]+)",\s*template:\s*"([^"]+)",\s*upstream:\s*"([^"]+)"\s*\}/g)]
-		.map((match) => ({ method: match[1], template: match[2], upstream: match[3] }));
+	return [...body.matchAll(/\{\s*method:\s*"([A-Z]+)",\s*template:\s*"([^"]+)",\s*upstream:\s*"([^"]+)",\s*permissions:\s*\[([^\]]*)\]\s*\}/g)]
+		.map((match) => ({
+			method: match[1],
+			template: match[2],
+			upstream: match[3],
+			permissions: [...match[4].matchAll(/"([^"]+)"/g)].map((item) => item[1])
+		}));
+}
+
+/** 汇总审计目录下所有分片（按天分片，文件名带日期） */
+function readAuditEntries(filePath) {
+	const dir = path.dirname(filePath);
+	if (!existsSync(dir))
+		return [];
+
+	return readdirSync(dir)
+		.filter((name) => name.endsWith(".jsonl"))
+		.flatMap((name) => readFileSync(path.join(dir, name), "utf8")
+			.split("\n")
+			.filter((line) => line.trim().length > 0)
+			.map((line) => JSON.parse(line)));
 }
 
 /** 假 Mininet 后端：返回体形状够页面用即可，重点是路径与出站头可取证 */
 async function startMininet(port) {
 	const log = [];
 
-	const server = createServer((req, res) => {
+	const server = createServer(async (req, res) => {
 		const url = new URL(req.url, `http://${HOST}:${port}`);
 		const path = url.pathname;
 		log.push({ method: req.method, path, search: url.search, headers: req.headers });
@@ -217,6 +238,30 @@ async function startMininet(port) {
 			return send(200, { from: linkStats[1], to: linkStats[2], intfs: [] });
 		}
 
+		// ── 写端点：记录请求体并回显，供断言「方法 / 路径 / 请求体原样到达」 ──
+		if (req.method !== "GET") {
+			let raw = "";
+			for await (const chunk of req)
+				raw += chunk;
+
+			const entry = log.at(-1);
+			if (entry)
+				entry.body = raw;
+
+			// 串行化断言用：`?__delay=<ms>` 让上游慢下来，制造并发窗口
+			const delay = Number(url.searchParams.get("__delay") ?? 0);
+			if (Number.isFinite(delay) && delay > 0) {
+				await new Promise((resolve) => setTimeout(resolve, delay));
+			}
+
+			// 审计失败路径用：一个稳定失败的上游动作
+			if (path === "/api/mininet/reset") {
+				return send(500, { detail: "reset failed" });
+			}
+
+			return send(200, { ok: true, method: req.method, path, body: raw ? JSON.parse(raw) : null });
+		}
+
 		return send(404, { detail: "upstream_not_found" });
 	});
 
@@ -238,11 +283,15 @@ async function startIam(port) {
 		alice: { id: "u_lab", username: "alice", tenantId: "t_lab", roleId: "r_admin" },
 		bob: { id: "u_other", username: "bob", tenantId: "t_other", roleId: "r_other" },
 		dave: { id: "u_dave", username: "dave", tenantId: "t_lab", roleId: "r_admin" },
+		erin: { id: "u_reader", username: "erin", tenantId: "t_lab", roleId: "r_user" },
+		frank: { id: "u_terminal", username: "frank", tenantId: "t_lab", roleId: "r_terminal" },
 		platform: { id: "u_platform", username: "platform", tenantId: null, roleId: "r_platform" }
 	};
 	const roles = {
 		r_admin: { code: "tenant_admin", tenantId: "t_lab" },
 		r_other: { code: "tenant_admin", tenantId: "t_other" },
+		r_user: { code: "tenant_user", tenantId: "t_lab" },
+		r_terminal: { code: "lab_terminal", tenantId: "t_lab" },
 		r_platform: { code: "platform_admin", tenantId: null }
 	};
 	const state = { failRoles: false, log: [] };
@@ -358,16 +407,22 @@ async function startIam(port) {
 	return server;
 }
 
-// ⓪ 白名单 ⊆ 契约快照：上游改名、漏登记、误加写动词都在这里露头
+// ⓪ 白名单 ⊆ 契约快照 + 写端点分档（NMCPS-ADR-0022）
 {
 	const whitelist = readMininetWhitelist();
 	const snapshot = JSON.parse(readFileSync(MININET_SNAPSHOT_PATH, "utf8"));
 	const paths = snapshot.paths ?? {};
 	const missing = whitelist.filter((entry) => !paths[entry.upstream]?.[entry.method.toLowerCase()]);
-	const nonGet = whitelist.filter((entry) => entry.method !== "GET");
+	const reads = whitelist.filter((entry) => entry.method === "GET");
+	const writes = whitelist.filter((entry) => entry.method !== "GET");
+	const writeWithoutPermission = writes.filter((entry) => entry.permissions.length === 0 || entry.permissions.includes("lab:read"));
+	const readWithWritePermission = reads.filter((entry) => entry.permissions.join(",") !== "lab:read");
+	const dual = writes.filter((entry) => entry.permissions.length > 1);
 
 	log("⓪ 白名单条目可从源码抽取（抽取为空即红）", whitelist.length > 0, `${whitelist.length} 条`);
-	log("⓪ 白名单只有 GET（写操作没有入口）", whitelist.length > 0 && nonGet.length === 0, nonGet.map((entry) => `${entry.method} ${entry.template}`).join(", ") || "全部 GET");
+	log("⓪ 查询端点 17 条且权限位都是 lab:read", reads.length === 17 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 写端点 28 条且都带非读权限位", writes.length === 28 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ full_reset / import_json 为双权限（lab:delete + lab:create）", dual.length === 2 && dual.every((entry) => entry.permissions.includes("lab:delete") && entry.permissions.includes("lab:create")), dual.map((entry) => `${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无");
 	log("⓪ 白名单 ⊆ Mininet OpenAPI 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.map((entry) => `${entry.method} ${entry.upstream}`).join(", ") || `${whitelist.length}/${whitelist.length}`);
 }
 
@@ -389,7 +444,7 @@ try {
 
 		const channel = await request(port, "/api/lab/channel", { cookie: auth.cookie });
 		log("① 未配租户实例的 channel 仍 200 且 configured=false", channel.status === 200 && channel.json?.data?.configured === false, `${channel.status} ${describe(channel.json?.data?.configured)}`);
-		log("① channel 声明 readOnly / writeEnabled=false 且登记端点", channel.json?.data?.readOnly === true && channel.json?.data?.writeEnabled === false && channel.json?.data?.endpointCount > 0, describe(channel.json?.data));
+		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 45, describe(channel.json?.data));
 		log("① channel 不回传 baseUrl", !JSON.stringify(channel.json ?? {}).includes(mininetBase), describe(channel.json?.data));
 
 		const noPath = await request(port, "/api/lab");
@@ -432,11 +487,12 @@ try {
 		const excludedExport = await request(port, "/api/lab/export_json", { cookie: auth.cookie });
 		log("② 文本 / pcap 导出未登记 → 404（留给下载通道）", excludedExport.status === 404, `${excludedExport.status}`);
 
-		const wrongVerb = await request(port, "/api/lab/hosts", { method: "POST", cookie: auth.cookie });
-		log("② 对只读端点 POST → 405 bff_method_not_allowed", wrongVerb.status === 405 && wrongVerb.json?.message === "bff_method_not_allowed", `${wrongVerb.status} ${describe(wrongVerb.json?.message)}`);
+		const wrongVerb = await request(port, "/api/lab/hosts", { method: "PUT", cookie: auth.cookie });
+		log("② 已登记路径用未登记动词（PUT /hosts）→ 405 bff_method_not_allowed", wrongVerb.status === 405 && wrongVerb.json?.message === "bff_method_not_allowed", `${wrongVerb.status} ${describe(wrongVerb.json?.message)}`);
 
-		const writePath = await request(port, "/api/lab/delete_node/h1", { method: "DELETE", cookie: auth.cookie });
-		log("② 写端点根本不在白名单 → 404", writePath.status === 404 && writePath.json?.message === "bff_resource_not_allowed", `${writePath.status} ${describe(writePath.json?.message)}`);
+		const hitsBeforeWrite = mininet.log.length;
+		const writePath = await request(port, "/api/lab/terminal/h1", { method: "POST", cookie: auth.cookie });
+		log("② 未登记写路径（终端走 /lab-ws）→ 404 且不触达上游", writePath.status === 404 && writePath.json?.message === "bff_resource_not_allowed" && mininet.log.length === hitsBeforeWrite, `${writePath.status} hits=${mininet.log.length - hitsBeforeWrite}`);
 
 		const traversal = await request(port, "/api/lab/stats/%2e%2e%2fetc%2fpasswd", { cookie: auth.cookie });
 		log("② 路径穿越（%2e%2e%2f）→ 400 bff_path_invalid", traversal.status === 400 && traversal.json?.message === "bff_path_invalid", `${traversal.status} ${describe(traversal.json?.message)}`);
@@ -591,6 +647,84 @@ try {
 		log("⑦ 台账未命中不触达上游", mininet.log.length === hitsBefore, `hits=${mininet.log.length - hitsBefore}`);
 		log("⑦ 无台账时列表为空而不是报错", networks.status === 200 && Array.isArray(networks.json?.data) && networks.json.data.length === 0, `${networks.status} len=${describe(networks.json?.data?.length)}`);
 	});
+
+	// ⑧ 写通道：方法 / 请求体原样到达、审计先写、串行化 409、权限位 403（NMCPS-ADR-0022 W1）
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } })
+	}), async (port) => {
+		const auth = await login(port);
+		const auditFile = `.data/check-lab-audit-${process.pid}/lab-audit.jsonl`;
+
+		const hitsBefore = mininet.log.length;
+		const stop = await request(port, "/api/lab/stop", { method: "POST", cookie: auth.cookie });
+		const stopHit = mininet.log.slice(hitsBefore).at(-1);
+		log("⑧ 有 lab:operate 的写请求到达上游（POST /stop）", stop.status === 200 && stop.json?.data?.ok === true, `${stop.status}`);
+		log("⑧ 出站方法 / 路径与白名单一致", stopHit?.method === "POST" && stopHit?.path === "/api/mininet/stop", `${stopHit?.method} ${stopHit?.path}`);
+
+		const body = JSON.stringify({ hosts: ["h1", "h2"], count: 2 });
+		const pingall = await request(port, "/api/lab/pingall", { method: "POST", headers: { "content-type": "application/json" }, cookie: auth.cookie, body });
+		const pingHit = mininet.log.at(-1);
+		log("⑧ 写请求体原样转发", pingall.status === 200 && pingHit?.body === body, `${pingall.status} body=${describe(pingHit?.body)}`);
+		log("⑧ 出站 content-type 为 application/json（不转发客户端原始头）", pingHit?.headers["content-type"] === "application/json", describe(pingHit?.headers["content-type"]));
+
+		const entries = readAuditEntries(auditFile);
+		const stopEntries = entries.filter((entry) => entry.action === "post /stop");
+		log("⑧ 审计先 allowed 后 succeeded", stopEntries.some((item) => item.result === "allowed") && stopEntries.some((item) => item.result === "succeeded"), describe(stopEntries.map((item) => item.result)));
+		log("⑧ 审计记录租户 / 主体 / 网络 / request_id", stopEntries.length > 0 && stopEntries.every((item) => item.tenant_id === LAB_TENANT && item.actor_id === "u_lab" && item.network_id === "net_lab" && typeof item.request_id === "string"), describe(stopEntries[0]));
+
+		const slow = (suffix) => request(port, `/api/lab/pingall?__delay=250&k=${suffix}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			cookie: auth.cookie,
+			body: "{}"
+		});
+		const [first, second] = await Promise.all([slow("a"), slow("b")]);
+		const statuses = [first.status, second.status].sort();
+		log("⑧ 同一网络并发写 → 一个 200、一个 409 lab_operation_in_progress", statuses[0] === 200 && statuses[1] === 409 && [first, second].some((item) => item.json?.message === "lab_operation_in_progress"), describe(statuses));
+
+		const erin = await login(port, "erin");
+		const erinChannel = await request(port, "/api/lab/channel", { cookie: erin.cookie });
+		log("⑧ tenant_user 的 channel 只读（writeEnabled=false / operate=false）", erinChannel.json?.data?.writeEnabled === false && erinChannel.json?.data?.capabilities?.operate === false, describe(erinChannel.json?.data?.capabilities));
+
+		const erinHits = mininet.log.length;
+		const erinStop = await request(port, "/api/lab/stop", { method: "POST", cookie: erin.cookie });
+		log("⑧ 无 lab:operate → 403 lab_permission_denied 且不触达上游", erinStop.status === 403 && erinStop.json?.message === "lab_permission_denied" && mininet.log.length === erinHits, `${erinStop.status} hits=${mininet.log.length - erinHits}`);
+
+		const erinDelete = await request(port, "/api/lab/delete_node/h1", { method: "DELETE", cookie: erin.cookie });
+		log("⑧ 无 lab:delete → 403（删节点不是读权限兜底）", erinDelete.status === 403, `${erinDelete.status}`);
+
+		const erinReset = await request(port, "/api/lab/full_reset", { method: "POST", cookie: erin.cookie });
+		log("⑧ full_reset 双权限：只有读权限 → 403", erinReset.status === 403, `${erinReset.status}`);
+
+		const frank = await login(port, "frank");
+		const frankChannel = await request(port, "/api/lab/channel", { cookie: frank.cookie });
+		log("⑧ lab_terminal 只拿到 terminal 位（writeEnabled=false）", frankChannel.json?.data?.capabilities?.terminal === true && frankChannel.json?.data?.capabilities?.operate === false && frankChannel.json?.data?.writeEnabled === false, describe(frankChannel.json?.data?.capabilities));
+
+		const frankSniffer = await request(port, "/api/lab/sniffer/start", { method: "POST", cookie: frank.cookie });
+		log("⑧ lab_terminal 不能启抓包（需 lab:sniffer）→ 403", frankSniffer.status === 403, `${frankSniffer.status}`);
+
+		const failed = await request(port, "/api/lab/reset", { method: "POST", cookie: auth.cookie });
+		const failedEntries = readAuditEntries(auditFile).filter((entry) => entry.action === "post /reset");
+		log("⑧ 上游失败仍留 failed 审计", failed.status === 500 && failedEntries.some((entry) => entry.result === "failed"), `${failed.status} ${describe(failedEntries.map((item) => item.result))}`);
+	});
+
+	// ⑨ 审计失败关闭：写盘失败即 503，绝不「先做后补」
+	// 失败注入：把审计目标目录换成一个**普通文件**，mkdir 立即 EEXIST、append 立即 ENOTDIR。
+	// 不用 /proc 等特殊路径：procfs 上 mkdir 会挂住（实测 300s 无返回），会让守卫变成假超时。
+	const blockedDir = `.data/check-lab-blocked-${process.pid}`;
+	writeFileSync(blockedDir, "blocked", "utf8");
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+		NUXT_LAB_AUDIT_FILE: `${blockedDir}/lab-audit.jsonl`
+	}), async (port) => {
+		const auth = await login(port);
+		const hits = mininet.log.length;
+		const denied = await request(port, "/api/lab/stop", { method: "POST", cookie: auth.cookie });
+
+		log("⑨ 审计写盘失败 → 503 audit_unavailable", denied.status === 503 && denied.json?.message === "audit_unavailable", `${denied.status} ${describe(denied.json?.message)}`);
+		log("⑨ 审计失败时不触达上游", mininet.log.length === hits, `hits=${mininet.log.length - hits}`);
+	});
+	rmSync(blockedDir, { force: true });
 
 	const passed = results.filter((item) => item.ok).length;
 	console.log(`\n${passed}/${results.length} 项通过`);

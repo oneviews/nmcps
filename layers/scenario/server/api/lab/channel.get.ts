@@ -1,7 +1,7 @@
 import type { ApiResponse } from "~~/shared/types/api";
 import type { MininetChannelInfo } from "#layers/scenario/shared/types/mininet";
 import { defineEventHandler, setResponseHeader, setResponseStatus } from "h3";
-import { LAB_PERMISSIONS } from "~~/shared/constants/labPermissions";
+import { LAB_PERMISSIONS, labPermissionsOf } from "~~/shared/constants/labPermissions";
 import { authorizeLab } from "#layers/scenario/server/utils/bff/labGuard";
 import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
 import { MININET_ROUTES } from "#layers/scenario/shared/constants/mininetRoutes";
@@ -21,6 +21,16 @@ export default defineEventHandler(async (event): Promise<ApiResponse<MininetChan
 	}
 
 	const config = getMininetConfig(event, authorization.principal.tenantId ?? "");
+	const granted = labPermissionsOf(authorization.principal);
+	const capabilities = {
+		read: granted.has(LAB_PERMISSIONS.READ),
+		create: granted.has(LAB_PERMISSIONS.CREATE),
+		operate: granted.has(LAB_PERMISSIONS.OPERATE),
+		delete: granted.has(LAB_PERMISSIONS.DELETE),
+		terminal: granted.has(LAB_PERMISSIONS.TERMINAL),
+		sniffer: granted.has(LAB_PERMISSIONS.SNIFFER)
+	};
+	const writeEnabled = capabilities.create || capabilities.operate || capabilities.delete || capabilities.sniffer;
 
 	setResponseStatus(event, 200);
 	setResponseHeader(event, "content-type", "application/json; charset=utf-8");
@@ -32,8 +42,9 @@ export default defineEventHandler(async (event): Promise<ApiResponse<MininetChan
 		message: "success",
 		data: {
 			configured: config.baseUrl.length > 0,
-			readOnly: true,
-			writeEnabled: false,
+			readOnly: !writeEnabled,
+			writeEnabled,
+			capabilities,
 			endpointCount: MININET_ROUTES.length,
 			timeoutMs: config.timeoutMs,
 			readinessPath: "/api/health"

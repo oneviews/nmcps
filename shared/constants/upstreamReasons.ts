@@ -72,7 +72,15 @@ export const MININET_MESSAGES = {
 	/** 会话租户没有对应实例（NMCPS-ADR-0021 §5.2；不得回退到别的租户实例） */
 	tenantRuntimeUnavailable: "tenant_runtime_unavailable",
 	/** 台账没有该资源，或资源属于别的租户（D4：不区分「不存在」与「别人的」） */
-	resourceNotFound: "lab_resource_not_found"
+	resourceNotFound: "lab_resource_not_found",
+	/** 同一网络已有在途写操作（NMCPS-ADR-0022 D5） */
+	operationInProgress: "lab_operation_in_progress",
+	/** 同租户已有运行中网络，第二次建网 / 导入（NMCPS-ADR-0021 D6） */
+	networkAlreadyRunning: "lab_network_already_running",
+	/** 审计写盘失败：高风险动作不得「先做后补」（NMCPS-ADR-0022 D4） */
+	auditUnavailable: "audit_unavailable",
+	/** 写请求体不是合法 JSON 或超过上限 */
+	bodyInvalid: "bff_body_invalid"
 } as const;
 
 export type MininetMessage = (typeof MININET_MESSAGES)[keyof typeof MININET_MESSAGES];
