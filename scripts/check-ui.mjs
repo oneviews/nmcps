@@ -4907,9 +4907,11 @@ if (upstreamPort) {
 }
 
 // 11.3 实验网只读页（NMCPS-ADR-0021 P2 / NMCPS-ADR-0020）：`/scenario/simulator`
-// 的数据源是 `/api/lab/networks` + 五类节点 + 链路。这里分两个 BFF：
+// 的数据源是 `/api/lab/networks` + 五类节点 + 链路。这里分三个 BFF：
 //   ① 空台账：页面必须明确说「暂无仿真网络」，而不是画一张空画布；
-//   ② 有台账：节点 / 链路真的投影到画布，选中节点与链路时右侧详情跟着切换。
+//   ② 有台账：节点 / 链路真的投影到画布，选中节点与链路时右侧详情跟着切换；
+//   ③ 有资源清单：清单外的节点 / 链路不得进入画布。
+// 失败分支不另起 BFF，而是在浏览器侧把列表请求换成 503 / 403，再验证刷新重试。
 // 假 Mininet 端点已由 `startUpstream()` 提供（对象字典 + 数组），不需要再起第三个上游。
 if (upstreamPort) {
 	const LAB_TENANT = "t_default";
@@ -4977,7 +4979,74 @@ if (upstreamPort) {
 	try {
 		const labContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const labPage = await labContext.newPage();
+
+		// 失败分支：不改 BFF / 台账文件，直接在浏览器侧把列表请求换成 503 / 403。
+		// 断言三件事：错误卡出现、上游原话逐字保留、撤掉故障后点刷新能恢复画布。
+		let labNetworksFailure = { status: 503, message: "tenant_runtime_unavailable" };
+		await labPage.route("**/api/lab/networks", async (route) => {
+			if (!labNetworksFailure) {
+				await route.continue();
+				return;
+			}
+
+			await route.fulfill({
+				status: labNetworksFailure.status,
+				contentType: "application/json",
+				body: JSON.stringify({
+					code: labNetworksFailure.status,
+					status: "error",
+					message: labNetworksFailure.message,
+					timestamp: new Date().toISOString()
+				})
+			});
+		});
+
 		await loginToLab(labPage, labBase);
+
+		const failureProbe = await labPage.evaluate(() => {
+			const error = document.querySelector("[data-testid='mininet-error']");
+			return {
+				error: !!error,
+				canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+				text: (error?.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		log(
+			"11.3 /api/lab/networks 503 时显示错误卡并保留上游原话",
+			failureProbe.error && !failureProbe.canvas && failureProbe.text.includes("tenant_runtime_unavailable"),
+			`error=${failureProbe.error} canvas=${failureProbe.canvas} 文案=「${failureProbe.text.slice(0, 120)}」`
+		);
+
+		labNetworksFailure = { status: 403, message: "lab_permission_denied" };
+		await labPage.locator("[data-testid='mininet-refresh']").click();
+		await labPage.waitForTimeout(800);
+		const deniedProbe = await labPage.evaluate(() => {
+			const error = document.querySelector("[data-testid='mininet-error']");
+			return {
+				error: !!error,
+				canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+				text: (error?.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		log(
+			"11.3 /api/lab/networks 403 时错误卡展示权限拒绝原话",
+			deniedProbe.error && !deniedProbe.canvas && deniedProbe.text.includes("lab_permission_denied"),
+			`error=${deniedProbe.error} canvas=${deniedProbe.canvas} 文案=「${deniedProbe.text.slice(0, 120)}」`
+		);
+
+		labNetworksFailure = null;
+		await labPage.locator("[data-testid='mininet-refresh']").click();
+		await labPage.waitForTimeout(800);
+		const recoveredProbe = await labPage.evaluate(() => ({
+			error: !!document.querySelector("[data-testid='mininet-error']"),
+			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+			nodes: document.querySelectorAll("[data-testid='topology-node']").length
+		}));
+		log(
+			"11.3 撤掉故障后点刷新重试，错误卡消失且画布恢复",
+			!recoveredProbe.error && recoveredProbe.canvas && recoveredProbe.nodes === 6,
+			`error=${recoveredProbe.error} canvas=${recoveredProbe.canvas} nodes=${recoveredProbe.nodes}`
+		);
 
 		const topologyProbe = await labPage.evaluate(() => {
 			const statText = (id) => (document.querySelector(`[data-testid='${id}']`)?.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -5030,9 +5099,263 @@ if (upstreamPort) {
 			linkDetail.slice(0, 160) || "详情栏为空"
 		);
 
+		// ── 11.4 拓扑编辑（NMCPS-ADR-0022 W2）：能力位 → 新增 / 拖动 / 删除 ──
+		// 断言分两层：**页面渲染**跟能力位走（没有 `lab:create` 就不出菜单），
+		// **写请求**真的到达上游且请求体是上游要的形状（`mininetLog` 记的是 BFF 转发出去的那一次）。
+		await labPage.evaluate(() => {
+			document.querySelector("[data-testid='topology-node'][data-node-id='h1']")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await labPage.waitForTimeout(300);
+		const editProbe = await labPage.evaluate(() => ({
+			addMenu: !!document.querySelector("[data-testid='mininet-add-menu']"),
+			removeNode: !!document.querySelector("[data-testid='mininet-remove-node']")
+		}));
+		log(
+			"11.4 会话有写能力位时渲染新增菜单与删除节点入口",
+			editProbe.addMenu && editProbe.removeNode,
+			`add=${editProbe.addMenu} remove=${editProbe.removeNode}`
+		);
+
+		// 新增主机：菜单 → 表单 → 提交。默认名 `h3`，默认 IP 与坐标由页面给，这里只填名称。
+		// 元素缺失时**不抛**（Playwright 点空会等 30s 再中断整个自查），改成记一次失败继续跑。
+		const clickIfPresent = async (target) => {
+			const locator = typeof target === "string" ? labPage.locator(target) : target;
+			if (await locator.count() === 0)
+				return false;
+			await locator.first().click();
+			return true;
+		};
+
+		const menuClicked = await clickIfPresent("[data-testid='mininet-add-menu']");
+		const itemClicked = menuClicked && await clickIfPresent(labPage.getByRole("menuitem", { name: "主机" }));
+		await labPage.waitForTimeout(300);
+		const createOpen = itemClicked && await labPage.evaluate(() => !!document.querySelector("[data-testid='lab-node-name']"));
+		// 默认名按「画布节点数 + 1」生成（6 台 ⇒ `h7`）；这里显式写成 `h3`，
+		// 后续删除用例才对得上同一个 id，也不受假上游初始台数变化影响。
+		if (createOpen)
+			await labPage.locator("[data-testid='lab-node-name']").fill("h3");
+		const submitted = !!createOpen && await clickIfPresent("[data-testid='lab-node-submit']");
+		await labPage.waitForTimeout(1200);
+
+		const createdWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/hosts");
+		const afterCreate = await labPage.evaluate(() => ({
+			nodes: document.querySelectorAll("[data-testid='topology-node']").length,
+			modal: !!document.querySelector("[data-testid='lab-node-name']")
+		}));
+		log(
+			"11.4 新增主机走 POST /api/lab/hosts，请求体带名称 / IP / 坐标且画布随之多一个节点",
+			submitted
+			&& !!createdWrite
+			&& createdWrite.body?.name === "h3"
+			&& typeof createdWrite.body?.ip === "string" && createdWrite.body.ip.length > 0
+			&& typeof createdWrite.body?.x === "number" && typeof createdWrite.body?.y === "number"
+			&& afterCreate.nodes === 7 && !afterCreate.modal,
+			`表单=${createOpen} 提交=${submitted} 请求=${createdWrite ? JSON.stringify(createdWrite.body) : "无"} 节点=${afterCreate.nodes} 弹窗=${afterCreate.modal}`
+		);
+
+		// 拖动：画布给的是增量，页面必须落成绝对值（h1 原坐标 80/120，拖 +40/+20 ⇒ 120/140）
+		await labPage.locator("[data-testid='topology-node'][data-node-id='h1']").scrollIntoViewIfNeeded();
+		const nodeBox = await labPage.locator("[data-testid='topology-node'][data-node-id='h1']").boundingBox();
+		if (nodeBox) {
+			await labPage.mouse.move(nodeBox.x + nodeBox.width / 2, nodeBox.y + nodeBox.height / 2);
+			await labPage.mouse.down();
+			await labPage.mouse.move(nodeBox.x + nodeBox.width / 2 + 40, nodeBox.y + nodeBox.height / 2 + 20, { steps: 8 });
+			await labPage.mouse.up();
+		}
+		await labPage.waitForTimeout(1200);
+		const movedWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/node_position");
+		log(
+			"11.4 拖动节点把增量落成绝对值（POST /api/lab/node_position）",
+			!!nodeBox
+			&& movedWrite?.body?.node_id === "h1"
+			&& Array.isArray(movedWrite.body.position)
+			&& movedWrite.body.position[0] > 80 && movedWrite.body.position[1] > 120,
+			movedWrite ? JSON.stringify(movedWrite.body) : (nodeBox ? "没有坐标写请求" : "没找到 h1 节点")
+		);
+
+		// 删除新增的 h3：确认弹窗必须写出 id，确认后请求 `delete_node/h3`
+		await labPage.evaluate(() => {
+			document.querySelector("[data-testid='topology-node'][data-node-id='h3']")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await labPage.waitForTimeout(300);
+		const removeOpened = await clickIfPresent("[data-testid='mininet-remove-node']");
+		await labPage.waitForTimeout(300);
+		const confirmText = await labPage.evaluate(() =>
+			(document.body.textContent ?? "").replace(/\s+/g, " ").trim()
+		);
+		const confirmed = removeOpened && await clickIfPresent("[data-testid='lab-remove-confirm']");
+		await labPage.waitForTimeout(1200);
+
+		const deletedWrite = upstreamServer.mininetLog.find((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/delete_node/h3");
+		const afterRemove = await labPage.evaluate(() => document.querySelectorAll("[data-testid='topology-node']").length);
+		log(
+			"11.4 删除确认写明节点 id，确认后 DELETE /api/lab/delete_node/h3 并从画布消失",
+			confirmed && confirmText.includes("h3") && !!deletedWrite && afterRemove === 6,
+			`确认文案含 h3=${confirmText.includes("h3")} 请求=${deletedWrite ? deletedWrite.path : "无"} 节点=${afterRemove}`
+		);
+
+		// 流表：选中交换机后读 `GET /api/lab/flows/sw1`，原文逐字上屏（不做解析）
+		await labPage.evaluate(() => {
+			document.querySelector("[data-testid='topology-node'][data-node-id='sw1']")
+				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await labPage.waitForTimeout(800);
+		const flowText = await labPage.evaluate(() =>
+			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
+		);
+		log(
+			"11.4 选中交换机读出流表原文（GET /api/lab/flows/sw1）",
+			flowText.includes("actions=CONTROLLER") && flowText.includes("priority=0"),
+			flowText.trim().slice(0, 120) || "流表为空"
+		);
+
+		// 流表写入（W2b）：填匹配域 / 动作 / 优先级 → `POST /api/lab/flows`，
+		// 上游收到的就是这三段；重读后新行必须出现在同一块原文里。
+		// 注意 `UInput type="number"` 会把 v-model 交成 number —— 曾经让 `priority.trim()`
+		// 抛 TypeError、点击静默不写，这是自检真正抓到的那一处。
+		const flowForm = await labPage.evaluate(() => !!document.querySelector("[data-testid='lab-flow-actions']"));
+		if (flowForm) {
+			await labPage.locator("[data-testid='lab-flow-match']").fill("ip,nw_dst=10.0.0.9");
+			await labPage.locator("[data-testid='lab-flow-actions']").fill("output:2");
+			await labPage.locator("[data-testid='lab-flow-priority']").fill("10");
+		}
+		const flowSubmitted = flowForm && await clickIfPresent("[data-testid='lab-flow-submit']");
+		await labPage.waitForTimeout(1200);
+		const flowWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/flows");
+		const flowAfterAdd = await labPage.evaluate(() =>
+			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
+		);
+		log(
+			"11.4 加流走 POST /api/lab/flows，请求体带匹配域 / 动作 / 优先级且流表立即回显",
+			flowSubmitted
+			&& flowWrite?.body?.switch === "sw1"
+			&& flowWrite.body.match === "ip,nw_dst=10.0.0.9"
+			&& flowWrite.body.actions === "output:2"
+			&& flowWrite.body.priority === 10
+			&& flowAfterAdd.includes("nw_dst=10.0.0.9") && flowAfterAdd.includes("actions=output:2"),
+			`表单=${flowForm} 提交=${flowSubmitted} 请求=${flowWrite ? JSON.stringify(flowWrite.body) : "无"} 流表含新行=${flowAfterAdd.includes("nw_dst=10.0.0.9")}`
+		);
+
+		// 删单条流：第一行的删除按钮 ⇒ `DELETE /api/lab/flows/sw1/1`（1 基序号按 dump 行序），
+		// 删掉的必须是 CONTROLLER 那条，刚加的 output:2 仍在。
+		const flowRemoveClicked = await clickIfPresent("[data-testid='mininet-flow-remove']");
+		await labPage.waitForTimeout(1200);
+		const flowDeleteWrite = upstreamServer.mininetLog.find((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/flows/sw1/1");
+		const flowAfterRemove = await labPage.evaluate(() =>
+			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
+		);
+		log(
+			"11.4 删单条流走 DELETE /api/lab/flows/sw1/1，行号与上游 dump 序一致",
+			flowRemoveClicked
+			&& !!flowDeleteWrite
+			&& !flowAfterRemove.includes("CONTROLLER") && flowAfterRemove.includes("nw_dst=10.0.0.9"),
+			`点击=${flowRemoveClicked} 请求=${flowDeleteWrite ? flowDeleteWrite.path : "无"} 残留CONTROLLER=${flowAfterRemove.includes("CONTROLLER")}`
+		);
+
+		// 本地校验先拦一道（三条分支，零请求）：动作必填 / 匹配域不许夹带 `actions=` / 优先级 0-65535。
+		// 这三条必须在浏览器里就拦住 —— 发出去等上游 4xx 是另一码事，不能记成「校验通过」。
+		const flowPostCount = () => upstreamServer.mininetLog
+			.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/flows")
+			.length;
+		const flowPostsBeforeDraft = flowPostCount();
+		const submitFlowDraft = async (draft) => {
+			await labPage.locator("[data-testid='lab-flow-match']").fill(draft.match);
+			await labPage.locator("[data-testid='lab-flow-actions']").fill(draft.actions);
+			await labPage.locator("[data-testid='lab-flow-priority']").fill(String(draft.priority));
+			await clickIfPresent("[data-testid='lab-flow-submit']");
+			await labPage.waitForTimeout(500);
+			// 就地报错的落点：`[data-slot='error']` 挂在 `UFormField` 根节点下，
+			// 该字段里的 `input` 就是被判定的那个框 —— 借它证明「报错挂在出错的字段」。
+			return labPage.evaluate(() => ({
+				errors: [...document.querySelectorAll("[data-slot='error']")].map((node) => ({
+					text: (node.textContent ?? "").trim(),
+					field: node.closest("[data-slot='root']")?.querySelector("input")?.getAttribute("data-testid") ?? ""
+				})),
+				values: Object.fromEntries(["match", "actions", "priority"].map((key) => [key, document.querySelector(`[data-testid='lab-flow-${key}']`)?.value ?? ""]))
+			}));
+		};
+
+		const emptyActionsDraft = await submitFlowDraft({ match: "ip,nw_dst=10.0.0.9", actions: "", priority: "10" });
+		log(
+			"11.4 加流本地校验：动作为空时就地报错且零请求",
+			emptyActionsDraft.errors.length === 1
+			&& emptyActionsDraft.errors[0].text === "请填写动作"
+			&& emptyActionsDraft.errors[0].field === "lab-flow-actions"
+			&& flowPostCount() === flowPostsBeforeDraft,
+			`表单=${JSON.stringify(emptyActionsDraft.values)} 报错=${JSON.stringify(emptyActionsDraft.errors)} 请求数=${flowPostCount()}（基线 ${flowPostsBeforeDraft}）`
+		);
+
+		const matchActionsDraft = await submitFlowDraft({ match: "actions=output:1", actions: "output:2", priority: "10" });
+		log(
+			"11.4 加流本地校验：匹配域夹带 actions= 时就地报错且零请求",
+			matchActionsDraft.errors.length === 1
+			&& matchActionsDraft.errors[0].text === "匹配域不能包含 actions="
+			&& matchActionsDraft.errors[0].field === "lab-flow-match"
+			&& flowPostCount() === flowPostsBeforeDraft,
+			`表单=${JSON.stringify(matchActionsDraft.values)} 报错=${JSON.stringify(matchActionsDraft.errors)} 请求数=${flowPostCount()}（基线 ${flowPostsBeforeDraft}）`
+		);
+
+		// 70000 是 5 位整数，卡的是上界而不是位数：正则放行、`> 65535` 拦下。
+		const overflowDraft = await submitFlowDraft({ match: "ip,nw_dst=10.0.0.9", actions: "output:2", priority: "70000" });
+		log(
+			"11.4 加流本地校验：优先级超过 65535 时就地报错且零请求",
+			overflowDraft.errors.length === 1
+			&& overflowDraft.errors[0].text === "优先级必须是 0-65535 的整数"
+			&& overflowDraft.errors[0].field === "lab-flow-priority"
+			&& flowPostCount() === flowPostsBeforeDraft,
+			`表单=${JSON.stringify(overflowDraft.values)} 报错=${JSON.stringify(overflowDraft.errors)} 请求数=${flowPostCount()}（基线 ${flowPostsBeforeDraft}）`
+		);
+
 		await labContext.close();
 	} finally {
 		await stopBff(labBff);
+	}
+
+	// 资源清单分支：台账显式登记 nodes / links 时，BFF 列表出口必须把清单外条目剪掉。
+	// 假上游固定 6 节点 / 2 链路；这里只登记 5 个节点和 1 条链路，页面不应画出 h2 与 sw1→r1。
+	const manifestPort = await freePort();
+	const manifestBase = `http://${HOST}:${manifestPort}`;
+	const manifestBff = await startBff(manifestPort, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		NUXT_BFF_SESSION_SECRET: labSecret,
+		NUXT_LAB_LEDGER_FILE: `.data/check-ui-lab-manifest-${process.pid}.json`,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify([{
+			...labSeed[0],
+			id: "net_ui_manifest",
+			resources: {
+				nodes: ["h1", "sw1", "r1", "nat1", "c0"],
+				links: ["h1--sw1"]
+			}
+		}]),
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: `http://${HOST}:${upstreamPort}` } })
+	});
+
+	try {
+		const manifestContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const manifestPage = await manifestContext.newPage();
+		await loginToLab(manifestPage, manifestBase);
+
+		const manifestProbe = await manifestPage.evaluate(() => ({
+			nodes: Array.from(document.querySelectorAll("[data-testid='topology-node']"))
+				.map((el) => el.getAttribute("data-node-id") ?? ""),
+			links: Array.from(document.querySelectorAll("[data-testid='topology-link']"))
+				.map((el) => el.getAttribute("data-link-key") ?? "")
+		}));
+		const hiddenNode = !manifestProbe.nodes.includes("h2");
+		const hiddenLink = manifestProbe.links.every((key) => !/(?:^|-)r1(?:$|-)/.test(key));
+		log(
+			"11.3 台账资源清单外的节点与链路不进入画布",
+			manifestProbe.nodes.length === 5 && manifestProbe.links.length === 1
+			&& manifestProbe.nodes.includes("h1") && manifestProbe.nodes.includes("c0")
+			&& hiddenNode && hiddenLink,
+			`nodes=${manifestProbe.nodes.join(",")} links=${manifestProbe.links.join(",")}`
+		);
+
+		await manifestContext.close();
+	} finally {
+		await stopBff(manifestBff);
 	}
 }
 

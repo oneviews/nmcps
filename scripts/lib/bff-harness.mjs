@@ -236,6 +236,61 @@ export async function startUpstream(port) {
 	const authLog = { login: 0, refresh: 0, reusedRefresh: 0, logout: [], password: [], issuedAccess: new Set(), revokedAccess: new Set(), seq: 0 };
 
 	/**
+	 * Mininet 实验后端状态（NMCPS-ADR-0022 W2）：五类节点 + 链路，**可变**。
+	 *
+	 * 建节点 / 连线 / 改坐标 / 删除真的改这张表，页面写完 `load()` 能读回刚写的事实；
+	 * `mininetLog` 记下每次写请求的 `{ method, path, body }`，自检据此断言
+	 * 「发出去的到底是什么」，而不是只看画布上的数字。
+	 */
+	const mininetLog = [];
+	const mininetState = {
+		hosts: {
+			h1: { name: "h1", ip: "10.0.0.1", mac: "00:00:00:00:00:01", x: 80, y: 120 },
+			h2: { name: "h2", ip: "10.0.0.2", mac: "00:00:00:00:00:02", x: 80, y: 260 }
+		},
+		switches: {
+			sw1: { name: "sw1", x: 260, y: 190, ports: 4, of_version: null }
+		},
+		routers: {
+			r1: { name: "r1", x: 440, y: 190 }
+		},
+		nats: {
+			nat1: { name: "nat1", x: 620, y: 120 }
+		},
+		controllers: {
+			c0: { name: "c0", x: 620, y: 260 }
+		},
+		links: [
+			{ from: "h1", to: "sw1" },
+			{ from: "sw1", to: "r1" }
+		]
+	};
+	/** 节点 id → 它落在哪张表（改坐标 / 删节点按表分派，与上游 `node_position` 同口径） */
+	const mininetBucketOf = (id) => ["hosts", "switches", "routers", "nats", "controllers"]
+		.find((bucket) => Object.hasOwn(mininetState[bucket], id));
+
+	/**
+	 * 交换机流表（ADR-0022 W2b）：`{ sw1: [ "<原文行>", … ] }`，行序即上游
+	 * `DELETE /flows/{sw}/{flow_id}` 的 1 基序号。故意**不放进 `mininetState`** ——
+	 * 那里每个键都会落进「单段路径 = 集合」的分支，`GET /flows` 会被误当成集合读。
+	 */
+	const mininetFlows = {
+		sw1: ["cookie=0x0, duration=12.4s, table=0, n_packets=3, n_bytes=210, priority=0 actions=CONTROLLER:65535"]
+	};
+	/** 加流请求体 → `dump-flows` 形状的一行（字段顺序与 `flow_rules.py::build_flow` 同源） */
+	const mininetFlowLineOf = (body) => {
+		const actions = String(body?.actions ?? "").trim();
+		const plain = actions.toLowerCase().startsWith("actions=") ? actions.slice("actions=".length).trim() : actions;
+		const parts = ["cookie=0x0, duration=0s, table=0, n_packets=0, n_bytes=0"];
+		if (body?.priority !== undefined && body?.priority !== null)
+			parts.push(`priority=${body.priority}`);
+		if (typeof body?.match === "string" && body.match.trim())
+			parts.push(body.match.trim());
+		parts.push(`actions=${plain}`);
+		return parts.join(", ");
+	};
+
+	/**
 	 * 账号口令是**可变**的：改密真的落库、重登真的校验（默认口令 `p@ssw0rd`）。
 	 *
 	 * 新代没有 `mfaRequired` / `mustResetPassword`（NMCPS-ADR-0018 缺口 G2/G8），
@@ -403,7 +458,12 @@ export async function startUpstream(port) {
 	const iamRoles = [
 		{ id: "r_platform_admin", tenant_id: null, name: "平台管理员", code: "platform.admin", description: "平台内置角色", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
 		{ id: "r_tenant_admin", tenant_id: "tnt_default", name: "租户管理员", code: "tenant.admin", description: "租户内置角色", enabled: true, is_system: true, created_at: "2026-11-03T19:00:00+08:00", updated_at: "2026-11-03T19:00:00+08:00", deleted_at: null },
-		{ id: "r_tenant_viewer_isp_a", tenant_id: "t_isp_a", name: "ISP-A 只读", code: "tenant.viewer", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:20:00+08:00", updated_at: "2026-11-04T09:20:00+08:00", deleted_at: null }
+		{ id: "r_tenant_viewer_isp_a", tenant_id: "t_isp_a", name: "ISP-A 只读", code: "tenant.viewer", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:20:00+08:00", updated_at: "2026-11-04T09:20:00+08:00", deleted_at: null },
+		// 实验台管理角色（NMCPS-ADR-0021 / NMCPS-ADR-0022）：`labPermissionsOf()` 只认
+		// `tenant_admin` 这个**下划线**编码，而本文件的 IAM 列表用的是点号编码（`tenant.admin`），
+		// 两者不是同一套词表 —— 没有这条角色，`/scenario/simulator` 的自检账号只有 `lab:read`，
+		// 「写动作先读能力位」的正向分支就永远测不到。
+		{ id: "r_lab_tenant_admin", tenant_id: "t_default", name: "实验台管理员", code: "tenant_admin", description: "仿真网络读写（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T09:00:00+08:00", updated_at: "2026-11-16T09:00:00+08:00", deleted_at: null }
 	];
 
 	/**
@@ -419,6 +479,8 @@ export async function startUpstream(port) {
 
 	const iamSubjectRoles = [
 		{ id: "sr-alice", subject_type: "user", subject_id: "u_alice", role_id: "r_tenant_admin", created_at: "2026-11-04T09:00:00+08:00" },
+		// `/scenario/simulator` 的写路径自查用：给 alice 一条 `tenant_admin`（下划线编码）角色
+		{ id: "sr-alice-lab", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_tenant_admin", created_at: "2026-11-16T09:00:00+08:00" },
 		{ id: "sr-bob", subject_type: "user", subject_id: "u_bob", role_id: "r_tenant_admin", created_at: "2026-11-04T09:01:00+08:00" },
 		{ id: "sr-orphan", subject_type: "user", subject_id: "u_ghost", role_id: "r_tenant_admin", created_at: "2026-11-04T09:02:00+08:00" }
 	];
@@ -1767,42 +1829,119 @@ export async function startUpstream(port) {
 			});
 		}
 
-		/**
-		 * Mininet 实验后端形状（NMCPS-ADR-0020 / 2026-11-15）：给 `/scenario/simulator`
-		 * 的端到端自查用。五类节点分别回对象字典（真实上游口径），链路回数组；
-		 * 节点带 `x` / `y`，页面会按这些坐标投影到 `TopologyCanvas`。
-		 */
-		if (url.pathname === "/api/mininet/hosts" && req.method === "GET") {
-			return send(200, {
-				h1: { name: "h1", ip: "10.0.0.1", mac: "00:00:00:00:00:01", x: 80, y: 120 },
-				h2: { name: "h2", ip: "10.0.0.2", mac: "00:00:00:00:00:02", x: 80, y: 260 }
-			});
-		}
-		if (url.pathname === "/api/mininet/switches" && req.method === "GET") {
-			return send(200, {
-				sw1: { name: "sw1", x: 260, y: 190, ports: 4 }
-			});
-		}
-		if (url.pathname === "/api/mininet/routers" && req.method === "GET") {
-			return send(200, {
-				r1: { name: "r1", x: 440, y: 190 }
-			});
-		}
-		if (url.pathname === "/api/mininet/nats" && req.method === "GET") {
-			return send(200, {
-				nat1: { name: "nat1", x: 620, y: 120 }
-			});
-		}
-		if (url.pathname === "/api/mininet/controllers" && req.method === "GET") {
-			return send(200, {
-				c0: { name: "c0", x: 620, y: 260 }
-			});
-		}
-		if (url.pathname === "/api/mininet/links" && req.method === "GET") {
-			return send(200, [
-				{ from: "h1", to: "sw1" },
-				{ from: "sw1", to: "r1" }
-			]);
+		if (url.pathname.startsWith("/api/mininet/")) {
+			const rest = url.pathname.slice("/api/mininet/".length);
+			const segments = rest.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
+
+			// ── 写：先记账再落表，自检读的是「页面发了什么」 ──
+			if (req.method !== "GET") {
+				const body = await readJsonBody(req);
+				mininetLog.push({ method: req.method, path: url.pathname, body });
+
+				const collection = segments[0];
+
+				// 流表（ADR-0022 W2b）：三条写都真改表 —— 页面写完重读 `GET /flows/{sw}`
+				// 必须看得见变化，否则「加流成功」就成了空口断言。
+				if (collection === "flows") {
+					const switchId = segments[1] ?? body?.switch;
+					if (!Object.hasOwn(mininetFlows, switchId))
+						return send(404, { detail: `Switch ${switchId} not found` });
+
+					if (req.method === "POST" && segments.length === 1) {
+						if (!String(body?.actions ?? "").trim())
+							return send(422, { detail: "actions is required" });
+						const line = mininetFlowLineOf(body);
+						mininetFlows[switchId].push(line);
+						return send(200, { status: "ok", flow: line });
+					}
+
+					// 单条删除：`flow_id` 是 1 基序号（上游 `delete_flow_by_id()` 的 dump 行序）
+					if (req.method === "DELETE" && segments.length === 3) {
+						const index = Number(segments[2]) - 1;
+						if (!Number.isInteger(index) || index < 0 || index >= mininetFlows[switchId].length)
+							return send(404, { detail: "flow_id not found" });
+						mininetFlows[switchId].splice(index, 1);
+						return send(200, { status: "ok" });
+					}
+
+					// 批量删除：带 `match` 只删命中的行，不带就是清空（上游 `del-flows` 语义）
+					if (req.method === "DELETE" && segments.length === 1) {
+						const match = typeof body?.match === "string" ? body.match.trim() : "";
+						mininetFlows[switchId] = match
+							? mininetFlows[switchId].filter((line) => !line.includes(match))
+							: [];
+						return send(200, { status: "ok", match: match || "all" });
+					}
+
+					return send(405, { detail: "method not allowed" });
+				}
+
+				if (req.method === "POST" && segments.length === 1 && collection !== "links" && Object.hasOwn(mininetState, collection)) {
+					const id = body?.name ?? body?.id;
+					if (!id)
+						return send(422, { detail: "name is required" });
+					mininetState[collection][id] = { ...body };
+					return send(200, { status: "ok" });
+				}
+
+				if (req.method === "POST" && collection === "links") {
+					const source = Array.isArray(body) ? body[0] : body?.src;
+					const target = Array.isArray(body) ? body[1] : body?.dst;
+					if (!source || !target)
+						return send(400, { detail: "node not in net" });
+					mininetState.links.push({ from: source, to: target });
+					return send(200, { status: "ok" });
+				}
+
+				if (req.method === "POST" && collection === "node_position") {
+					const bucket = mininetBucketOf(body?.node_id);
+					const [x, y] = Array.isArray(body?.position) ? body.position : [];
+					if (!bucket || typeof x !== "number" || typeof y !== "number")
+						return send(404, { detail: `Node ${body?.node_id} not found` });
+					mininetState[bucket][body.node_id].x = x;
+					mininetState[bucket][body.node_id].y = y;
+					return send(200, { message: `Node ${body.node_id} updated successfully` });
+				}
+
+				if (req.method === "PUT" && collection === "switches" && segments[2] === "openflow") {
+					const node = mininetState.switches[segments[1]];
+					if (!node)
+						return send(404, { detail: "switch not found" });
+					node.of_version = body?.of_version === "auto" || body?.of_version === "" ? null : body?.of_version ?? null;
+					return send(200, { switch: node });
+				}
+
+				if (req.method === "DELETE" && collection === "delete_node") {
+					const bucket = mininetBucketOf(segments[1]);
+					if (!bucket)
+						return send(404, { detail: `Node ${segments[1]} not found` });
+					delete mininetState[bucket][segments[1]];
+					mininetState.links = mininetState.links.filter((link) => link.from !== segments[1] && link.to !== segments[1]);
+					return send(200, { message: `Node ${segments[1]} deleted successfully` });
+				}
+
+				if (req.method === "DELETE" && collection === "delete_link") {
+					const before = mininetState.links.length;
+					mininetState.links = mininetState.links.filter((link) =>
+						!((link.from === segments[1] && link.to === segments[2]) || (link.from === segments[2] && link.to === segments[1])));
+					if (mininetState.links.length === before)
+						return send(404, { detail: "Node not found" });
+					return send(200, { message: "deleted successfully" });
+				}
+
+				return send(200, { status: "ok" });
+			}
+
+			// ── 读：五类节点回对象字典、链路回数组、流表回 `ovs-ofctl` 原文 ──
+			if (segments.length === 1 && Object.hasOwn(mininetState, segments[0])) {
+				const value = mininetState[segments[0]];
+				return send(200, Array.isArray(value) ? value : { ...value });
+			}
+			if (segments[0] === "flows" && segments.length === 2) {
+				if (!Object.hasOwn(mininetFlows, segments[1]))
+					return send(404, { detail: `Switch ${segments[1]} not found` });
+				return send(200, { switch: segments[1], flows: mininetFlows[segments[1]].join("\n") });
+			}
 		}
 
 		if (url.pathname === "/device/ok")
@@ -1927,6 +2066,8 @@ export async function startUpstream(port) {
 
 	server.authLog = authLog;
 	server.control = control;
+	server.mininetLog = mininetLog;
+	server.mininetState = mininetState;
 
 	return server;
 }

@@ -809,7 +809,8 @@
 			"title": "Simulation",
 			"toolbar": {
 				"refresh": "Refresh",
-				"labels": "Labels"
+				"labels": "Labels",
+				"add": "Add"
 			},
 			"stats": {
 				"network": "Network",
@@ -842,6 +843,83 @@
 				"link": "Link",
 				"from": "From",
 				"to": "To"
+			},
+			"kinds": {
+				"host": "host",
+				"switch": "switch",
+				"router": "router",
+				"nat": "NAT",
+				"controller": "controller"
+			},
+			"add": {
+				"title": "Add {kind}",
+				"hint": "The node joins the lab ledger and shows up on the canvas right away; the upstream validates name and IP.",
+				"name": "Name",
+				"namePlaceholder": "e.g. h3",
+				"label": "Display name",
+				"labelPlaceholder": "Empty means the same as the name",
+				"ip": "IP",
+				"mac": "MAC",
+				"ports": "Ports",
+				"switchType": "Switch type",
+				"controllerPort": "Controller port",
+				"submit": "Create",
+				"cancel": "Cancel",
+				"failed": "Create failed",
+				"errors": {
+					"nameRequired": "Enter a name",
+					"nameInvalid": "Only letters, digits and _ . - are allowed",
+					"nameTaken": "That name already exists (the upstream would silently overwrite it)",
+					"ipRequired": "Enter an IP",
+					"ipInvalid": "An IP looks like 10.0.0.2 or 10.0.0.2/24",
+					"macInvalid": "A MAC looks like 00:00:00:00:00:01",
+					"portsInvalid": "Port count must be a positive integer",
+					"portInvalid": "Port must be between 1 and 65535"
+				}
+			},
+			"edit": {
+				"removeNode": "Delete node",
+				"removeLink": "Delete link",
+				"openflow": "OpenFlow version",
+				"openflowAuto": "Upstream default",
+				"linkTo": "Link to",
+				"linkPlaceholder": "Pick another device",
+				"linkSubmit": "Link",
+				"created": "Created node {id}",
+				"linked": "Linked {source} ↔ {target}"
+			},
+			"remove": {
+				"nodeTitle": "Delete node",
+				"linkTitle": "Delete link",
+				"nodeSummary": "About to delete node {id}",
+				"linkSummary": "About to delete link {source} ↔ {target}",
+				"nodeBody": "The node and all of its links leave the lab network and cannot be restored.",
+				"linkBody": "The link is torn down and removed from the ledger; both endpoints stay.",
+				"irreversible": "This cannot be undone",
+				"failed": "Delete failed",
+				"cancel": "Cancel",
+				"submit": "Delete"
+			},
+			"flows": {
+				"title": "Flow table",
+				"loading": "Reading flows…",
+				"empty": "This switch has no flow entries.",
+				"reload": "Reload flows",
+				"match": "Match",
+				"matchPlaceholder": "e.g. ip,nw_dst=10.0.0.9",
+				"actions": "Actions",
+				"actionsPlaceholder": "e.g. output:2",
+				"priority": "Priority",
+				"priorityPlaceholder": "Leave blank for the upstream default",
+				"submit": "Add flow",
+				"remove": "Delete flow #{id}",
+				"created": "Flow added on switch {id}",
+				"removed": "Deleted flow #{id} on switch {switch}",
+				"errors": {
+					"actionsRequired": "Actions are required",
+					"matchInvalid": "Match must not contain actions=",
+					"priorityInvalid": "Priority must be an integer between 0 and 65535"
+				}
 			}
 		},
 		"device": {

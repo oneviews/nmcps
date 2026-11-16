@@ -318,7 +318,7 @@
 	import { nodeIconSizeOf, nodeRadiusOf, roleStrokeClass, roleTextClass, statusDotRadius } from "~~/app/utils/graph/topologyRoleStyle";
 	import { linkStrokeClass, nodeFillClass } from "~~/app/utils/graph/topologyStatusStyle";
 
-	const props = defineProps<{
+	const props = withDefaults(defineProps<{
 		nodes: PositionedTopologyNode[]
 		links: TopologyGraphLink[]
 		width: number
@@ -347,9 +347,20 @@
 		offsets?: NodeOffsetMap
 		/** 是否渲染节点名称（页面「显示名称」开关；缺省渲染 —— 关掉后只剩节点 + 状态圆点） */
 		showLabels?: boolean
+		/**
+		 * 是否允许拖动节点（缺省 `true`）：位移由页面落表 / 落库。
+		 *
+		 * 只读台账（仿真通道没有 `lab:operate`）时必须关掉 —— 拖了却不落库等于
+		 * 让用户以为改成功了（NMCPS-ADR-0022 D3「先有权限位再渲染动作」）。
+		 */
+		draggable?: boolean
 		/** 无障碍名称（`<svg>` 的 `aria-label`）：屏幕阅读器念的就是这一句 */
 		label: string
-	}>();
+	}>(), {
+		// 缺省必须显式给 `true`：布尔 prop 不传时 Vue 会当 `false`，
+		// 生产拓扑页不传这个 prop，靠默认值才能继续拖动（A26 回归过）。
+		draggable: true
+	});
 
 	const emit = defineEmits<{
 		select: [id: string]
@@ -435,6 +446,9 @@
 	 * 不接管的话拖节点会变成拖画布 —— 位移层永远收不到落点。
 	 */
 	function onNodePointerDown(event: PointerEvent, id: string): void {
+		if (props.draggable === false)
+			return;
+
 		if (event.button !== 0)
 			return;
 		drag.value = {

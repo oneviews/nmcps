@@ -809,7 +809,8 @@
 			"title": "仿真网络验证",
 			"toolbar": {
 				"refresh": "刷新",
-				"labels": "名称"
+				"labels": "名称",
+				"add": "新增"
 			},
 			"stats": {
 				"network": "网络",
@@ -842,6 +843,83 @@
 				"link": "链路",
 				"from": "起点",
 				"to": "终点"
+			},
+			"kinds": {
+				"host": "主机",
+				"switch": "交换机",
+				"router": "路由器",
+				"nat": "NAT",
+				"controller": "控制器"
+			},
+			"add": {
+				"title": "新增{kind}",
+				"hint": "节点写入实验网台账后立即出现在画布上；名称与 IP 由上游校验。",
+				"name": "名称",
+				"namePlaceholder": "例：h3",
+				"label": "显示名",
+				"labelPlaceholder": "留空则与名称一致",
+				"ip": "IP",
+				"mac": "MAC",
+				"ports": "端口数",
+				"switchType": "交换机类型",
+				"controllerPort": "控制器端口",
+				"submit": "创建",
+				"cancel": "取消",
+				"failed": "创建失败",
+				"errors": {
+					"nameRequired": "请填写名称",
+					"nameInvalid": "只能使用字母、数字与 _ . -",
+					"nameTaken": "该名称已存在（上游会静默覆盖，这里先拦住）",
+					"ipRequired": "请填写 IP",
+					"ipInvalid": "IP 形如 10.0.0.2 或 10.0.0.2/24",
+					"macInvalid": "MAC 形如 00:00:00:00:00:01",
+					"portsInvalid": "端口数必须是正整数",
+					"portInvalid": "端口必须在 1-65535 之间"
+				}
+			},
+			"edit": {
+				"removeNode": "删除节点",
+				"removeLink": "删除链路",
+				"openflow": "OpenFlow 版本",
+				"openflowAuto": "跟随默认",
+				"linkTo": "连线到",
+				"linkPlaceholder": "选择另一台设备",
+				"linkSubmit": "连线",
+				"created": "已创建节点 {id}",
+				"linked": "已连接 {source} ↔ {target}"
+			},
+			"remove": {
+				"nodeTitle": "删除节点",
+				"linkTitle": "删除链路",
+				"nodeSummary": "即将删除节点 {id}",
+				"linkSummary": "即将删除链路 {source} ↔ {target}",
+				"nodeBody": "节点与其全部链路会一并从实验网移除，且无法撤销。",
+				"linkBody": "链路会被断开并从台账移除，两端节点保留。",
+				"irreversible": "该操作不可撤销",
+				"failed": "删除失败",
+				"cancel": "取消",
+				"submit": "删除"
+			},
+			"flows": {
+				"title": "流表",
+				"loading": "读取流表…",
+				"empty": "该交换机没有流表项。",
+				"reload": "重新读取流表",
+				"match": "匹配域",
+				"matchPlaceholder": "例：ip,nw_dst=10.0.0.9",
+				"actions": "动作",
+				"actionsPlaceholder": "例：output:2",
+				"priority": "优先级",
+				"priorityPlaceholder": "留空则跟随上游默认",
+				"submit": "加流",
+				"remove": "删除第 {id} 条流",
+				"created": "已向交换机 {id} 写入流表项",
+				"removed": "已删除交换机 {switch} 的第 {id} 条流",
+				"errors": {
+					"actionsRequired": "请填写动作",
+					"matchInvalid": "匹配域不能包含 actions=",
+					"priorityInvalid": "优先级必须是 0-65535 的整数"
+				}
 			}
 		},
 		"device": {
