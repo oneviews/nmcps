@@ -145,7 +145,7 @@ log("登录页默认预填超级管理员种子账号", prefill.account === "adm
 await page.getByRole("button", { name: "租户管理员" }).click();
 await page.waitForTimeout(200);
 const tenantPrefill = await readCredentials();
-log("切换演示身份回填租户管理员种子账号", tenantPrefill.account === "tenantadmin" && tenantPrefill.password === "Tenant@123456", `${tenantPrefill.account} / ${tenantPrefill.password ? "****" : "空"}`);
+log("切换演示身份回填租户管理员种子账号", tenantPrefill.account === "tenantadmin" && tenantPrefill.password === "admin_2026", `${tenantPrefill.account} / ${tenantPrefill.password ? "****" : "空"}`);
 
 await page.getByRole("button", { name: "超级管理员" }).click();
 await page.waitForTimeout(200);

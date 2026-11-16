@@ -15,14 +15,14 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.8.0
+version: 0.8.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-10-31"
+updatedAt: "2026-11-16"
 icon: "carbon:user-certification"
 tags:
   - "架构"
@@ -191,7 +191,7 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 - 预填范围：`accountName` / `password` / `tenantCode` 三项随身份整体回填，其余字段（如 `mfaCode`）不动；字段保持可编辑。
 - 身份口径：超级管理员 `tenantId` 恒为 `0`，`tenantCode` 留空；租户管理员带租户编码 —— 与第五节多租户隔离、`AUTH_ACCOUNT_LEVEL`（`0` / `1`）一致。
 - 演示专用：种子口令只用于演示与录屏；上线前须核对与上游 IAM 种子脚本一致，或移除预填（裁决见 `NMCPS-ADR-0013`）。
-- 种子事实（需求方给定 + 2026-10-31 对 `http://192.168.1.55:8888/api/v1` 实测）：登录 API = `POST /api/v1/auth/login`；超级管理员 `admin` / `Admin@123456`（`accountLevel: 0`、`tenantId: 0`）；租户管理员 `tenantadmin` / `Tenant@123456`（`accountLevel: 1`、`tenantId: 1`）。种子不含租户编码，`tenantCode` 留空即可登录（内置默认租户 code 为 `default`，仅显式多租户时填）。
+- 种子事实（需求方给定 + 2026-10-31 对 `http://192.168.1.55:8888/api/v1` 实测）：登录 API = `POST /api/v1/auth/login`；超级管理员 `admin` / `Admin@123456`（`accountLevel: 0`、`tenantId: 0`）；租户管理员 `tenantadmin`（`accountLevel: 1`、`tenantId: 1`），**默认口令 `admin_2026`**（2026-11-16 按需求方要求更新，此前登记为 `Tenant@123456`；超管口令不变）。种子不含租户编码，`tenantCode` 留空即可登录（内置默认租户 code 为 `default`，仅显式多租户时填）。
 - 登录前提：必须配置 `NUXT_BFF_UPSTREAM_BASE`（本地 `.env`，不入库）。上游为空时 `/api/auth/*` 一律返回 `503 bff_upstream_missing`，任何账号都登不上 —— 预填再好也补不了上游缺失。
 - 上游探针：登录页挂载时由 `useBffUpstream()` 打 `GET /ready`（显式 `retry: false` —— 503 在 ofetch 默认重试列表内，否则一次进页会打两次），只在 BFF 明确回 `upstream.configured === false` 时提示缺失；探针失败（网络中断 / 桌面端无同源 Nitro）不下结论，交给登录动作报错。
 - 探针结论缓存：`sessionStorage`（键 `bff.upstreamProbe`），「已配置」30s、「未配置」5s（待修状态需尽快自愈）；提示内附「重新检测」按钮，绕过缓存立即重探，配好 `.env` 重启 BFF 后无需等待 TTL。
@@ -247,3 +247,4 @@ IAM（Identity and Access Management）是安全基石，本质使命是「四�
 | 2026-10-31 | 0.6.0 | 平台能力面引入 2 条浏览器断言（侧栏不出现「平台能力」分组 / `/os` 只显示降级提示），守卫用例由 `/commands` 改判 `/os`，7.7 计数改为自建 66 / 外部 51；能力矩阵与探针口径见 `NMCPS-ARCH-005`（layers/content/collections/cn/architecture/1.architecture/platform-architecture.md），裁决见 `NMCPS-ADR-0015`（layers/content/collections/cn/records/adr/adr-0015.md）。 |
 | 2026-10-31 | 0.6.1 | 平台能力面补「显示」分支：`check:ui` 末尾用宿主模拟（注入 `globalThis.isTauri` + 最小 IPC 桩，另起一个带 `NUXT_PUBLIC_BFF_BASE` 的实例）断言分组出现且含 5 个入口，7.7 计数改为自建 68 / 外部 51；无头环境无 `DISPLAY`，原生窗口与移动端仍为手验项（`NMCPS-ARCH-005` §7）。 |
 | 2026-10-31 | 0.8.0 | 下载落地页迁入系统配置：`/` 不再是页面（`routeRules` 冷启动 `302` 到 `/auth/login`，站内跳回 `/` 由守卫分流到 `/dashboard/overview` 或登录页），下载页改为系统管理子路由 `/system/download`（「系统管理 → 下载中心」，`layers/system/app/pages/system/download.vue`，迁入 `useOS()` 与 `app.config.downloads`）；7.6 白名单只留 `/auth/**`。原 4 条落地页断言改为 2 条根路径断言 + 1 条下载中心守卫断言 + 3 条下载中心断言，7.7 计数改为自建 70 / 外部 53。裁决见 `NMCPS-ADR-0016`（取代 `NMCPS-ADR-0008`），领域口径见 `NMCPS-DESIGN-005`。 |
+| 2026-11-16 | 0.8.1 | 7.7 按需求方要求更新租户管理员默认口令：`tenantadmin` 的默认口令由 `Tenant@123456` 改为 `admin_2026`（超级管理员 `admin` / `Admin@123456` 不变）；只改常量单一事实源 `shared/constants/demoAccounts.ts` 与 `check:ui` 的预填断言，预填机制、登录流程与超管预填均不变。上游 IAM 种子口令若未同步，页面预填值只是演示默认值，真实登录仍以上游账号为准。 |

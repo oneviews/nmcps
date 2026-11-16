@@ -13,14 +13,14 @@ authority: normative
 scope:
   - arch.iam
 status: baseline
-version: 0.8.0
+version: 0.8.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-10-31"
+updatedAt: "2026-11-16"
 icon: "carbon:user-certification"
 tags:
   - "Architecture"
@@ -189,7 +189,7 @@ This repository is a demo program, so the login page must be loggable out of the
 - Prefill scope: `accountName` / `password` / `tenantCode` are refilled as a set per identity; other fields (such as `mfaCode`) are left alone, and every field stays editable.
 - Identity semantics: the super admin always has `tenantId === 0` and an empty `tenantCode`; the tenant admin carries a tenant code — consistent with the multi-tenant isolation in §5 and `AUTH_ACCOUNT_LEVEL` (`0` / `1`).
 - Demo only: the seed passwords serve demos and recordings; before going live they must be checked against the upstream IAM seed script, or the prefill removed (see `NMCPS-ADR-0013`).
-- Verified seed facts (owner-specified, probe on 2026-10-31 against `http://192.168.1.55:8888/api/v1`): login API `POST /api/v1/auth/login`; super admin `admin` / `Admin@123456` (`accountLevel: 0`, `tenantId: 0`); tenant admin `tenantadmin` / `Tenant@123456` (`accountLevel: 1`, `tenantId: 1`). The seeds carry no tenant code, so an empty `tenantCode` is enough to log in (the built-in default tenant code is `default`, used only when a tenant must be chosen explicitly).
+- Verified seed facts (owner-specified, probe on 2026-10-31 against `http://192.168.1.55:8888/api/v1`): login API `POST /api/v1/auth/login`; super admin `admin` / `Admin@123456` (`accountLevel: 0`, `tenantId: 0`); tenant admin `tenantadmin` (`accountLevel: 1`, `tenantId: 1`) with **default password `admin_2026`** (updated on 2026-11-16 at the requester's instruction; previously recorded as `Tenant@123456`; the super admin password is unchanged). The seeds carry no tenant code, so an empty `tenantCode` is enough to log in (the built-in default tenant code is `default`, used only when a tenant must be chosen explicitly).
 - Prerequisite: `NUXT_BFF_UPSTREAM_BASE` must be set (local `.env`, never committed). With an empty upstream every `/api/auth/*` route answers `503 bff_upstream_missing`, so no account — seed or otherwise — can log in; the prefill cannot compensate for a missing upstream.
 - Upstream probe: on mount the login page calls `GET /ready` through `useBffUpstream()` with an explicit `retry: false` (503 sits in ofetch's default retry list, so leaving it on means two requests per visit). Only an explicit `upstream.configured === false` triggers the warning; a failed probe (network outage, or desktop with no same-origin Nitro) draws no conclusion and defers to the login call.
 - Probe cache: `sessionStorage` under `bff.upstreamProbe`, 30s for "configured" and 5s for "not configured" (a to-fix state should heal quickly). The warning carries a "Check again" button that skips the cache, so fixing `.env` and restarting the BFF takes effect without waiting for the TTL.
@@ -245,4 +245,5 @@ The former blanks are now closed (the `AUTOTEST-*` probe account was disabled wi
 | 2026-10-31 | 0.6.0 | The platform capability surface adds two browser assertions (no "Platform capabilities" group in the sidebar / `/os` only renders the degradation notice) and the guard case moves from `/commands` to `/os`, so 7.7 now reads 66 self-built / 51 external; the capability matrix and probe scope live in `NMCPS-ARCH-005` (layers/content/collections/en/architecture/1.architecture/platform-architecture.md), decided in `NMCPS-ADR-0015` (layers/content/collections/en/records/adr/adr-0015.md). |
 | 2026-10-31 | 0.6.1 | The platform capability surface gains its "visible" branch: `check:ui` ends with a host simulation (inject `globalThis.isTauri` plus a minimal IPC stub, a second instance with `NUXT_PUBLIC_BFF_BASE`) asserting the group appears with five entries, moving 7.7 to 68 self-built / 51 external; with no `DISPLAY` in headless runs, native windows and mobile stay manual (`NMCPS-ARCH-005` §7). |
 | 2026-10-31 | 0.8.0 | The download landing page moves into the system section: `/` is no longer a page (`routeRules` answers a cold load with `302` to `/auth/login`, an in-app jump to `/` is routed by the guard to `/dashboard/overview` or the sign-in page), and downloads become the system sub-route `/system/download` ("System → Downloads", `layers/system/app/pages/system/download.vue`, carrying `useOS()` and `app.config.downloads`); 7.6 keeps only `/auth/**` on the allowlist. The four landing assertions become two root-path ones plus one download-centre guard case and three download-centre cases, moving 7.7 to 70 self-built / 53 external. Decided in `NMCPS-ADR-0016` (supersedes `NMCPS-ADR-0008`); the domain view is in `NMCPS-DESIGN-005`. |
+| 2026-11-16 | 0.8.1 | 7.7 updates the tenant admin default password at the requester's instruction: `tenantadmin` moves from `Tenant@123456` to `admin_2026` (super admin `admin` / `Admin@123456` unchanged). Only the single source of truth `shared/constants/demoAccounts.ts` and the `check:ui` prefill assertion change; the prefill mechanism, the login flow and the super admin prefill are untouched. If the upstream IAM seed is not updated in step, the prefilled value is only the demo default and real logins still follow the upstream account. |
 

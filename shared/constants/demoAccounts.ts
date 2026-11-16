@@ -32,15 +32,16 @@ const SUPER_ADMIN_ACCOUNT: DemoAccount = {
 /**
  * 租户管理员
  *
- * 种子事实（用户给定 + 实测）：账号 `tenantadmin`、口令 `Tenant@123456`。
+ * 种子事实：账号 `tenantadmin`、默认口令 `admin_2026`（2026-11-16 按需求方要求更新；
+ * 此前登记为 `Tenant@123456`，见 `NMCPS-ADR-0013` 的默认口令更新条）。
  * 代际说明（2026-11-04）：新代登录走 `POST /api/v1/iam/login`（入参 `username`，无 `tenantCode`），
- * 身份字段改由 `data.user_info` 返回；口令本身未变，仍可用于登录预填。
+ * 身份字段改由 `data.user_info` 返回；预填机制与登录流程不受代际切换影响。
  */
 const TENANT_ADMIN_ACCOUNT: DemoAccount = {
 	id: "tenantAdmin",
 	labelKey: "auth.demo.tenantAdmin",
 	username: "tenantadmin",
-	password: "Tenant@123456"
+	password: "admin_2026"
 };
 
 /** 登录页「演示身份」按钮顺序即本数组顺序 */
