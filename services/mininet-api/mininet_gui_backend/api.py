@@ -39,7 +39,6 @@ from mininet_gui_backend.nodes import Ryu
 from mininet.link import TCLink
 from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, Response
 
 from mininet_gui_backend.export import build_addressing_plan, export_net_to_script, export_net_to_json
@@ -179,13 +178,10 @@ app = FastAPI(
 )
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 不装 CORSMiddleware（NMCPS-ADR-0022 D9 / W6）：旧 Vite 前端退役后，浏览器只经 Nitro BFF
+# 的 `/api/lab/**` 与 `/lab-ws/*` 访问本服务，服务端调用不需要 CORS 头。原先的
+# `allow_origins=["*"] + allow_credentials=True` 是唯一允许跨源直连 `:8000` 的入口 ——
+# 一旦放开就等于把无登录态的特权后端暴露给任意网页；本服务只应经反代 / 回环访问。
 
 @app.get("/api/version")
 def get_version():

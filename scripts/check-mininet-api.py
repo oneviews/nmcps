@@ -45,6 +45,17 @@ if not http_paths:
 if not ws_paths:
     raise SystemExit("Mininet 后端没有暴露任何 /api/mininet/ WebSocket 路由")
 
-print(f"✅ Mininet 后端可导入：{len(http_paths)} 条 HTTP 路径 / {len(ws_paths)} 条 WebSocket 路径")
+# NMCPS-ADR-0022 D9 / W6：旧前端退役后浏览器只经 BFF 访问，后端不再需要 CORS。
+# 留着 `CORSMiddleware(allow_origins=["*"])` 等于给任意网页开一扇直连特权后端的门，
+# 而且它与 `allow_credentials=True` 同时出现时本身就是无效组合。
+cors_middleware = [
+    middleware
+    for middleware in app.user_middleware
+    if "cors" in getattr(middleware.cls, "__name__", "").lower()
+]
+if cors_middleware:
+    raise SystemExit("Mininet 后端仍装了 CORS 中间件：旧前端已退役，浏览器只应经 BFF 访问")
+
+print(f"✅ Mininet 后端可导入：{len(http_paths)} 条 HTTP 路径 / {len(ws_paths)} 条 WebSocket 路径，无 CORS 中间件")
 print(f"   HTTP: {', '.join(sorted(http_paths)[:3])} …")
 print(f"   WS:   {', '.join(sorted(ws_paths))}")
