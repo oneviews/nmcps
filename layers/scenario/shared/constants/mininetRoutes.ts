@@ -115,6 +115,61 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 	{ method: "POST", template: "/sniffer/stop", upstream: "/api/mininet/sniffer/stop", permissions: ["lab:sniffer"] }
 ] as const;
 
+/**
+ * 导出通道的上游表（NMCPS-ADR-0022 §五 / W5）：**非 JSON 信封**的响应不进 `MININET_ROUTES`。
+ *
+ * 为什么单开一张表：白名单里的每条都会经 `proxyToMininet()` 包成 `ApiResponse` JSON，
+ * 而 `export_json` / `export_script` 回的是纯文本（导出脚本还要能被浏览器另存为 `.py`）、
+ * `sniffer/export` 回的是 **pcap 二进制**。包一层字符串既破坏 `wget` 也丢
+ * `Content-Disposition` —— 所以导出走 `GET /api/lab/export/{json|script|pcap}` 的独立
+ * handler，这里登记上游路径、扩展名、BFF 该回的 `content-type`、以及**出站前要判的权限位**。
+ *
+ * `permission` 逐种类不同：拓扑导出与 Python 脚本只要 `lab:read`（不改变上游状态），
+ * 抓包文件里有全网流量原文，必须单独授权 `lab:sniffer`（NMCPS-ADR-0021 D3）——
+ * 拿 `lab:read` 换 pcap 等于把抓包权限降解成读权限。
+ */
+export const LAB_EXPORT_UPSTREAMS = {
+	json: {
+		upstream: "/api/mininet/export_json",
+		extension: "json",
+		contentType: "text/plain; charset=utf-8",
+		permission: "lab:read",
+		binary: false
+	},
+	script: {
+		upstream: "/api/mininet/export_script",
+		extension: "py",
+		contentType: "text/plain; charset=utf-8",
+		permission: "lab:read",
+		binary: false
+	},
+	pcap: {
+		upstream: "/api/mininet/sniffer/export",
+		extension: "pcap",
+		contentType: "application/vnd.tcpdump.pcap",
+		permission: "lab:sniffer",
+		binary: true
+	}
+} as const;
+
+export type LabExportKind = keyof typeof LAB_EXPORT_UPSTREAMS;
+
+/** 路径段 → 导出种类（未登记的种类回 `undefined`，由 handler 回 400） */
+export function parseLabExportKind(value: unknown): LabExportKind | undefined {
+	return typeof value === "string" && Object.hasOwn(LAB_EXPORT_UPSTREAMS, value)
+		? value as LabExportKind
+		: undefined;
+}
+
+/**
+ * 下载文件名由 BFF 生成，**不信任上游 `Content-Disposition`**（NMCPS-ADR-0022 §五）：
+ * `lab-<network_id>-<yyyyMMddTHHmmssZ>.<ext>`。时间戳只保留到秒并去掉标点，便于再上传。
+ */
+export function labExportFilename(networkId: string, kind: LabExportKind, now: Date = new Date()): string {
+	const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+	return `lab-${networkId}-${stamp}.${LAB_EXPORT_UPSTREAMS[kind].extension}`;
+}
+
 /** 拒绝码：与主网关 / 仿真通道共用一套词汇，前端只需处理一种拒绝形态 */
 export type MininetRejectionMessage
 	= | "bff_path_missing"

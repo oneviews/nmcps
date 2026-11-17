@@ -100,8 +100,11 @@ function parseInstances(value: unknown): Map<string, MininetInstance> {
  *
  * - 传 `tenantId`：只查租户注册表，未命中即返回空 baseUrl（绝不回退全局实例）；
  * - 不传：兼容只读能力探针等无租户场景，返回全局 `baseUrl`。
+ *
+ * `event` 允许为 `undefined`：`/lab-ws/*` 的升级钩子只有 `Request`，拿不到 H3Event，
+ * 这时读进程级运行时配置（`NUXT_MININET_*` 注入的就是它）。
  */
-export function getMininetConfig(event: H3Event, tenantId?: string): MininetConfig {
+export function getMininetConfig(event: H3Event | undefined, tenantId?: string): MininetConfig {
 	const runtime = useRuntimeConfig(event);
 	const mininet = (runtime.mininet ?? {}) as Record<string, unknown>;
 

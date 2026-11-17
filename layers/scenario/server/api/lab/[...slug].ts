@@ -2,6 +2,7 @@ import type { H3Event } from "h3";
 import type { LabPrincipal } from "~~/shared/constants/labPermissions";
 import type { ApiResponse } from "~~/shared/types/api";
 import type { LabNetworkRecord } from "~~/shared/types/lab";
+import type { LabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
 import type { MininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
 import type { MininetMatch } from "#layers/scenario/shared/constants/mininetRoutes";
 import { defineEventHandler, readRawBody, setResponseHeader, setResponseStatus } from "h3";
@@ -10,11 +11,12 @@ import { hasLabPermissions } from "~~/shared/constants/labPermissions";
 import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { appendLabAudit, labClientIp, labRequestId } from "#layers/scenario/server/utils/bff/labAudit";
 import { authorizeLabSession } from "#layers/scenario/server/utils/bff/labGuard";
-import { getActiveLabNetwork, isLabResourceAllowed, listLabNetworks } from "#layers/scenario/server/utils/bff/labLedger";
+import { getActiveLabNetwork, isLabResourceAllowed, listLabNetworks, recordLabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
 import { acquireLabOperation } from "#layers/scenario/server/utils/bff/labLocks";
 import { proxyToMininet } from "#layers/scenario/server/utils/bff/mininet";
 import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
 import { isWriteRoute, resolveMininetRoute } from "#layers/scenario/shared/constants/mininetRoutes";
+import { parseLabImportBody } from "#layers/scenario/shared/types/labImport";
 
 /** 服务探针不属于租户网络：没有台账也必须能判断“实验床在不在” */
 const NETWORK_FREE_ROUTES = new Set(["/health", "/version", "/ryu/apps"]);
@@ -90,6 +92,97 @@ export default defineEventHandler(async (event): Promise<ApiResponse<unknown>> =
 
 	return await handleWrite(event, resolution, config, network, principal, tenantId);
 });
+
+/**
+ * 会往台账清单里**加节点**的端点：请求体的 `id` / `name` 就是节点 id
+ * （`labNodePayloadOf()` 两者写同一个值，与上游 `app.hosts` 的键一致）。
+ */
+const NODE_CREATE_ROUTES = new Set(["/hosts", "/switches", "/routers", "/nats", "/controllers"]);
+
+function jsonRecordOf(raw: string | undefined): Record<string, unknown> | undefined {
+	if (!raw) {
+		return undefined;
+	}
+
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? parsed as Record<string, unknown>
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function stringFieldOf(record: Record<string, unknown> | undefined, key: string): string | undefined {
+	const value = record?.[key];
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * 破坏性重建的确认闸门（NMCPS-ADR-0022 W5）：`POST /full_reset` 必须带
+ * `{ confirm: "<network_id>" }`，值与**台账里这套网的 id** 逐字相等才放行。
+ *
+ * 为什么不是布尔字段：`{ confirm: true }` 在脚本里很好写、在误发请求时也很容易带 ——
+ * 要求写对 id，等于让调用方先读到「我要清的是哪张网」。缺字段、类型不对、值不符统一回
+ * 400 `lab_confirm_required`，且不触达上游（意图不明确的删除不该先执行再报错）。
+ */
+function isFullResetConfirmed(rawBody: string | undefined, networkId: string): boolean {
+	return stringFieldOf(jsonRecordOf(rawBody), "confirm") === networkId;
+}
+
+/**
+ * 写端点 → 资源清单增量（NMCPS-ADR-0021 P2 清单的写路径维护）。
+ *
+ * 只登记「节点 / 链路集合真的变了」的端点：启动、停止、重置、流表、`pingall` / `iperf`
+ * 都不改变集合；`import_json` 是追加（并集收敛），`full_reset` 是整表重建（清空清单）。
+ */
+function labResourceChangeOf(match: MininetMatch, rawBody: string | undefined): LabResourceChange | undefined {
+	const { route, params } = match;
+	const payload = jsonRecordOf(rawBody);
+
+	if (route.method === "POST" && NODE_CREATE_ROUTES.has(route.template)) {
+		const id = stringFieldOf(payload, "id") ?? stringFieldOf(payload, "name");
+		return id ? { addNodes: [id] } : undefined;
+	}
+
+	// 上游 `create_link` 的请求体是 `{ src, dst, options? }`（也接受二元组，但 BFF 只转 JSON 对象）
+	if (route.method === "POST" && route.template === "/links") {
+		const source = stringFieldOf(payload, "src");
+		const target = stringFieldOf(payload, "dst");
+		return source && target ? { addLinks: [{ source, target }] } : undefined;
+	}
+
+	if (route.method === "DELETE" && route.template === "/delete_node/{node_id}") {
+		return params.node_id ? { removeNodes: [params.node_id] } : undefined;
+	}
+
+	if (route.method === "DELETE" && route.template === "/delete_link/{src_id}/{dst_id}") {
+		return params.src_id && params.dst_id
+			? { removeLinks: [{ source: params.src_id, target: params.dst_id }] }
+			: undefined;
+	}
+
+	// 导入是**追加**（上游 `import_json` 只 `create_*`，不删既有节点），所以清单按并集收敛；
+	// 整表重建（`full_reset`）则连既有节点一起清掉，清单必须整体清空（W5）
+	if (route.method === "POST" && route.template === "/import_json") {
+		const topology = parseLabImportBody(rawBody);
+		if (!topology) {
+			return undefined;
+		}
+		return {
+			addNodes: topology.nodes.map((node) => node.id),
+			addLinks: topology.links
+		};
+	}
+
+	// 整表重建：节点与链路都归零，清单整体清空（增量删除会留下上游「自己长出来」的 id）
+	if (route.method === "POST" && route.template === "/full_reset") {
+		return { reset: true };
+	}
+
+	return undefined;
+}
 
 /**
  * 写端点：先判「是否允许再建网」，再取锁、写审计、读请求体，最后出站。
@@ -176,10 +269,42 @@ async function handleWrite(
 			body = raw;
 		}
 
+		// 破坏性重建的确认闸门（NMCPS-ADR-0022 W5）：意图不明确就不执行，也不触达上游
+		if (route.template === "/full_reset" && !isFullResetConfirmed(body, network.id)) {
+			await appendLabAudit(event, {
+				...auditBase,
+				action,
+				result: "denied",
+				reason: MININET_MESSAGES.confirmRequired
+			});
+			return respondAuth<never>(event, 400, MININET_MESSAGES.confirmRequired);
+		}
+
 		const result = await proxyToMininet<unknown>(event, match, config, {
 			network,
-			...(body === undefined ? {} : { body })
+			// 写响应对应的是**刚被改动的对象**：新节点按定义还不在写前那份清单里，
+			// 出口过滤只核对租户 / 网络标识，清单在成功后由台账自己收敛（见下方）
+			ignoreResourceScope: true,
+			// 上游 `import_json` 只收 multipart 的 `file` 字段：把已鉴权、已审计的 JSON 包体
+			// 重新封装成文件再出站，否则 FastAPI 会判 422（NMCPS-ADR-0022 §五）
+			...(route.template === "/import_json" && body !== undefined
+				? { upload: { filename: "topology.json", content: body } }
+				: body === undefined ? {} : { body })
 		});
+
+		// 清单收敛放在上游成功之后：失败时台账仍描述“改之前”的事实，不会凭空多出一个不存在的节点
+		if (result.code === 0) {
+			const change = labResourceChangeOf(match, body);
+			if (change) {
+				try {
+					await recordLabResourceChange(event, network, change);
+				} catch (error) {
+					// 上游已经改了，不能因为台账写失败就回滚或改判成功为失败；但必须留痕 ——
+					// 清单落后会让新节点在列表里“消失”，排障时这是第一条线索
+					console.warn("[lab] resource list not updated", network.id, error);
+				}
+			}
+		}
 
 		await appendLabAudit(event, {
 			...auditBase,

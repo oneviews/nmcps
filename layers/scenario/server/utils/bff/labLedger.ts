@@ -271,6 +271,105 @@ export function normalizedLabLinkKey(left: string, right: string): string {
 	return [left, right].sort().join("--");
 }
 
+/**
+ * 一次写操作对资源清单的影响（NMCPS-ADR-0021 P2 清单 / NMCPS-ADR-0022 写路径）。
+ *
+ * `removeNodes` 会连带移除这些节点上的链路：上游删节点时链路由实例自己消失，
+ * 清单里留下悬空链路键只会让下一次过滤看起来“过期”。
+ */
+export interface LabResourceChange {
+	addNodes?: string[]
+	removeNodes?: string[]
+	addLinks?: Array<{ source: string, target: string }>
+	removeLinks?: Array<{ source: string, target: string }>
+	/**
+	 * 整表重建（`POST /full_reset`，NMCPS-ADR-0022 W5）：上游会清掉全部节点与链路，
+	 * 清单必须整体清空 —— 增量式「删掉已知的那些」会在上游已多出节点时留下悬空 id。
+	 * 置位时其余字段一律忽略。
+	 */
+	reset?: boolean
+}
+
+/** 链路键归一：台账里可能存成 `b--a`，比较前按字典序排 */
+function normalizeLinkKey(key: string): string {
+	const [left, right] = key.split("--");
+	return left && right ? normalizedLabLinkKey(left, right) : key;
+}
+
+function sameEntries(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((item) => right.includes(item));
+}
+
+/**
+ * 写操作成功后把资源清单收敛到上游事实：新建的节点 / 链路进清单，删掉的出清单。
+ *
+ * 为什么必须做：台账一旦登记了 `resources`，清单就是租户边界，列表出口与路径参数都按它判。
+ * 只读清单会在第一次写之后立刻过期 —— 新建的节点落在清单外，下一次 `GET /hosts` 会被
+ * 出口过滤丢掉（画布看不到新节点），单对象写响应（上游 `POST /switches` 回的就是交换机本身）
+ * 甚至会被判成 404 `lab_resource_not_found`。
+ *
+ * 只在记录**已经有清单**时维护，且只维护清单里已经出现的字段：没有 `resources` 表示
+ * 「以租户实例为边界」，凭空造一张清单会把实例里既有节点一次全判成“清单外”；
+ * 只登记了 `links` 的记录同理，不该因为一次建节点就凭空多出一份 `nodes` 白名单。
+ */
+export async function recordLabResourceChange(
+	event: H3Event,
+	network: LabNetworkRecord,
+	change: LabResourceChange
+): Promise<LabNetworkRecord> {
+	const resources = network.resources;
+	if (!resources) {
+		return network;
+	}
+
+	const next: LabNetworkResources = { ...resources };
+
+	// 整表重建优先：上游清空后清单里不能再留任何 id / 链路键
+	if (change.reset) {
+		if (resources.nodes)
+			next.nodes = [];
+		if (resources.links)
+			next.links = [];
+	}
+
+	if (!change.reset && resources.nodes) {
+		const nodes = new Set(resources.nodes);
+		for (const id of change.addNodes ?? []) {
+			nodes.add(id);
+		}
+		for (const id of change.removeNodes ?? []) {
+			nodes.delete(id);
+		}
+		next.nodes = [...nodes];
+	}
+
+	if (!change.reset && resources.links) {
+		const removed = new Set(change.removeNodes ?? []);
+		const links = new Set(resources.links.map((key) => normalizeLinkKey(key)));
+		for (const key of [...links]) {
+			const [left, right] = key.split("--");
+			if ((left && removed.has(left)) || (right && removed.has(right))) {
+				links.delete(key);
+			}
+		}
+		for (const link of change.addLinks ?? []) {
+			links.add(normalizedLabLinkKey(link.source, link.target));
+		}
+		for (const link of change.removeLinks ?? []) {
+			links.delete(normalizedLabLinkKey(link.source, link.target));
+		}
+		next.links = [...links];
+	}
+
+	const nodesChanged = resources.nodes ? !sameEntries(next.nodes ?? [], resources.nodes) : false;
+	const linksChanged = resources.links ? !sameEntries(next.links ?? [], resources.links.map((key) => normalizeLinkKey(key))) : false;
+	if (!nodesChanged && !linksChanged) {
+		return network;
+	}
+
+	return await upsertLabNetwork(event, { ...network, resources: next, updated_at: new Date().toISOString() });
+}
+
 /** 路径参数是否属于台账记录的资源清单（未登记清单＝以实例为边界，放行） */
 export function isLabResourceAllowed(
 	network: LabNetworkRecord,

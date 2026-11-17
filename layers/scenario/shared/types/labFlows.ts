@@ -2,8 +2,8 @@
 // 流表编辑的**纯数据 + 纯函数**：草稿校验、草稿 → 上游请求体、`dump-flows` 原文 → 可删行。
 //
 // 设计基准：
-// - NMCPS-ADR-0022 W2b（流表写入归 `lab:operate`，端点 `POST /flows` 与
-//   `DELETE /flows/{switch_id}/{flow_id}`）；
+// - NMCPS-ADR-0022 W2b（流表写入归 `lab:operate`，端点 `POST /flows`、
+//   `DELETE /flows`（按 `match` 批量 / 留空清整表）与 `DELETE /flows/{switch_id}/{flow_id}`）；
 // - `services/mininet-api/mininet_gui_backend/flow_rules.py`（`FlowRuleCreate` 的字段与
 //   `actions` / `match` 归一规则是唯一事实源）；
 // - `api.py::delete_flow_by_id()` 用「`dump-flows` 里**含 `actions=` 的行**的 1 基序号」
@@ -89,6 +89,41 @@ export function labFlowPayloadOf(switchId: string, draft: LabFlowDraft): Record<
 	const priority = labFlowPriorityOf(draft.priority);
 	if (priority)
 		payload.priority = Number(priority);
+
+	return payload;
+}
+
+/**
+ * 清流（批量 `DELETE /flows`）的匹配域归一：与 `FlowRuleDelete.normalize_match()` 同口径 ——
+ * 去空白，留空即「整表」。夹带 `actions=` 由 `labFlowClearError()` 拦下（上游会 422）。
+ */
+export function labFlowClearMatchOf(raw: string | number): string {
+	return String(raw ?? "").trim();
+}
+
+/**
+ * 清流草稿校验：只拦一条 —— 匹配域夹带 `actions=`。
+ *
+ * 与 `labFlowDraftError()` 的区别在于 **`match` 留空是合法的**（= 清空整表），
+ * 所以不能复用加流那套（那里动作必填）。
+ */
+export function labFlowClearError(raw: string | number): LabFlowDraftError | undefined {
+	if (labFlowClearMatchOf(raw).toLowerCase().includes("actions="))
+		return "matchInvalid";
+	return undefined;
+}
+
+/**
+ * 清流请求体（`FlowRuleDelete`）：`switch` 必带，`match` 留空则**不发** ——
+ * 上游 `build_flow_match()` 得到 `None`，即 `ovs-ofctl del-flows <switch>` 清整表；
+ * 带了 `match` 就只删命中项，语义由上游决定，页面不另发明。
+ */
+export function labFlowClearPayloadOf(switchId: string, match: string | number): Record<string, unknown> {
+	const payload: Record<string, unknown> = { switch: switchId };
+
+	const normalized = labFlowClearMatchOf(match);
+	if (normalized)
+		payload.match = normalized;
 
 	return payload;
 }

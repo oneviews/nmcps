@@ -32,11 +32,13 @@ export interface LabAuditEntry {
 	reason?: string
 	request_id?: string
 	client_ip?: string
+	/** WebSocket 会话时长（毫秒）：只在通道关闭时记一次，不含内容 */
+	duration_ms?: number
 }
 
 const DEFAULT_AUDIT_DIR = ".data/audit";
 
-function auditDirOf(event: H3Event): string {
+function auditDirOf(event: H3Event | undefined): string {
 	const runtime = useRuntimeConfig(event);
 	const lab = (runtime.lab ?? {}) as Record<string, unknown>;
 	const configured = typeof lab.auditFile === "string" && lab.auditFile.trim()
@@ -47,7 +49,7 @@ function auditDirOf(event: H3Event): string {
 }
 
 /** 按天分片：`lab-audit-2026-11-16.jsonl`；配置成目录时同样按天分片 */
-function auditFileOf(event: H3Event): string {
+function auditFileOf(event: H3Event | undefined): string {
 	const base = auditDirOf(event);
 	const day = new Date().toISOString().slice(0, 10);
 	return base.endsWith(".jsonl")
@@ -82,8 +84,11 @@ export function labRequestId(event: H3Event): string {
  *
  * 返回 `false` 表示写盘失败：调用方必须据此拒绝高风险动作（503 `audit_unavailable`），
  * 不得把失败当作“审计可选”。
+ *
+ * `event` 可为 `undefined`（`/lab-ws/*` 的升级 / 关闭阶段没有 H3Event）：此时不记
+ * `client_ip`，`request_id` 由调用方自己给。
  */
-export async function appendLabAudit(event: H3Event, entry: LabAuditEntry): Promise<boolean> {
+export async function appendLabAudit(event: H3Event | undefined, entry: LabAuditEntry): Promise<boolean> {
 	const file = auditFileOf(event);
 
 	try {

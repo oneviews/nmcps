@@ -80,7 +80,13 @@ export const MININET_MESSAGES = {
 	/** 审计写盘失败：高风险动作不得「先做后补」（NMCPS-ADR-0022 D4） */
 	auditUnavailable: "audit_unavailable",
 	/** 写请求体不是合法 JSON 或超过上限 */
-	bodyInvalid: "bff_body_invalid"
+	bodyInvalid: "bff_body_invalid",
+	/** 破坏性重建缺少确认字段，或确认值与台账 `network_id` 不一致（NMCPS-ADR-0022 W5） */
+	confirmRequired: "lab_confirm_required",
+	/** 申请的 WebSocket 种类未登记 / 尚未实现（NMCPS-ADR-0022 D6） */
+	wsKindInvalid: "lab_ws_kind_invalid",
+	/** WebSocket 票过期 / 重放 / 绑定不符 / 签名不符（NMCPS-ADR-0022 D6） */
+	wsTicketInvalid: "lab_ws_ticket_invalid"
 } as const;
 
 export type MininetMessage = (typeof MININET_MESSAGES)[keyof typeof MININET_MESSAGES];

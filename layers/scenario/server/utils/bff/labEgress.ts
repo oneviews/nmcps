@@ -15,6 +15,14 @@ import { normalizedLabLinkKey } from "./labLedger";
  */
 export interface LabEgressScope {
 	network: LabNetworkRecord
+	/**
+	 * 只核对租户 / 网络标识，不套资源清单。
+	 *
+	 * 写端点的响应对应的是**刚被这次请求改动的对象**：新节点按定义还不在（写前读到的）
+	 * 清单里，若照常判就会把一次成功的建节点回成 404。清单在写成功之后由台账自己收敛
+	 * （`recordLabResourceChange()`），读路径仍然按最新清单过滤。
+	 */
+	ignoreResources?: boolean
 }
 
 export interface LabEgressResult<T = unknown> {
@@ -76,7 +84,7 @@ function itemAllowed(
 		return false;
 	}
 
-	const resources = scope.network.resources;
+	const resources = scope.ignoreResources ? undefined : scope.network.resources;
 	if (!resources) {
 		return true;
 	}

@@ -55,7 +55,13 @@ function toOrigins(value: unknown): string[] {
 	return [];
 }
 
-export function getBffConfig(event: H3Event): BffConfig {
+/**
+ * 取 BFF 配置。
+ *
+ * `event` 可省略：WebSocket 升级阶段（crossws 的 `upgrade` 钩子）只有 `Request`，没有 H3Event，
+ * 此时只能读进程级运行时配置（无请求级覆盖），与 HTTP 路径的取值一致。
+ */
+export function getBffConfig(event?: H3Event): BffConfig {
 	const runtime = useRuntimeConfig(event);
 	const bff = (runtime.bff ?? {}) as Record<string, unknown>;
 

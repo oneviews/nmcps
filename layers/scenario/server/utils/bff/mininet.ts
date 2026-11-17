@@ -3,6 +3,7 @@ import type { ApiResponse } from "~~/shared/types/api";
 import type { LabNetworkRecord } from "~~/shared/types/lab";
 import type { MininetMatch } from "#layers/scenario/shared/constants/mininetRoutes";
 import type { MininetConfig } from "./mininetConfig";
+import { Buffer } from "node:buffer";
 import { getHeader, getQuery, setResponseHeader, setResponseStatus } from "h3";
 import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { buildMininetUpstreamPath } from "#layers/scenario/shared/constants/mininetRoutes";
@@ -96,13 +97,14 @@ function respond<T>(event: H3Event, status: number, body: ApiResponse<T>): ApiRe
 function scopeExit<T>(
 	event: H3Event,
 	body: ApiResponse<T>,
-	network: LabNetworkRecord
+	network: LabNetworkRecord,
+	ignoreResources = false
 ): ApiResponse<T> | ApiResponse<never> {
 	if (body.code !== 0 || body.data === undefined) {
 		return body;
 	}
 
-	const { value, dropped } = filterLabPayload(body.data, { network });
+	const { value, dropped } = filterLabPayload(body.data, { network, ignoreResources });
 	if (value === undefined) {
 		return respond(event, 404, envelope(404, "warning", MININET_MESSAGES.resourceNotFound));
 	}
@@ -156,6 +158,13 @@ function buildMininetHeaders(event: H3Event, hasBody = false): Headers {
 	return headers;
 }
 
+/** multipart 的 `file` 字段：boundary 由 fetch 自己算，不能手工声明 content-type */
+function uploadFormDataOf(upload: { filename: string, content: string }): FormData {
+	const form = new FormData();
+	form.append("file", new Blob([upload.content], { type: "application/json" }), upload.filename);
+	return form;
+}
+
 function isAbortError(error: unknown): boolean {
 	return !!error && typeof error === "object" && "name" in error && (error as { name?: string }).name === "AbortError";
 }
@@ -171,8 +180,23 @@ function safeJsonParse(raw: string): unknown {
 export interface MininetProxyOptions {
 	/** 台账已解析的网络；提供时对成功响应做租户/资源清单出口过滤 */
 	network?: LabNetworkRecord
+	/**
+	 * 写端点：出口过滤只核对租户 / 网络标识，不套资源清单。
+	 *
+	 * 写响应对应的是刚被改动的对象（上游 `POST /switches` 回的就是交换机本身），
+	 * 新节点按定义还不在写前那份清单里 —— 照常判会把一次成功的建节点回成 404。
+	 */
+	ignoreResourceScope?: boolean
 	/** 已由调用方序列化的 JSON 请求体（仅写端点；不大于 `LAB_WRITE_BODY_LIMIT`） */
 	body?: string
+	/**
+	 * 以文件上传方式出站（仅 `POST /import_json`）。
+	 *
+	 * 上游 `import_json` 的签名是 `file: UploadFile = File(...)`，只收 multipart；
+	 * 照常转发 JSON 包体会被 FastAPI 判成 422。BFF 因此在出站时把已鉴权、已审计的
+	 * JSON 包体重新封装成一个 `file` 字段（文件名由 BFF 给，不信任客户端）。
+	 */
+	upload?: { filename: string, content: string }
 }
 
 /**
@@ -208,13 +232,17 @@ export async function proxyToMininet<T = unknown>(
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-	const headers = buildMininetHeaders(event, method !== "GET" && options.body !== undefined);
+	const jsonBody = options.body !== undefined && method !== "GET" && options.upload === undefined;
+	const headers = buildMininetHeaders(event, jsonBody);
+	const outgoing = options.upload
+		? uploadFormDataOf(options.upload)
+		: jsonBody ? options.body : undefined;
 
 	try {
 		const response = await fetch(url, {
 			method,
 			headers,
-			...(options.body !== undefined && method !== "GET" ? { body: options.body } : {}),
+			...(outgoing === undefined ? {} : { body: outgoing }),
 			signal: controller.signal,
 			redirect: "manual"
 		});
@@ -232,7 +260,7 @@ export async function proxyToMininet<T = unknown>(
 
 		if (payload && typeof payload === "object" && "code" in payload && "status" in payload) {
 			const body = normalizeEnvelope<T>(payload, response.status);
-			const scoped = options.network ? scopeExit(event, body, options.network) : body;
+			const scoped = options.network ? scopeExit(event, body, options.network, options.ignoreResourceScope) : body;
 			return respond(event, response.status, scoped);
 		}
 
@@ -243,7 +271,7 @@ export async function proxyToMininet<T = unknown>(
 			data: payload as T,
 			timestamp: now()
 		};
-		const scoped = options.network ? scopeExit(event, body, options.network) : body;
+		const scoped = options.network ? scopeExit(event, body, options.network, options.ignoreResourceScope) : body;
 		return respond(event, response.status, scoped);
 	} catch (error) {
 		if (isAbortError(error)) {
@@ -255,6 +283,140 @@ export async function proxyToMininet<T = unknown>(
 		}
 
 		return respond(event, 502, envelope(502, "error", MININET_MESSAGES.unreachable));
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** 二进制类上游读的结果：成功带原始字节（pcap 不能被当文本解码） */
+export type MininetBinaryResult
+	= | { ok: true, bytes: Buffer }
+		| { ok: false, status: number, message: string };
+
+/**
+ * 拉一段**二进制**（抓包下载专用，NMCPS-ADR-0022 W5）。
+ *
+ * 与 `fetchMininetText()` 分开的理由：pcap 是 `application/vnd.tcpdump.pcap` 原始字节，
+ * 走 `response.text()` 会按 UTF-8 解码，`0xd4 0xc3` 这类魔数在往返里被替换成 U+FFFD ——
+ * 下载下来的文件打不开。失败体仍是 JSON（FastAPI 的 `{ detail }`），所以错误消息照旧解。
+ */
+export async function fetchMininetBinary(
+	event: H3Event,
+	config: MininetConfig,
+	upstreamPath: string
+): Promise<MininetBinaryResult> {
+	if (!config.baseUrl) {
+		return {
+			ok: false,
+			status: 503,
+			message: config.tenantScoped ? MININET_MESSAGES.tenantRuntimeUnavailable : MININET_MESSAGES.notConfigured
+		};
+	}
+
+	let url: string;
+	try {
+		const base = new URL(config.baseUrl);
+		url = `${base.origin}${base.pathname.replace(/\/+$/, "")}${upstreamPath}`;
+	} catch {
+		return { ok: false, status: 500, message: MININET_MESSAGES.baseInvalid };
+	}
+
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+
+	try {
+		const headers = buildMininetHeaders(event);
+		headers.set("accept", "application/octet-stream");
+		const response = await fetch(url, {
+			method: "GET",
+			headers,
+			signal: controller.signal,
+			redirect: "manual"
+		});
+
+		if (!response.ok) {
+			const text = await response.text();
+			return { ok: false, status: response.status, message: pickMessage(safeJsonParse(text)) ?? "mininet_rejected" };
+		}
+
+		return { ok: true, bytes: Buffer.from(await response.arrayBuffer()) };
+	} catch (error) {
+		if (isAbortError(error)) {
+			return { ok: false, status: 504, message: MININET_MESSAGES.timeout };
+		}
+
+		if (import.meta.dev) {
+			console.error("[lab] binary export request failed", upstreamPath, error);
+		}
+
+		return { ok: false, status: 502, message: MININET_MESSAGES.unreachable };
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** 文本类上游读的结果：成功带原文，失败带状态码与给前端看的 message */
+export type MininetTextResult
+	= | { ok: true, text: string }
+		| { ok: false, status: number, message: string };
+
+/**
+ * 拉一段**纯文本**（导出通道专用，NMCPS-ADR-0022 §五）。
+ *
+ * 与 `proxyToMininet()` 分开的理由只有一条：导出不能套 JSON 信封 —— `export_json` 的正文
+ * 是 JSON 字符串、`export_script` 是 Python 源码，包成 `{ code, data: "..." }` 之后浏览器
+ * 另存下来的文件既不是 `.json` 也不是 `.py`。出站头与超时口径保持一致，仍然没有凭据。
+ */
+export async function fetchMininetText(
+	event: H3Event,
+	config: MininetConfig,
+	upstreamPath: string
+): Promise<MininetTextResult> {
+	if (!config.baseUrl) {
+		return {
+			ok: false,
+			status: 503,
+			message: config.tenantScoped ? MININET_MESSAGES.tenantRuntimeUnavailable : MININET_MESSAGES.notConfigured
+		};
+	}
+
+	let url: string;
+	try {
+		const base = new URL(config.baseUrl);
+		url = `${base.origin}${base.pathname.replace(/\/+$/, "")}${upstreamPath}`;
+	} catch {
+		return { ok: false, status: 500, message: MININET_MESSAGES.baseInvalid };
+	}
+
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+
+	try {
+		const headers = buildMininetHeaders(event);
+		headers.set("accept", "text/plain");
+		const response = await fetch(url, {
+			method: "GET",
+			headers,
+			signal: controller.signal,
+			redirect: "manual"
+		});
+		const text = await response.text();
+
+		if (!response.ok) {
+			return { ok: false, status: response.status, message: pickMessage(safeJsonParse(text)) ?? "mininet_rejected" };
+		}
+
+		return { ok: true, text };
+	} catch (error) {
+		if (isAbortError(error)) {
+			return { ok: false, status: 504, message: MININET_MESSAGES.timeout };
+		}
+
+		if (import.meta.dev) {
+			console.error("[lab] export request failed", upstreamPath, error);
+		}
+
+		return { ok: false, status: 502, message: MININET_MESSAGES.unreachable };
 	} finally {
 		clearTimeout(timer);
 	}
