@@ -757,6 +757,14 @@
 			:error="resetError"
 			@confirm="resetNetwork"
 		/>
+		<!-- 台账对账（NMCPS-ADR-0023）：也只改台账，同样要逐字输入网络 id -->
+		<SimulatorReconcileNetworkModal
+			v-model:open="reconcileOpen"
+			:network-id="network?.id ?? null"
+			:submitting="reconcileBusy"
+			:error="reconcileError"
+			@confirm="reconcileNetwork"
+		/>
 	</div>
 </template>
 
@@ -764,7 +772,7 @@
 	import type { DropdownMenuItem } from "@nuxt/ui";
 	import type { PositionedTopologyNode } from "~~/app/utils/graph/topologyLayout";
 	import type { TopologyNodeRole } from "~~/app/utils/graph/topologyRoleStyle";
-	import type { LabNetworkSummary } from "~~/shared/types/lab";
+	import type { LabNetworkSummary, LabNetworkSyncResult } from "~~/shared/types/lab";
 	import type { TopologyGraphLink, TopologyGraphNode } from "~~/shared/types/topology";
 	import type { LabFlowDraftError } from "#layers/scenario/shared/types/labFlows";
 	import type { LabNodeKind, LabNodeOrigin, LabRemoveTarget } from "#layers/scenario/shared/types/labNodes";
@@ -1001,6 +1009,10 @@
 	/** 破坏性重建确认（`POST /full_reset`，W5）：网络 id 由弹窗逐字确认后回传 */
 	const resetOpen = ref(false);
 	const resetError = ref<string>();
+	/** 台账对账（`POST /api/lab/networks/{id}/sync`，NMCPS-ADR-0023） */
+	const reconcileOpen = ref(false);
+	const reconcileBusy = ref(false);
+	const reconcileError = ref<string>();
 
 	const network = computed(() => networks.value[0] ?? null);
 	const positioned = computed(() => nodes.value.map((item) => item.positioned));
@@ -1096,6 +1108,12 @@
 	const canImport = computed(() => canCreate.value && canDelete.value);
 
 	/**
+	 * 台账对账（NMCPS-ADR-0023 D3）：与导入同档的双权限 —— 它把清单之外的节点纳入
+	 * 租户边界，等价于一次接管；缺任一能力位时入口不渲染。
+	 */
+	const canReconcile = computed(() => canCreate.value && canDelete.value);
+
+	/**
 	 * 「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本。
 	 *
 	 * 导出走 `GET /api/lab/export/{json|script}`（`lab:read`，任何人可见）：它只读上游，
@@ -1117,6 +1135,14 @@
 			label: t("pages.scenario-simulator.menu.exportScript"),
 			icon: "carbon:code",
 			onSelect: () => void exportTopology("script")
+		}
+	], [
+		{
+			// 对账（NMCPS-ADR-0023）：只改台账清单，双权限 + 逐字确认
+			label: t("pages.scenario-simulator.menu.reconcile"),
+			icon: "carbon:data-check",
+			disabled: !canReconcile.value || reconcileBusy.value,
+			onSelect: () => askReconcile()
 		}
 	]]);
 
@@ -2142,6 +2168,57 @@
 			resetError.value = messageOf(caught);
 		} finally {
 			runAction.value = null;
+		}
+	}
+
+	/**
+	 * 打开对账确认：与重建同一套前置（双能力位），但**不看运行态** ——
+	 * 对账只读上游、只改台账，网络跑着也可以把清单对齐。
+	 */
+	function askReconcile(): void {
+		if (!canReconcile.value || reconcileBusy.value)
+			return;
+
+		reconcileError.value = undefined;
+		reconcileOpen.value = true;
+	}
+
+	/**
+	 * 台账对账（`POST /api/lab/networks/{id}/sync`，NMCPS-ADR-0023）。
+	 *
+	 * BFF 读上游五类节点与链路后**整体重写**清单；成功后重读台账，画布随之显示上游事实
+	 * （清单外节点不再被出口过滤掉）。`adopted` / `dropped` 是两个差集，用来说明这次
+	 * 「多接管了什么、清掉了什么」。
+	 */
+	async function reconcileNetwork(confirm: string): Promise<void> {
+		if (!network.value || !canReconcile.value || reconcileBusy.value)
+			return;
+
+		reconcileBusy.value = true;
+		reconcileError.value = undefined;
+
+		try {
+			const result = await api.post<LabNetworkSyncResult>(
+				`/api/lab/networks/${encodeURIComponent(network.value.id)}/sync`,
+				{ confirm }
+			);
+			reconcileOpen.value = false;
+			toast.add({
+				title: t("pages.scenario-simulator.reconcile.done", {
+					nodes: result.nodes.length,
+					links: result.links.length
+				}),
+				description: t("pages.scenario-simulator.reconcile.doneHint", {
+					adopted: result.adopted.nodes.length + result.adopted.links.length,
+					dropped: result.dropped.nodes.length + result.dropped.links.length
+				}),
+				color: "success"
+			});
+			await load();
+		} catch (caught) {
+			reconcileError.value = messageOf(caught);
+		} finally {
+			reconcileBusy.value = false;
 		}
 	}
 

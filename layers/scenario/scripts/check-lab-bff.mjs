@@ -304,7 +304,14 @@ async function startMininet(port) {
 			{ name: "h1", ip: "10.0.0.1", mac: "00:00:00:00:00:01", position: { x: 10, y: 20 } },
 			{ name: "h2", ip: "10.0.0.2", mac: "00:00:00:00:00:02", position: { x: 30, y: 40 } }
 		],
-		switches: { sw1: { id: "sw1", name: "sw1", type: "switch", ports: 4 } }
+		switches: { sw1: { id: "sw1", name: "sw1", type: "switch", ports: 4 } },
+		// 台账对账（NMCPS-ADR-0023）要读的五类节点 + 链路；默认都为空，⑭ 自己铺事实
+		routers: {},
+		nats: {},
+		controllers: {},
+		links: [],
+		/** 失败注入：`topology.fail.add("hosts")` 让对应读端点回 500（对账要原样回错且不写台账） */
+		fail: new Set()
 	};
 
 	/**
@@ -332,11 +339,27 @@ async function startMininet(port) {
 		}
 
 		if (path === "/api/mininet/hosts" && req.method === "GET") {
+			if (topology.fail.has("hosts"))
+				return send(500, { detail: "hosts exploded" });
 			return send(200, topology.hosts);
 		}
 
 		if (path === "/api/mininet/switches" && req.method === "GET") {
 			return send(200, topology.switches);
+		}
+
+		// 其余四类节点与链路：对账（NMCPS-ADR-0023）的读取面，形状与真实后端一致
+		const nodeCollection = path.match(/^\/api\/mininet\/(routers|nats|controllers)$/);
+		if (nodeCollection && req.method === "GET") {
+			if (topology.fail.has(nodeCollection[1]))
+				return send(500, { detail: `${nodeCollection[1]} exploded` });
+			return send(200, topology[nodeCollection[1]]);
+		}
+
+		if (path === "/api/mininet/links" && req.method === "GET") {
+			if (topology.fail.has("links"))
+				return send(500, { detail: "links exploded" });
+			return send(200, topology.links);
 		}
 
 		if (path === "/api/mininet/start" && req.method === "GET") {
@@ -472,6 +495,8 @@ async function startMininet(port) {
 	});
 
 	server.log = log;
+	// 台账对账（⑭）要能直接铺上游事实 / 注入读失败，暴露可变拓扑
+	server.topology = topology;
 	server.sniffer = sniffer;
 	// 抓包实时流（NMCPS-ADR-0022 D6）：升级记录留在 `snifferSocketLog`，用来证明 BFF 真向上游建了连
 	server.snifferSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
@@ -1234,6 +1259,127 @@ try {
 		const audited = ["ws_ticket_terminal", "ws_terminal", "ws_ticket_logs", "ws_logs", "ws_ticket_monitor", "ws_monitor"].every((action) => actions.has(action));
 		const noPayload = !audit.some((entry) => JSON.stringify(entry).includes("echo:ls"));
 		log("⑬ 三条通道签票 + 建流各落审计，权限位按通道登记且不含会话载荷", audited && permissionOf("terminal") === "lab:terminal" && permissionOf("logs") === "lab:read" && permissionOf("monitor") === "lab:read" && noPayload, `actions=${describe([...actions].filter((action) => action.startsWith("ws_")))} terminal=${permissionOf("terminal")} noPayload=${noPayload}`);
+	});
+
+	/*
+	 * ⑭ 台账对账（NMCPS-ADR-0023）：`POST /api/lab/networks/{id}/sync`
+	 *
+	 * 这条路由只改台账，不转发任何上游写 —— 它读上游五类节点与链路，把 `resources`
+	 * **整体重写**成上游此刻的事实。断言钉四件事：
+	 *   1. 权限闸门在最前（单读权限 → 403、跨租户 → 404、缺 / 错确认 → 400），全部零上游请求；
+	 *   2. 成功路径只发 GET，清单整体等于上游事实（幽灵 id 被删掉，不是并集保留）；
+	 *   3. 任一类读取失败 → 原样回错且**台账不落盘**（全有或全无）；
+	 *   4. 审计按「先 allowed 后 succeeded / failed」落盘，且不复制资源载荷。
+	 */
+	const reconcileLedger = [{
+		...DEFAULT_LEDGER[0],
+		id: "net_reconcile",
+		resources: { nodes: ["ghost", "h1"], links: ["h1--sw1"] }
+	}, {
+		id: "net_foreign",
+		tenant_id: "t_other",
+		engine: "mininet",
+		upstream_id: "mininet-t_other",
+		state: "running",
+		created_by: "u_other",
+		created_at: "2026-11-15T00:00:00.000Z",
+		updated_at: "2026-11-15T00:00:00.000Z"
+	}];
+
+	// 上游事实：旧前端 / 运维直接在下游加出来的节点必须能被对账看见
+	const factTopology = mininet.topology;
+	factTopology.hosts = [{ name: "h1" }, { name: "h4" }];
+	factTopology.switches = { sw9: { id: "sw9", name: "sw9", type: "switch", ports: 4 } };
+	factTopology.routers = { r1: { id: "r1", name: "r1" } };
+	factTopology.nats = { n1: { id: "n1", name: "n1" } };
+	factTopology.controllers = { ctl1: { id: "ctl1", name: "ctl1" } };
+	factTopology.links = [
+		{ from: "h1", to: "sw9" },
+		{ from: "sw9", to: "ctl1" },
+		// 旧形状：升级期数据里的 `identity.source/target` 也必须认
+		{ identity: { source: "h4", target: "sw9" } }
+	];
+
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+		NUXT_LAB_LEDGER_FILE: `.data/check-lab-bff-reconcile-${process.pid}.json`,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify(reconcileLedger)
+	}), async (port) => {
+		const admin = await login(port);
+		const reader = await login(port, "erin");
+
+		const sync = (cookie, id, body) => request(port, `/api/lab/networks/${id}/sync`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			cookie,
+			...(body === undefined ? {} : { body: JSON.stringify(body) })
+		});
+
+		const readCounts = async () => {
+			const listed = await request(port, "/api/lab/networks", { cookie: admin.cookie });
+			const record = (listed.json?.data ?? []).find((item) => item.id === "net_reconcile");
+			return { nodeCount: record?.node_count, linkCount: record?.link_count };
+		};
+
+		// ① 权限与确认闸门：任何一条都不能触达上游
+		const gateHits = mininet.log.length;
+		const readerDenied = await sync(reader.cookie, "net_reconcile", { confirm: "net_reconcile" });
+		log("⑭ 只有 lab:read → 403 lab_permission_denied 且零上游请求", readerDenied.status === 403 && readerDenied.json?.message === "lab_permission_denied" && mininet.log.length === gateHits, `${readerDenied.status} hits=${mininet.log.length - gateHits}`);
+
+		const foreign = await sync(admin.cookie, "net_foreign", { confirm: "net_foreign" });
+		log("⑭ 跨租户网络 → 404 lab_resource_not_found（与不存在同语义）且零上游请求", foreign.status === 404 && foreign.json?.message === "lab_resource_not_found" && mininet.log.length === gateHits, `${foreign.status} hits=${mininet.log.length - gateHits}`);
+
+		const missingConfirm = await sync(admin.cookie, "net_reconcile");
+		const wrongConfirm = await sync(admin.cookie, "net_reconcile", { confirm: "net_wrong" });
+		log("⑭ 缺 / 错 confirm → 400 lab_confirm_required 且零上游请求", missingConfirm.status === 400 && wrongConfirm.status === 400 && [missingConfirm, wrongConfirm].every((item) => item.json?.message === "lab_confirm_required") && mininet.log.length === gateHits, `missing=${missingConfirm.status} wrong=${wrongConfirm.status} hits=${mininet.log.length - gateHits}`);
+
+		const beforeSync = await readCounts();
+		log("⑭ 对账前台账还是旧清单（2 个节点 / 1 条链路）", beforeSync.nodeCount === 2 && beforeSync.linkCount === 1, `nodes=${beforeSync.nodeCount} links=${beforeSync.linkCount}`);
+
+		// ② 成功路径：只读上游，清单整体重写
+		const readHits = mininet.log.length;
+		const synced = await sync(admin.cookie, "net_reconcile", { confirm: "net_reconcile" });
+		const reads = mininet.log.slice(readHits);
+		const readPaths = reads.map((item) => item.path);
+		const expectedPaths = ["/api/mininet/hosts", "/api/mininet/switches", "/api/mininet/routers", "/api/mininet/nats", "/api/mininet/controllers", "/api/mininet/links"];
+		log("⑭ 对账出站只读六类端点（五类节点 + 链路），且全部 GET", reads.length === 6 && reads.every((item) => item.method === "GET") && expectedPaths.every((item) => readPaths.includes(item)), describe(readPaths));
+
+		const data = synced.json?.data;
+		const expectedNodes = ["ctl1", "h1", "h4", "n1", "r1", "sw9"];
+		const expectedLinks = ["ctl1--sw9", "h1--sw9", "h4--sw9"];
+		log("⑭ 对账成功：清单整体等于上游事实（幽灵 id 被删、新节点被接管）", synced.status === 200 && describe(data?.nodes) === describe(expectedNodes) && describe(data?.links) === describe(expectedLinks), `${synced.status} nodes=${describe(data?.nodes)} links=${describe(data?.links)}`);
+
+		log("⑭ 差集说清「接管了什么、清掉了什么」", describe(data?.adopted?.nodes) === describe(["ctl1", "h4", "n1", "r1", "sw9"]) && describe(data?.dropped?.nodes) === describe(["ghost"]) && describe(data?.dropped?.links) === describe(["h1--sw1"]), `adopted=${describe(data?.adopted?.nodes)} dropped=${describe(data?.dropped)}`);
+
+		const afterSync = await readCounts();
+		log("⑭ 新清单落盘（列表计数 = 上游事实）", afterSync.nodeCount === 6 && afterSync.linkCount === 3, `nodes=${afterSync.nodeCount} links=${afterSync.linkCount}`);
+
+		// 出口过滤按新清单判可见性：清单外节点现在看得见，幽灵 id 不再出现在路径里
+		const hostsAfter = await request(port, "/api/lab/hosts", { cookie: admin.cookie });
+		const hostNames = (hostsAfter.json?.data ?? []).map((item) => item.name);
+		const ghostStats = await request(port, "/api/lab/stats/ghost", { cookie: admin.cookie });
+		log("⑭ 出口按重写后的清单收敛（清单外节点可见 / 幽灵 id → 404）", hostNames.includes("h4") && ghostStats.status === 404 && ghostStats.json?.message === "lab_resource_not_found", `hosts=${describe(hostNames)} ghost=${ghostStats.status}`);
+		// ③ 上游读取失败：原样回错，台账一个字节都不动
+		factTopology.fail.add("links");
+		const failedHits = mininet.log.length;
+		const upstreamFailed = await sync(admin.cookie, "net_reconcile", { confirm: "net_reconcile" });
+		factTopology.fail.delete("links");
+		const afterFailure = await readCounts();
+		log("⑭ 任一类读取失败 → 原样回上游状态与原因（不包装成 500 兜底）", upstreamFailed.status === 500 && upstreamFailed.json?.message === "links exploded" && mininet.log.length > failedHits, `${upstreamFailed.status} ${describe(upstreamFailed.json?.message)}`);
+		log("⑭ 读取失败时台账不落盘（仍是上一份成功清单）", afterFailure.nodeCount === 6 && afterFailure.linkCount === 3, `nodes=${afterFailure.nodeCount} links=${afterFailure.linkCount}`);
+
+		// ④ 审计：先 allowed，再 succeeded / failed；不复制资源载荷
+		const audit = readAuditEntries(`.data/check-lab-audit-${process.pid}/lab-audit.jsonl`)
+			.filter((entry) => entry.action === "post /api/lab/networks/{id}/sync");
+		const allowed = audit.filter((entry) => entry.result === "allowed");
+		const succeeded = audit.filter((entry) => entry.result === "succeeded");
+		const failedEntry = audit.find((entry) => entry.result === "failed");
+		log("⑭ 审计：allowed 先落，成功落 succeeded、读取失败落 failed（reason 为上游原文）", allowed.length >= 4 && succeeded.length === 1 && failedEntry?.reason === "links exploded", `allowed=${allowed.length} succeeded=${succeeded.length} failed=${describe(failedEntry?.reason)}`);
+		log("⑭ 审计登记双权限位，且不复制节点 / 链路载荷", allowed.every((entry) => entry.permission === "lab:create,lab:delete") && !audit.some((entry) => JSON.stringify(entry).includes("ctl1--sw9")), `permission=${describe(allowed[0]?.permission)}`);
+
+		// 这条路由只改台账，不能进上游白名单（否则会被 `[...slug]` 当成转发目标）
+		const whitelisted = readMininetWhitelist().some((entry) => entry.template.includes("/sync"));
+		log("⑭ `/networks/{id}/sync` 不在 MININET_ROUTES 白名单里（只改台账，不转发）", !whitelisted, `whitelisted=${whitelisted}`);
 	});
 
 	const passed = results.filter((item) => item.ok).length;

@@ -421,3 +421,78 @@ export async function fetchMininetText(
 		clearTimeout(timer);
 	}
 }
+
+/** JSON 类上游读的结果：成功带解析后的正文，失败带状态码与给前端看的 message */
+export type MininetJsonResult
+	= | { ok: true, data: unknown }
+		| { ok: false, status: number, message: string };
+
+/**
+ * 读一份**上游 JSON**并解析（对账专用，NMCPS-ADR-0023）。
+ *
+ * `proxyToMininet()` 只认白名单里的 `(method, template)`，而且要过租户台账过滤；
+ * 对账需要的是「上游此刻的事实」，因此单开一条只读通道：仍然没有凭据、
+ * 仍然受 `config.timeoutMs` 约束，但**不**经过 `filterLabPayload()` ——
+ * 台账正是要被重写的那一侧，用旧清单过滤读回来的节点只会把漂移原样吞掉。
+ */
+export async function fetchMininetJson(
+	event: H3Event,
+	config: MininetConfig,
+	upstreamPath: string
+): Promise<MininetJsonResult> {
+	if (!config.baseUrl) {
+		return {
+			ok: false,
+			status: 503,
+			message: config.tenantScoped ? MININET_MESSAGES.tenantRuntimeUnavailable : MININET_MESSAGES.notConfigured
+		};
+	}
+
+	let url: string;
+	try {
+		const base = new URL(config.baseUrl);
+		url = `${base.origin}${base.pathname.replace(/\/+$/, "")}${upstreamPath}`;
+	} catch {
+		return { ok: false, status: 500, message: MININET_MESSAGES.baseInvalid };
+	}
+
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+
+	try {
+		const headers = buildMininetHeaders(event);
+		headers.set("accept", "application/json");
+		const response = await fetch(url, {
+			method: "GET",
+			headers,
+			signal: controller.signal,
+			redirect: "manual"
+		});
+		const text = await response.text();
+
+		if (!response.ok) {
+			return { ok: false, status: response.status, message: pickMessage(safeJsonParse(text)) ?? "mininet_rejected" };
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(text);
+		} catch {
+			return { ok: false, status: 502, message: MININET_MESSAGES.invalidPayload };
+		}
+
+		return { ok: true, data: parsed };
+	} catch (error) {
+		if (isAbortError(error)) {
+			return { ok: false, status: 504, message: MININET_MESSAGES.timeout };
+		}
+
+		if (import.meta.dev) {
+			console.error("[lab] reconcile read failed", upstreamPath, error);
+		}
+
+		return { ok: false, status: 502, message: MININET_MESSAGES.unreachable };
+	} finally {
+		clearTimeout(timer);
+	}
+}

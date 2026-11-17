@@ -843,7 +843,8 @@
 				"hosts": "Show hosts",
 				"controllers": "Show controllers",
 				"hostIp": "Show host IP",
-				"networkTools": "Network tools"
+				"networkTools": "Network tools",
+				"reconcile": "Reconcile ledger…"
 			},
 			"networkTools": {
 				"title": "Network tools",
@@ -1085,6 +1086,20 @@
 				"cancel": "Cancel",
 				"failed": "Rebuild failed",
 				"done": "Network wiped and rebuilt"
+			},
+			"reconcile": {
+				"title": "Reconcile ledger",
+				"summary": "The resource list of network {id} will be rewritten from the upstream facts",
+				"body": "The BFF reads the five upstream node kinds plus the links and rewrites the ledger list as the current upstream facts: nodes outside the list are adopted, ids that no longer exist upstream are removed. The upstream itself is not modified.",
+				"inputLabel": "Type the network ID to confirm",
+				"inputHint": "Type {id} exactly",
+				"placeholder": "Network ID",
+				"mismatch": "Network ID does not match",
+				"confirm": "Reconcile",
+				"cancel": "Cancel",
+				"failed": "Reconciliation failed",
+				"done": "Ledger now matches upstream ({nodes} nodes / {links} links)",
+				"doneHint": "{adopted} item(s) adopted, {dropped} removed"
 			}
 		},
 		"device": {

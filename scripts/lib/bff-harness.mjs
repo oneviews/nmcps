@@ -476,6 +476,11 @@ export async function startUpstream(port) {
 	 */
 	const mininetLog = [];
 	/**
+	 * 只读请求日志（NMCPS-ADR-0023 对账）：`mininetLog` 只记写，而「只读上游、只改台账」
+	 * 的对账恰恰要靠**读侧**证据说话 —— 读了哪几类端点、有没有夹带写，只有这份日志能回答。
+	 */
+	const mininetReadLog = [];
+	/**
 	 * 运行态（NMCPS-ADR-0022 W3）：`GET /api/mininet/start` 回的就是这个布尔值，
 	 * `POST start` / `POST stop` **真改它** —— 页面启停后再读一次必须看见变化，
 	 * 否则「启动了」只是按钮转了一圈。
@@ -2282,6 +2287,8 @@ export async function startUpstream(port) {
 			}
 
 			// ── 读：五类节点回对象字典、链路回数组、流表回 `ovs-ofctl` 原文 ──
+			if (req.method === "GET")
+				mininetReadLog.push({ method: req.method, path: url.pathname, search: url.search });
 			// 导出（NMCPS-ADR-0022 W4）：真实上游回 `PlainTextResponse`，不是 JSON
 			if (segments.length === 1 && segments[0] === "export_json")
 				return sendText(200, JSON.stringify({ hosts: mininetState.hosts, switches: mininetState.switches, links: mininetState.links }, null, 4));
@@ -2447,6 +2454,7 @@ export async function startUpstream(port) {
 	server.authLog = authLog;
 	server.control = control;
 	server.mininetLog = mininetLog;
+	server.mininetReadLog = mininetReadLog;
 	server.mininetState = mininetState;
 	server.mininetRun = mininetRun;
 	server.mininetSniffer = mininetSniffer;

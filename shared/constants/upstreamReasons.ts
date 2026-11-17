@@ -69,6 +69,8 @@ export const MININET_MESSAGES = {
 	timeout: "mininet_timeout",
 	/** 配置的基址不合法（拼接失败） */
 	baseInvalid: "mininet_base_invalid",
+	/** 上游回了 200 但正文不是合法 JSON（对账读取用，NMCPS-ADR-0023） */
+	invalidPayload: "mininet_invalid_payload",
 	/** 会话租户没有对应实例（NMCPS-ADR-0021 §5.2；不得回退到别的租户实例） */
 	tenantRuntimeUnavailable: "tenant_runtime_unavailable",
 	/** 台账没有该资源，或资源属于别的租户（D4：不区分「不存在」与「别人的」） */
@@ -83,6 +85,8 @@ export const MININET_MESSAGES = {
 	bodyInvalid: "bff_body_invalid",
 	/** 破坏性重建缺少确认字段，或确认值与台账 `network_id` 不一致（NMCPS-ADR-0022 W5） */
 	confirmRequired: "lab_confirm_required",
+	/** 台账写盘失败：对账已读到上游事实，但清单没能落库（NMCPS-ADR-0023） */
+	ledgerWriteFailed: "lab_ledger_write_failed",
 	/** 申请的 WebSocket 种类未登记 / 尚未实现（NMCPS-ADR-0022 D6） */
 	wsKindInvalid: "lab_ws_kind_invalid",
 	/** WebSocket 票过期 / 重放 / 绑定不符 / 签名不符（NMCPS-ADR-0022 D6） */

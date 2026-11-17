@@ -5003,6 +5003,10 @@ if (upstreamPort) {
 		const emptyContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const emptyPage = await emptyContext.newPage();
 		await loginToLab(emptyPage, emptyBase);
+		// 空台账是整段 11.x 的第一个页面：BFF 冷启动（首次 SSR）+ 台账读盘可能超过 `loginToLab`
+		// 的固定等待，这里等它落到三种终态之一（空提示 / 画布 / 错误卡）再判，别把「还在读」当「报错」。
+		await emptyPage.waitForSelector("[data-testid='mininet-empty'], [data-testid='topology-canvas'], [data-testid='mininet-error']", { timeout: 20000 }).catch(() => {});
+		await emptyPage.waitForTimeout(300);
 		const emptyProbe = await emptyPage.evaluate(() => ({
 			empty: !!document.querySelector("[data-testid='mininet-empty']"),
 			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
@@ -5012,7 +5016,7 @@ if (upstreamPort) {
 		log(
 			"11.3 空台账显示「暂无仿真网络」，不画空画布也不报错",
 			emptyProbe.empty && !emptyProbe.canvas && !emptyProbe.error && emptyProbe.text.includes("暂无仿真网络"),
-			`empty=${emptyProbe.empty} canvas=${emptyProbe.canvas} error=${emptyProbe.error}`
+			`empty=${emptyProbe.empty} canvas=${emptyProbe.canvas} error=${emptyProbe.error} 文案=${emptyProbe.text.slice(0, 80)}`
 		);
 		await emptyContext.close();
 	} finally {
@@ -5799,11 +5803,12 @@ if (upstreamPort) {
 
 		const fileItems = await fileMenuLabels();
 		log(
-			"11.5 工具栏最左的「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本三项齐全",
-			fileItems.length === 3
+			"11.5 工具栏最左的「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本 / 台账对账四项齐全",
+			fileItems.length === 4
 			&& fileItems.some((label) => label.includes("导入拓扑"))
 			&& fileItems.some((label) => label.includes("导出 JSON"))
-			&& fileItems.some((label) => label.includes("导出 Python 脚本")),
+			&& fileItems.some((label) => label.includes("导出 Python 脚本"))
+			&& fileItems.some((label) => label.includes("台账对账")),
 			`菜单项=${JSON.stringify(fileItems)}`
 		);
 
@@ -5989,6 +5994,87 @@ if (upstreamPort) {
 		 * 页面上「重建后画布为空」已经在上一行断言完。
 		 */
 		Object.assign(upstreamServer.mininetState, structuredClone(stateBeforeReset));
+
+		/*
+		 * 11.6b 台账对账（NMCPS-ADR-0023）：`POST /api/lab/networks/{id}/sync`
+		 *
+		 * 旧前端 / 运维直连上游加出来的节点在台账里没有痕迹，出口过滤会把它们藏起来。
+		 * 对账是**显式**动作：双权限位 + 逐字输入网络 id；BFF 只读上游、只重写清单，
+		 * 因此上游读侧日志应当出现五类节点 + 链路（`mininetReadLog`），写侧一条都没有。
+		 */
+		const fileMenuEntries = async () => {
+			const opened = await clickIfPresent("[data-testid='mininet-file-menu']");
+			if (!opened)
+				return [];
+			await labPage.waitForTimeout(250);
+			const entries = await labPage.evaluate(() => [...document.querySelectorAll("[role='menuitem']")].map((node) => ({
+				label: (node.textContent ?? "").trim(),
+				disabled: node.getAttribute("aria-disabled") === "true" || node.hasAttribute("data-disabled")
+			})));
+			await labPage.keyboard.press("Escape");
+			await labPage.waitForTimeout(150);
+			return entries;
+		};
+
+		// 重建后画布停在空态；这里先重读一次台账，让「对账前后视觉不变」有对照面
+		await labPage.reload({ waitUntil: "networkidle" });
+		await labPage.waitForTimeout(1200);
+		const canvasBeforeReconcile = await canvasProbe();
+
+		const menuBeforeReconcile = await fileMenuEntries();
+		const reconcileEntry = menuBeforeReconcile.find((entry) => entry.label.includes("台账对账"));
+		log(
+			"11.6b 双权限（create + delete）时「文件」菜单多出「台账对账」，且可点",
+			menuBeforeReconcile.length === 4 && !!reconcileEntry && !reconcileEntry.disabled,
+			`菜单项=${JSON.stringify(menuBeforeReconcile)}`
+		);
+
+		const reconcilePicked = !!reconcileEntry && await pickFileItem(reconcileEntry.label);
+		await labPage.waitForTimeout(400);
+		const reconcileModal = await labPage.evaluate(() => ({
+			input: !!document.querySelector("[data-testid='mininet-reconcile-confirm-input']"),
+			confirmDisabled: !!document.querySelector("[data-testid='mininet-reconcile-confirm']")?.hasAttribute("disabled")
+		}));
+		const reconcileInput = labPage.locator("[data-testid='mininet-reconcile-confirm-input']");
+		await reconcileInput.fill("net_wrong");
+		await labPage.waitForTimeout(200);
+		const reconcileWrongDisabled = await labPage.evaluate(() =>
+			!!document.querySelector("[data-testid='mininet-reconcile-confirm']")?.hasAttribute("disabled"));
+		await reconcileInput.fill("net_ui");
+		await labPage.waitForTimeout(200);
+		const reconcileRightEnabled = await labPage.evaluate(() =>
+			!document.querySelector("[data-testid='mininet-reconcile-confirm']")?.hasAttribute("disabled"));
+		log(
+			"11.6b 对账弹窗要逐字输入网络 ID：输错仍禁用，输对才放行",
+			reconcilePicked && reconcileModal.input && reconcileModal.confirmDisabled
+			&& reconcileWrongDisabled && reconcileRightEnabled,
+			`弹窗=${reconcileModal.input} 初始禁用=${reconcileModal.confirmDisabled} 输错=${reconcileWrongDisabled} 输对=${reconcileRightEnabled}`
+		);
+
+		const reconcileReadBaseline = upstreamServer.mininetReadLog.length;
+		const reconcileLogBefore = upstreamServer.mininetLog.length;
+		const reconcileConfirmed = reconcileRightEnabled && await clickIfPresent("[data-testid='mininet-reconcile-confirm']");
+		await labPage.waitForTimeout(3000);
+		const reconcileReads = upstreamServer.mininetReadLog.slice(reconcileReadBaseline);
+		const reconcileReadPaths = [...new Set(reconcileReads.map((entry) => entry.path))];
+		const reconcileWrites = upstreamServer.mininetLog.slice(reconcileLogBefore);
+		const expectedReconcileReads = ["/api/mininet/hosts", "/api/mininet/switches", "/api/mininet/routers", "/api/mininet/nats", "/api/mininet/controllers", "/api/mininet/links"];
+		const canvasAfterReconcile = await canvasProbe();
+		const bodyAfterReconcile = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
+		// 台账落盘是这次唯一的写：清单被**整体重写**成上游此刻的事实（不是合并）
+		const reconcileLedger = JSON.parse(readFileSync(`.data/check-ui-lab-${process.pid}.json`, "utf8"));
+		const reconcileManifest = (reconcileLedger.networks ?? []).find((item) => item.id === "net_ui")?.resources;
+		log(
+			"11.6b 确认后读上游五类节点 + 链路且零写，并把台账清单整体重写成上游事实",
+			reconcileConfirmed
+			&& reconcileWrites.length === 0
+			&& expectedReconcileReads.every((item) => reconcileReadPaths.includes(item))
+			&& Array.isArray(reconcileManifest?.nodes) && reconcileManifest.nodes.length === canvasBeforeReconcile.nodes
+			&& Array.isArray(reconcileManifest?.links) && reconcileManifest.links.length === upstreamServer.mininetState.links.length
+			&& canvasAfterReconcile.nodes === canvasBeforeReconcile.nodes
+			&& bodyAfterReconcile.includes("台账已对齐上游"),
+			`读取=${JSON.stringify(reconcileReadPaths)} 写=${reconcileWrites.length} 清单=${reconcileManifest?.nodes?.length ?? "无"}节点/${reconcileManifest?.links?.length ?? "无"}链路 nodes=${canvasBeforeReconcile.nodes}→${canvasAfterReconcile.nodes}`
+		);
 
 		/*
 		 * 11.7 抓包实时流（NMCPS-ADR-0022 D6 / W5 剩余部分）
@@ -6217,6 +6303,39 @@ if (upstreamPort) {
 			&& manifestProbe.nodes.includes("h1") && manifestProbe.nodes.includes("c0")
 			&& hiddenNode && hiddenLink,
 			`nodes=${manifestProbe.nodes.join(",")} links=${manifestProbe.links.join(",")}`
+		);
+
+		/*
+		 * 对账入口的负半：只有 create 没有 delete 时「台账对账」必须禁用。
+		 * 页面能力位来自 `GET /api/lab/channel`，这里只改这一条响应（BFF 侧守卫不变），
+		 * 断言的是「客户端不给出注定 403 的入口」这一层，与 BFF 的 403 用例互补。
+		 */
+		await manifestPage.route("**/api/lab/channel", async (route) => {
+			const response = await route.fetch();
+			const payload = await response.json();
+			const capabilities = payload?.data?.capabilities ?? {};
+			await route.fulfill({ response, json: { ...payload, data: { ...payload.data, capabilities: { ...capabilities, delete: false } } } });
+		});
+		await manifestPage.reload({ waitUntil: "networkidle" });
+		await manifestPage.waitForTimeout(800);
+		const downgradedMenu = await (async () => {
+			const button = manifestPage.locator("[data-testid='mininet-file-menu']");
+			if (await button.count() === 0)
+				return [];
+			await button.first().click();
+			await manifestPage.waitForTimeout(250);
+			const entries = await manifestPage.evaluate(() => [...document.querySelectorAll("[role='menuitem']")].map((node) => ({
+				label: (node.textContent ?? "").trim(),
+				disabled: node.getAttribute("aria-disabled") === "true" || node.hasAttribute("data-disabled")
+			})));
+			await manifestPage.keyboard.press("Escape");
+			return entries;
+		})();
+		const downgradedReconcile = downgradedMenu.find((entry) => entry.label.includes("台账对账"));
+		log(
+			"11.6b 缺 lab:delete 时「台账对账」禁用（客户端能力位与 BFF 守卫同源）",
+			!!downgradedReconcile && downgradedReconcile.disabled,
+			`菜单项=${JSON.stringify(downgradedMenu)}`
 		);
 
 		await manifestContext.close();

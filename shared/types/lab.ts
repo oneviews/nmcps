@@ -49,3 +49,24 @@ export interface LabNetworkSummary {
 	node_count: number | null
 	link_count: number | null
 }
+
+/**
+ * `POST /api/lab/networks/{id}/sync` 的出参（NMCPS-ADR-0023）。
+ *
+ * 对账把台账清单整体重写成上游事实；`adopted` / `dropped` 是两个差集，
+ * 让页面能说清“这次多接管了什么、清掉了什么”，而不是只回 `{ ok: true }`。
+ * `links` 与台账同口径：无向归一的 `a--b`。
+ */
+export interface LabNetworkSyncResult {
+	network: LabNetworkSummary
+	nodes: string[]
+	links: string[]
+	adopted: {
+		nodes: string[]
+		links: string[]
+	}
+	dropped: {
+		nodes: string[]
+		links: string[]
+	}
+}

@@ -843,7 +843,8 @@
 				"hosts": "显示主机",
 				"controllers": "显示控制器",
 				"hostIp": "显示主机 IP",
-				"networkTools": "网络工具"
+				"networkTools": "网络工具",
+				"reconcile": "台账对账…"
 			},
 			"networkTools": {
 				"title": "网络工具",
@@ -1085,6 +1086,20 @@
 				"cancel": "取消",
 				"failed": "重建失败",
 				"done": "已清空并重建网络"
+			},
+			"reconcile": {
+				"title": "台账对账",
+				"summary": "将按上游事实重写网络 {id} 的资源清单",
+				"body": "BFF 读取上游五类节点与链路，把台账清单整体重写为上游此刻的事实：清单外的节点会被接管，上游已不存在的 ID 会被清掉。上游本身不做任何改动。",
+				"inputLabel": "输入网络 ID 确认",
+				"inputHint": "需要逐字输入 {id}",
+				"placeholder": "网络 ID",
+				"mismatch": "网络 ID 不一致",
+				"confirm": "开始对账",
+				"cancel": "取消",
+				"failed": "对账失败",
+				"done": "台账已对齐上游（{nodes} 个节点 / {links} 条链路）",
+				"doneHint": "新接管 {adopted} 项，清理 {dropped} 项"
 			}
 		},
 		"device": {
