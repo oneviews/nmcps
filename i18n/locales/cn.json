@@ -809,8 +809,9 @@
 			"title": "仿真网络验证",
 			"toolbar": {
 				"refresh": "刷新",
-				"labels": "名称",
-				"add": "新增"
+				"add": "新增",
+				"addPalette": "新增节点",
+				"addHint": "点击类型直接新增，或把类型拖到画布上的落点"
 			},
 			"stats": {
 				"network": "网络",
@@ -826,6 +827,79 @@
 				"title": "读取仿真网络失败"
 			},
 			"canvasLabel": "仿真拓扑",
+			"canvasDropHint": "放到这里新增{kind}",
+			"menu": {
+				"file": "文件",
+				"view": "视图",
+				"run": "运行",
+				"tools": "工具",
+				"importJson": "导入拓扑（JSON）…",
+				"exportJson": "导出 JSON",
+				"exportScript": "导出 Python 脚本",
+				"sniffStart": "开始抓包",
+				"sniffStop": "停止抓包",
+				"sniffDownload": "下载抓包文件（pcap）",
+				"labels": "显示名称",
+				"hosts": "显示主机",
+				"controllers": "显示控制器",
+				"hostIp": "显示主机 IP",
+				"networkTools": "网络工具"
+			},
+			"networkTools": {
+				"title": "网络工具",
+				"description": "Webshell、上游日志与单接口速率：三条通道都经 BFF 换票建连，浏览器不直连实验服务。",
+				"tabs": {
+					"webshell": "Webshell",
+					"logs": "日志",
+					"monitor": "监控"
+				},
+				"state": {
+					"idle": "未连接",
+					"connecting": "连接中",
+					"live": "已连接",
+					"closed": "已断开",
+					"error": "失败"
+				},
+				"terminal": {
+					"node": "节点",
+					"nodePlaceholder": "选择要进入的节点",
+					"connect": "连接",
+					"disconnect": "断开",
+					"send": "发送",
+					"empty": "连接后这里是节点终端的输出。",
+					"commandPlaceholder": "输入命令后回车",
+					"interrupt": "中断（Ctrl-C）",
+					"clear": "清屏",
+					"closedHint": "连接已断开：上游会话结束或网络已停止，重新点「连接」即可继续，已输出内容保留。"
+				},
+				"logs": {
+					"hint": "打开即跟随上游 mininet.log（最近 1000 行 + 实时追加）。",
+					"empty": "还没有日志输出。"
+				},
+				"monitor": {
+					"node": "节点",
+					"nodePlaceholder": "选择节点",
+					"intf": "接口",
+					"intfPlaceholder": "选择接口",
+					"start": "开始监控",
+					"stop": "停止监控",
+					"empty": "开始监控后这里按采样间隔显示 TX / RX 速率。",
+					"noInterfaces": "接口清单为空：网络可能还没启动，上游没有可监控的节点。"
+				}
+			},
+			"import": {
+				"ok": "拓扑已导入",
+				"okHint": "上游新增 {nodes} 个节点、{links} 条链路",
+				"failed": "导入失败",
+				"errors": {
+					"empty": "这个文件是空的。",
+					"invalidJson": "不是合法的 JSON 文件。",
+					"shapeInvalid": "认不出拓扑结构：需要 nodes + edges 两段，或导出的台账形状（hosts / switches / links…）。"
+				}
+			},
+			"export": {
+				"failed": "导出失败"
+			},
 			"network": {
 				"title": "网络",
 				"id": "ID",
@@ -854,6 +928,7 @@
 			"add": {
 				"title": "新增{kind}",
 				"hint": "节点写入实验网台账后立即出现在画布上；名称与 IP 由上游校验。",
+				"origin": "落点坐标 ({x}, {y})",
 				"name": "名称",
 				"namePlaceholder": "例：h3",
 				"label": "显示名",
@@ -915,11 +990,101 @@
 				"remove": "删除第 {id} 条流",
 				"created": "已向交换机 {id} 写入流表项",
 				"removed": "已删除交换机 {switch} 的第 {id} 条流",
+				"clear": "清空流表",
+				"clearTitle": "清空流表",
+				"clearSummary": "即将删除交换机 {id} 的流表项（当前 {count} 条）",
+				"clearBody": "上游执行 ovs-ofctl del-flows，删掉的流表项无法恢复。",
+				"clearIrreversible": "该操作不可撤销",
+				"clearMatchLabel": "匹配域（可选）",
+				"clearMatchHint": "留空 = 清空整表",
+				"clearMatchPlaceholder": "例：ip,nw_dst=10.0.0.9",
+				"clearCancel": "取消",
+				"clearSubmit": "清空",
+				"cleared": "已清空交换机 {id} 的流表",
+				"clearedMatch": "已删除交换机 {id} 中匹配 {match} 的流表项",
+				"clearFailed": "清空失败",
 				"errors": {
 					"actionsRequired": "请填写动作",
 					"matchInvalid": "匹配域不能包含 actions=",
 					"priorityInvalid": "优先级必须是 0-65535 的整数"
 				}
+			},
+			"run": {
+				"title": "运行控制",
+				"stateRunning": "运行中",
+				"stateStopped": "已停止",
+				"stateUnknown": "未知",
+				"start": "启动",
+				"stop": "停止",
+				"ping": "连通性",
+				"startHint": "建网并启动全部节点；已在运行时由上游拒绝。",
+				"started": "已启动仿真网络",
+				"stopped": "已停止仿真网络",
+				"pinged": "连通性测试完成",
+				"stopTitle": "停止仿真网络",
+				"stopBody": "停止会终止全部节点进程，并按台账重建未启动的拓扑；节点与链路不会丢，再次启动即恢复运行。",
+				"stopConfirm": "停止",
+				"stopCancel": "取消",
+				"stopFailed": "停止失败",
+				"restart": "重启",
+				"restartTitle": "重启仿真网络",
+				"restartBody": "重启 = 先停止再启动：会终止全部节点进程并按台账重建拓扑，随后立即重新启动。正在跑的 ping / 抓包 / 终端都会失效。",
+				"restartConfirm": "重启",
+				"restartFailed": "重启失败",
+				"restarted": "已重启仿真网络",
+				"pingOutput": "连通性结果",
+				"pingEmpty": "上游没有返回任何行。",
+				"iperfTitle": "吞吐测试",
+				"iperfClient": "客户端",
+				"iperfServer": "服务端",
+				"iperfL4": "协议",
+				"iperfSeconds": "时长（秒）",
+				"iperfSecondsHint": "留空则跟随上游默认（5 秒）",
+				"iperfSubmit": "开始测试",
+				"iperfHostPlaceholder": "选择主机",
+				"iperfClientResult": "客户端输出",
+				"iperfServerResult": "服务端输出",
+				"iperfDone": "吞吐测试完成",
+				"errors": {
+					"clientRequired": "请选择客户端主机",
+					"serverRequired": "请选择服务端主机",
+					"sameEndpoint": "客户端与服务端不能是同一台主机",
+					"secondsInvalid": "时长必须是 1-3600 的整数"
+				},
+				"reset": "重建网络（清空拓扑）"
+			},
+			"sniffer": {
+				"title": "抓包",
+				"stateOn": "抓包中",
+				"stateOff": "未抓包",
+				"stateUnknown": "未知",
+				"startHint": "开始后上游会抓取全网流量，直到手动停止；文件可随时下载。",
+				"started": "已开始抓包",
+				"stopped": "已停止抓包",
+				"startFailed": "开始抓包失败",
+				"stopFailed": "停止抓包失败",
+				"downloadFailed": "下载抓包失败",
+				"downloaded": "抓包文件已开始下载",
+				"streamTitle": "实时包",
+				"streamEmpty": "暂无数据包：开始抓包后自动接入实时流",
+				"streamIdle": "未连接",
+				"streamConnecting": "连接中",
+				"streamLive": "实时",
+				"streamClosed": "已断开",
+				"streamError": "连接失败"
+			},
+			"reset": {
+				"title": "重建网络",
+				"summary": "即将清空网络 {id} 的全部节点与链路",
+				"body": "上游执行 full_reset：删除全部节点、链路与流表，并按空台账重建。该操作不可撤销，只有重新导入拓扑才能恢复。",
+				"inputLabel": "输入网络 ID 确认",
+				"inputHint": "需要逐字输入 {id}",
+				"placeholder": "网络 ID",
+				"mismatch": "网络 ID 不一致",
+				"confirm": "清空并重建",
+				"cancel": "取消",
+				"failed": "重建失败",
+				"done": "已清空并重建网络"
 			}
 		},
 		"device": {

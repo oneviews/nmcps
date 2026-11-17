@@ -809,8 +809,9 @@
 			"title": "Simulation",
 			"toolbar": {
 				"refresh": "Refresh",
-				"labels": "Labels",
-				"add": "Add"
+				"add": "Add",
+				"addPalette": "Add node",
+				"addHint": "Click a type to add it, or drag a type onto the canvas"
 			},
 			"stats": {
 				"network": "Network",
@@ -826,6 +827,79 @@
 				"title": "Unable to read the simulation network"
 			},
 			"canvasLabel": "Simulation topology",
+			"canvasDropHint": "Drop here to add a {kind}",
+			"menu": {
+				"file": "File",
+				"view": "View",
+				"run": "Run",
+				"tools": "Tools",
+				"importJson": "Import topology (JSON)…",
+				"exportJson": "Export JSON",
+				"exportScript": "Export Python script",
+				"sniffStart": "Start capture",
+				"sniffStop": "Stop capture",
+				"sniffDownload": "Download capture (pcap)",
+				"labels": "Show labels",
+				"hosts": "Show hosts",
+				"controllers": "Show controllers",
+				"hostIp": "Show host IP",
+				"networkTools": "Network tools"
+			},
+			"networkTools": {
+				"title": "Network tools",
+				"description": "Webshell, upstream logs and per-interface rates — all three channels get a short-lived ticket from the BFF, the browser never talks to the lab service directly.",
+				"tabs": {
+					"webshell": "Webshell",
+					"logs": "Logs",
+					"monitor": "Monitor"
+				},
+				"state": {
+					"idle": "Disconnected",
+					"connecting": "Connecting",
+					"live": "Connected",
+					"closed": "Closed",
+					"error": "Failed"
+				},
+				"terminal": {
+					"node": "Node",
+					"nodePlaceholder": "Pick a node to enter",
+					"connect": "Connect",
+					"disconnect": "Disconnect",
+					"send": "Send",
+					"empty": "Node terminal output appears here once connected.",
+					"commandPlaceholder": "Type a command and press Enter",
+					"interrupt": "Interrupt (Ctrl-C)",
+					"clear": "Clear",
+					"closedHint": "Connection closed — the upstream session ended or the network stopped. Press Connect again to continue; output received so far is kept."
+				},
+				"logs": {
+					"hint": "Opens an upstream tail of mininet.log (last 1000 lines plus live appends).",
+					"empty": "No log output yet."
+				},
+				"monitor": {
+					"node": "Node",
+					"nodePlaceholder": "Pick a node",
+					"intf": "Interface",
+					"intfPlaceholder": "Pick an interface",
+					"start": "Start monitoring",
+					"stop": "Stop monitoring",
+					"empty": "TX / RX rates appear here at the upstream sampling interval once monitoring starts.",
+					"noInterfaces": "No interfaces reported: the network may not be started, so upstream has nothing to monitor."
+				}
+			},
+			"import": {
+				"ok": "Topology imported",
+				"okHint": "Upstream added {nodes} nodes and {links} links",
+				"failed": "Import failed",
+				"errors": {
+					"empty": "That file is empty.",
+					"invalidJson": "That is not a valid JSON file.",
+					"shapeInvalid": "Unrecognised topology: expected nodes + edges, or the exported ledger shape (hosts / switches / links…)."
+				}
+			},
+			"export": {
+				"failed": "Export failed"
+			},
 			"network": {
 				"title": "Network",
 				"id": "ID",
@@ -854,6 +928,7 @@
 			"add": {
 				"title": "Add {kind}",
 				"hint": "The node joins the lab ledger and shows up on the canvas right away; the upstream validates name and IP.",
+				"origin": "Drop position ({x}, {y})",
 				"name": "Name",
 				"namePlaceholder": "e.g. h3",
 				"label": "Display name",
@@ -915,11 +990,101 @@
 				"remove": "Delete flow #{id}",
 				"created": "Flow added on switch {id}",
 				"removed": "Deleted flow #{id} on switch {switch}",
+				"clear": "Clear flow table",
+				"clearTitle": "Clear flow table",
+				"clearSummary": "About to delete the flow entries of switch {id} ({count} now)",
+				"clearBody": "The upstream runs ovs-ofctl del-flows; removed entries cannot be recovered.",
+				"clearIrreversible": "This cannot be undone",
+				"clearMatchLabel": "Match (optional)",
+				"clearMatchHint": "Leave blank to clear the whole table",
+				"clearMatchPlaceholder": "e.g. ip,nw_dst=10.0.0.9",
+				"clearCancel": "Cancel",
+				"clearSubmit": "Clear",
+				"cleared": "Cleared the flow table of switch {id}",
+				"clearedMatch": "Deleted the flow entries matching {match} on switch {id}",
+				"clearFailed": "Clear failed",
 				"errors": {
 					"actionsRequired": "Actions are required",
 					"matchInvalid": "Match must not contain actions=",
 					"priorityInvalid": "Priority must be an integer between 0 and 65535"
 				}
+			},
+			"run": {
+				"title": "Run control",
+				"stateRunning": "Running",
+				"stateStopped": "Stopped",
+				"stateUnknown": "Unknown",
+				"start": "Start",
+				"stop": "Stop",
+				"ping": "Reachability",
+				"startHint": "Builds the network and starts every node; upstream rejects it when already running.",
+				"started": "Simulated network started",
+				"stopped": "Simulated network stopped",
+				"pinged": "Reachability test finished",
+				"stopTitle": "Stop simulated network",
+				"stopBody": "Stopping terminates every node process and rebuilds the topology without starting it; nodes and links are kept, and starting again restores the run.",
+				"stopConfirm": "Stop",
+				"stopCancel": "Cancel",
+				"stopFailed": "Stop failed",
+				"restart": "Restart",
+				"restartTitle": "Restart the simulation network",
+				"restartBody": "Restarting stops and then starts the network: it terminates every node process and rebuilds the topology, then starts it again right away. Running pings, captures and terminals all lose their sessions.",
+				"restartConfirm": "Restart",
+				"restartFailed": "Restart failed",
+				"restarted": "Simulation network restarted",
+				"pingOutput": "Reachability result",
+				"pingEmpty": "Upstream returned no lines.",
+				"iperfTitle": "Throughput test",
+				"iperfClient": "Client",
+				"iperfServer": "Server",
+				"iperfL4": "Protocol",
+				"iperfSeconds": "Seconds",
+				"iperfSecondsHint": "Leave blank to follow the upstream default (5 s)",
+				"iperfSubmit": "Run test",
+				"iperfHostPlaceholder": "Select a host",
+				"iperfClientResult": "Client output",
+				"iperfServerResult": "Server output",
+				"iperfDone": "Throughput test finished",
+				"errors": {
+					"clientRequired": "Select a client host",
+					"serverRequired": "Select a server host",
+					"sameEndpoint": "Client and server must be different hosts",
+					"secondsInvalid": "Seconds must be an integer between 1 and 3600"
+				},
+				"reset": "Rebuild network (wipe topology)"
+			},
+			"sniffer": {
+				"title": "Packet capture",
+				"stateOn": "Capturing",
+				"stateOff": "Idle",
+				"stateUnknown": "Unknown",
+				"startHint": "Starting a capture makes upstream record all network traffic until you stop it; the file can be downloaded at any time.",
+				"started": "Capture started",
+				"stopped": "Capture stopped",
+				"startFailed": "Could not start the capture",
+				"stopFailed": "Could not stop the capture",
+				"downloadFailed": "Could not download the capture",
+				"downloaded": "Capture download started",
+				"streamTitle": "Live packets",
+				"streamEmpty": "No packets yet: the live stream connects once a capture starts",
+				"streamIdle": "Not connected",
+				"streamConnecting": "Connecting",
+				"streamLive": "Live",
+				"streamClosed": "Disconnected",
+				"streamError": "Connection failed"
+			},
+			"reset": {
+				"title": "Rebuild network",
+				"summary": "Every node and link of network {id} will be wiped",
+				"body": "Upstream runs full_reset: it removes all nodes, links and flow entries and rebuilds from an empty ledger. This cannot be undone — only re-importing a topology restores the network.",
+				"inputLabel": "Type the network ID to confirm",
+				"inputHint": "Type {id} exactly",
+				"placeholder": "Network ID",
+				"mismatch": "Network ID does not match",
+				"confirm": "Wipe and rebuild",
+				"cancel": "Cancel",
+				"failed": "Rebuild failed",
+				"done": "Network wiped and rebuilt"
 			}
 		},
 		"device": {

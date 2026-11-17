@@ -21,6 +21,13 @@ export default defineNuxtConfig({
 	],
 	ssr: false,
 	ignore: ["**/src-tauri/**"],
+	// `/lab-ws/*` 的升级需要 Nitro 的 WebSocket 支持（crossws，NMCPS-ADR-0022 D6）；
+	// 关掉它的话 `defineWebSocketHandler` 的路由只会回 426 Upgrade Required。
+	nitro: {
+		experimental: {
+			websocket: true
+		}
+	},
 	// 根路径没有页面（见 NMCPS-ADR-0016）：冷启动直接 302 到登录页；
 	// 站内跳回 `/` 由 app/middleware/auth.global.ts 按登录态分流。
 	routeRules: {

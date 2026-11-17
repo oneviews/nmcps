@@ -20,6 +20,8 @@
 			@pointerup="onPointerUp"
 			@pointercancel="onPointerUp"
 			@pointerleave="onPointerUp"
+			@dragover="onCanvasDragOver"
+			@drop="onCanvasDrop"
 		>
 			<g :transform="transform">
 				<!-- 链路先画：节点永远盖在线上，避免端点被截断 -->
@@ -297,6 +299,22 @@
 				</g>
 			</g>
 		</svg>
+
+		<!--
+			拖拽新增（NMCPS-ADR-0022 W2 补强）：页面从工具栏把节点类型拖过来时，
+			画布只画一圈虚线 + 一句提示，**不预建节点** —— 落点最终由页面换算成上游坐标，
+			再走与「点击新增」同一条表单 / 校验路径。
+			`pointer-events-none`：这层是提示，不能吃掉 `drop`。
+		-->
+		<div
+			v-if="dropEnabled"
+			data-testid="topology-drop-hint"
+			class="pointer-events-none absolute inset-1 rounded-lg border-2 border-dashed border-(--ui-primary) bg-(--ui-primary)/5"
+		>
+			<p class="absolute top-2 left-1/2 -translate-x-1/2 rounded-md bg-(--ui-bg-elevated) px-2 py-0.5 text-[11px] whitespace-nowrap text-(--ui-text) shadow-sm">
+				{{ dropHint }}
+			</p>
+		</div>
 	</div>
 </template>
 
@@ -354,6 +372,17 @@
 		 * 让用户以为改成功了（NMCPS-ADR-0022 D3「先有权限位再渲染动作」）。
 		 */
 		draggable?: boolean
+		/**
+		 * 是否接收「从工具栏拖来的节点类型」（缺省 `false`）：拖拽进行中页面传 `true`，
+		 * 画布负责把屏幕落点反解成**图坐标**并 `emit('canvasDrop')`。
+		 *
+		 * 缺省关闭不是保守，而是「能力位先行」：没有 `lab:create` 时页面上根本没有可拖的类型项，
+		 * 画布也不该留一条能收投放的路（NMCPS-ADR-0022 D3）。
+		 */
+		dropEnabled?: boolean
+		/** 拖拽进行中的提示句（页面给；画布只显示，不拼文案） */
+		dropHint?: string
+
 		/** 无障碍名称（`<svg>` 的 `aria-label`）：屏幕阅读器念的就是这一句 */
 		label: string
 	}>(), {
@@ -377,6 +406,11 @@
 		 * 控件由页面渲染，读数因此必须从画布里传出去。
 		 */
 		zoomChange: [percent: number]
+		/**
+		 * 投放一个拖来的节点类型：`point` 是**图坐标**（与 `positioned.x` / `positioned.y` 同口径，
+		 * 已反解 `viewBox` 映射与 `<g>` 的 `translate + scale`），页面据此换算上游 `x` / `y`。
+		 */
+		canvasDrop: [point: Point2D]
 	}>();
 
 	const {
@@ -429,7 +463,7 @@
 	});
 
 	/** 屏幕坐标 → viewBox 用户单位：`getScreenCTM()` 只含 `viewBox` 映射，不含 `<g>` 的缩放平移 */
-	function toUserPoint(event: PointerEvent): Point2D {
+	function toUserPoint(event: { clientX: number, clientY: number }): Point2D {
 		const element = svg.value;
 		const ctm = element?.getScreenCTM();
 		if (!element || !ctm)
@@ -439,6 +473,33 @@
 		point.y = event.clientY;
 		const mapped = point.matrixTransform(ctm.inverse());
 		return { x: mapped.x, y: mapped.y };
+	}
+
+	/**
+	 * 屏幕坐标 → **图坐标**：`toUserPoint()` 只反解了 `viewBox`，`<g>` 那层
+	 * `translate(offset) scale(scale)` 还要再反解一次 —— 拖拽新增的落点最终要落成节点 `x` / `y`，
+	 * 少这一步，缩放或平移过的画布会把节点放到离手很远的地方。
+	 */
+	function toGraphPoint(event: { clientX: number, clientY: number }): Point2D {
+		const user = toUserPoint(event);
+		return { x: (user.x - offsetX.value) / scale.value, y: (user.y - offsetY.value) / scale.value };
+	}
+
+	/** `dragover` 必须 `preventDefault()`：否则浏览器不认这里是合法投放区，`drop` 根本不会触发 */
+	function onCanvasDragOver(event: DragEvent): void {
+		if (!props.dropEnabled)
+			return;
+		event.preventDefault();
+		if (event.dataTransfer)
+			event.dataTransfer.dropEffect = "copy";
+	}
+
+	/** 投放：只报落点，**不预建节点** —— 请求由页面发，表单校验也还在页面上（能力位 `lab:create`） */
+	function onCanvasDrop(event: DragEvent): void {
+		if (!props.dropEnabled)
+			return;
+		event.preventDefault();
+		emit("canvasDrop", toGraphPoint(event));
 	}
 
 	/**

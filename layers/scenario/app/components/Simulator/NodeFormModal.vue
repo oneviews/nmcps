@@ -13,6 +13,11 @@
 	>
 		<template #body>
 			<div class="space-y-3">
+				<!-- 落点（拖拽新增时由画布落点换算而来）：写的就是这个坐标，先让用户看得见 -->
+				<p data-testid="lab-node-origin" class="text-[11px] text-(--ui-text-muted)">
+					{{ t('pages.scenario-simulator.add.origin', { x: origin.x, y: origin.y }) }}
+				</p>
+
 				<UFormField
 					:label="t('pages.scenario-simulator.add.name')"
 					:error="fieldError === 'nameRequired' || fieldError === 'nameInvalid' || fieldError === 'nameTaken'

@@ -58,6 +58,47 @@ function normalizeFetchError(error: unknown): ApiError {
 }
 
 /**
+ * BFF 导出通道（NMCPS-ADR-0022 §五）的下载结果：`filename` 取 BFF 生成的
+ * `content-disposition`，缺失时才回落到调用方的默认名。
+ */
+export interface ApiDownload {
+	blob: Blob
+	filename: string
+}
+
+/** `content-disposition: attachment; filename="lab-net_x-20261116T101500Z.json"` → 文件名 */
+function filenameOf(disposition: string | null | undefined): string | undefined {
+	const match = disposition?.match(/filename="?([^";]+)"?/i);
+	return match?.[1]?.trim() || undefined;
+}
+
+/** 下载失败时响应体可能是 JSON 信封（`fail()` 的输出），也可能是 Blob —— 两种都要能解错 */
+async function errorPayloadOf(raw: unknown): Promise<unknown> {
+	const record = raw && typeof raw === "object" ? raw as { data?: unknown, response?: Response } : undefined;
+	const data = record?.data;
+
+	if (typeof data === "string") {
+		return safeJsonParse(data);
+	}
+	if (data instanceof Blob) {
+		return safeJsonParse(await data.text());
+	}
+	if (record?.response) {
+		return safeJsonParse(await record.response.text().catch(() => ""));
+	}
+
+	return undefined;
+}
+
+function safeJsonParse(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return raw;
+	}
+}
+
+/**
  * BFF API 客户端（web 与桌面共用）。
  *
  * - web：`public.bffBase` 留空 ⇒ 走同源 `/api/**`；
@@ -130,6 +171,61 @@ export function useApi() {
 		}
 	}
 
+	/**
+	 * 文件下载（导出通道）：成功时交回 `{ blob, filename }`，失败仍抛 `ApiError`。
+	 *
+	 * 为什么不用 `send()`：那条路径把响应解成 `ApiResponse` 信封，而导出回的是**纯文本 / 二进制**
+	 * （`export_json` 是 JSON 字符串、`export_script` 是 Python 源码、`sniffer/export` 是 pcap），
+	 * 套信封会把内容二次编码，另存下来既不是 `.json`、`.py` 也不是可打开的 `.pcap`。
+	 * `$fetch.raw` + `responseType: "blob"` 保留原始字节与响应头，`content-disposition` 里的
+	 * 文件名是 BFF 生成的。
+	 */
+	async function download(
+		path: string,
+		options: { fallbackFilename: string, accept?: string }
+	): Promise<ApiDownload> {
+		if (!isConfigured.value) {
+			throw new ApiError("bff_not_configured", 0, "error");
+		}
+
+		const headers: Record<string, string> = { accept: options.accept ?? "text/plain" };
+		if (isDesktop) {
+			headers["x-nmcps-client"] = "desktop";
+			const token = await accessToken();
+			if (token) {
+				headers.authorization = `Bearer ${token}`;
+			}
+		}
+
+		try {
+			const response = await $fetch.raw<Blob>(path, {
+				baseURL,
+				method: "GET",
+				headers,
+				responseType: "blob",
+				credentials: "include",
+				timeout: 60_000
+			});
+
+			return {
+				blob: response._data as Blob,
+				filename: filenameOf(response.headers.get("content-disposition")) ?? options.fallbackFilename
+			};
+		} catch (raw) {
+			const payload = await errorPayloadOf(raw);
+			if (isApiEnvelope(payload)) {
+				throw toApiError(payload as ApiResponse<unknown>);
+			}
+
+			const status = (raw as { response?: { status?: number } })?.response?.status ?? 0;
+			throw new ApiError(
+				typeof payload === "string" && payload.trim() ? payload.trim() : "api_request_failed",
+				status,
+				status >= 500 ? "error" : "warning"
+			);
+		}
+	}
+
 	return {
 		isConfigured,
 		/** 归一化后的 BFF 基址（web 为空串 ⇒ 同源；桌面为构建时注入的地址） */
@@ -143,7 +239,10 @@ export function useApi() {
 			request<T>(path, { ...options, method: "PUT", body }),
 		patch: <T>(path: string, body?: unknown, options: Omit<ApiRequestOptions, "method" | "body"> = {}) =>
 			request<T>(path, { ...options, method: "PATCH", body }),
-		del: <T>(path: string, options: Omit<ApiRequestOptions, "method" | "body"> = {}) =>
-			request<T>(path, { ...options, method: "DELETE" })
+		del: <T>(path: string, body?: unknown, options: Omit<ApiRequestOptions, "method" | "body"> = {}) =>
+			// DELETE 也带请求体：上游 `DELETE /api/mininet/flows`（ADR-0022 W2b）用 `FlowRuleDelete`
+			// 定位要删哪些流，路径里装不下。`$fetch` 与本层 `send()` 都原样转发。
+			request<T>(path, { ...options, method: "DELETE", body }),
+		download
 	};
 }
