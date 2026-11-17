@@ -24,8 +24,8 @@
 Browser/Tauri
   → /api/**        → Nitro BFF → 主 API :8888
   → /api/sim/**    → Nitro BFF → 仿真平台 :8001
-  → /api/lab/**    → Nitro BFF → Mininet API :8000（只读 GET）
-  → /lab-ws/*      → 反向代理 → Mininet API WebSocket（计划中，未开放）
+  → /api/lab/**    → Nitro BFF → Mininet API :8000（GET 查询 + 写端点白名单）
+  → /lab-ws/*      → Nitro BFF（验一次性票）→ Mininet API WebSocket（sniffer / terminal / logs / monitor）
 ```
 
 浏览器**不得**直连 `:8000`。所有 Lab 写操作、终端、抓包都必须经过 BFF 鉴权与审计。
@@ -38,7 +38,9 @@ Browser/Tauri
 | `pnpm dev:lab-api` | 启动 Mininet FastAPI（`127.0.0.1:8000`） |
 | `pnpm lab:check` | 导入后端并校验 HTTP/WS 路由 |
 | `pnpm check:lab-bff` | 校验 `/api/lab/**` 只读 BFF 通道（需先 `build:server`） |
-| `pnpm check:lab-flows` | 校验流表编辑纯函数（草稿校验 / 请求体 / 行号口径） |
+| `pnpm check:lab-flows` | 校验流表编辑纯函数（草稿校验 / 请求体 / 清流请求体 / 行号口径） |
+| `pnpm check:lab-run` | 校验运行控制纯函数（运行态三态 / iperf 校验与请求体 / pingall 与 iperf 文本化） |
+| `pnpm check:lab-ws` | 校验 `/lab-ws/*` 纯函数（四通道登记表 / `target` 形状 / 上游地址 / 票归一 / 监控帧 / PTY 文本清洗） |
 | `pnpm contracts:gen` | 重新生成 Mininet OpenAPI 快照 |
 | `pnpm contracts:check` | 校验快照是否过期 |
 | `pnpm lint` | ESLint |

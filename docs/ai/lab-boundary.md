@@ -5,7 +5,7 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 ## 当前事实
 
 - `services/mininet-api` 的 `app.net` 是进程内全局拓扑，同一时间只有一张网络。
-- 后端没有登录态；CORS 当前为 `*`，不能直接暴露公网。
+- 后端没有登录态；CORS 已关闭（`NMCPS-ADR-0022` D9 / W6），浏览器只经 BFF 访问，`:8000` 只对回环 / 反代暴露。
 - 终端、抓包、`reset`、`full_reset` 属于高权限操作。
 - 拓扑、节点位置、运行状态都归后端所有，前端不是事实源。
 
@@ -22,25 +22,30 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 28 条写端点按 `(method, 模板)` 逐条登记进 `MININET_ROUTES`，一个端点一个权限位：`lab:create`（建网 / 加节点加链）、`lab:operate`（改网络、pingall、iperf、流表）、`lab:delete`（删节点）、`lab:sniffer`（抓包启停）；`full_reset` 与 `import_json` 需 `lab:delete` + `lab:create` 双权限。
 - `GET /api/lab/channel` 的 `writeEnabled` / `capabilities` 按会话计算；页面先读能力位再渲染，不再恒为 `false`。
 - 写操作先写审计 outbox（`.data/audit/lab-audit.jsonl`）再执行；写盘失败回 `503 audit_unavailable`。同一网络同时只允许一个在途写操作（`409 lab_operation_in_progress`）。
-- 四个 WebSocket 走同源 `/lab-ws/*`：`POST /api/lab/ws-ticket` 签 60 秒一次性 HMAC 票，绑定 `sub` / `tid` / `kind` / `target`；票过期、重放、绑定不符一律 `401 lab_ws_ticket_invalid`。
-- 导出走独立内容类型通道：`/api/lab/export/{json,script}` 为 `text/plain`，`/api/lab/export/pcap` 为二进制附件且需 `lab:sniffer`。
-- 旧前端删除前打 tag `legacy-mininet-gui-final`；上游 CORS 关闭，只经反代暴露。
+- 四个 WebSocket 走同源 `/lab-ws/*`：`POST /api/lab/ws-ticket` 签 60 秒一次性 HMAC 票，绑定 `sub` / `tid` / `kind` / `target`；票过期、重放、绑定不符一律 `401 lab_ws_ticket_invalid`。四条通道全部落地（`sniffer` / `terminal` / `logs` / `monitor`）：验票、连上游、透传与审计只有一份实现 `layers/scenario/server/utils/bff/labWsRelay.ts` 的 `createLabWsRelay(kind)`，每个路由文件只有一行；`target` 语义按通道登记（抓包=网络 id 可空、终端=节点、监控=`<node>:<intf>`、日志必须为空），票据签出前判形状与台账，会话开始 / 结束各记一条审计（`duration_ms`，**不记**终端输入 / 日志正文 / 抓包载荷）。通道登记表在 `layers/scenario/shared/constants/labWs.ts`（`LAB_WS_UPSTREAMS`），未登记种类回 `400 lab_ws_kind_invalid`；票是一次性的（`jti` 内存表，多实例部署需落台账）。终端是唯一有上行的通道，上游握手期间的上行帧排队到 `open` 再发。
+- 导出走独立内容类型通道：`GET /api/lab/export/{kind}`（静态路由 `layers/scenario/server/api/lab/export/[kind].get.ts`）不套 `ApiResponse` 信封，文件名由 BFF 生成（`lab-<network_id>-<UTC>.<ext>`，不信任上游 `Content-Disposition`）。种类与权限位**逐条**登记在 `LAB_EXPORT_UPSTREAMS`：`json` / `script` 要 `lab:read` 并直出 `text/plain`；`pcap` 要 `lab:sniffer`、按 `arrayBuffer` 取二进制（`fetchMininetBinary()`，走 `text()` 会毁掉魔数）。未登记种类回 `400 bff_path_invalid`，且先判种类再判权限。
+- 破坏性重建（`POST /api/lab/full_reset`）除 `lab:delete` + `lab:create` 外还要 `{ confirm: "<network_id>" }`：缺失或不符回 `400 lab_confirm_required` 且不触达上游（ADR-0022 W5）；成功后台账 `resources` 整体清空。
+- 旧前端删除前打 tag `legacy-mininet-gui-final`；上游 CORS 关闭，只经反代暴露。两条都已完成（W6）：`mininet_gui_frontend` 从未进本仓库，`services/mininet-api` 只剩纯后端；`CORSMiddleware` 已删除，`pnpm lab:check` 断言 `app.user_middleware` 里不再出现 CORS 中间件。
 
 ## 已落地的只读通道（NMCPS-ADR-0020）
 
 - 浏览器入口只有 `/api/lab/**`；上游基址在 `runtimeConfig.mininet.instances`（`NUXT_MININET_INSTANCES`，租户 → 实例 JSON）。未配置实例的租户回 `503 tenant_runtime_unavailable`，不会回退全局 `baseUrl`。
-- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **45 条**端点：17 条查询 + 28 条写（ADR-0022 W1）；导出另走 `/api/lab/export/{json,script,pcap}` 三条静态路由。未登记路径回 404、动词不符回 405。
+- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **45 条**端点：17 条查询 + 28 条写（ADR-0022 W1）；导出另走静态路由（`export/[kind].get.ts` + `LAB_EXPORT_UPSTREAMS`，`json` / `script` / `pcap` 三种，权限位与内容类型逐条登记），不占白名单条目。未登记路径回 404、动词不符回 405。
 - BFF 出站不读 `nmcps_at`、不转 `Bearer`、不转发 cookie；只带 `accept` / `user-agent` / `x-request-id`。
 - `GET /api/lab/channel` 返回 `configured` / `readOnly` / `writeEnabled` / `capabilities` / `endpointCount`，**按会话计算**，不回传上游地址。
-- 仍未开放：四个 WebSocket、终端、抓包启停与导出通道（W4 / W5）；写操作按权限位开放，页面先读能力位再渲染。
-- `pnpm build:server && pnpm check:lab-bff` 验证 69 项通道契约（含台账租户隔离、资源清单、401/403/503 与上游零命中）。`pnpm check:lab-flows` 另有 17 项纯函数断言（草稿三条校验 / 请求体省略规则 / 行号口径），不启 Nitro、不碰上游。
-- 拓扑编辑（`/scenario/simulator`，ADR-0022 W2 / W2b）只走 `/api/lab/**`：新增 / 删除节点、连线、拖动落库（`POST /node_position`）、OpenFlow 版本、流表读数（`GET /flows/{switch}`）与流表写入（`POST /flows` 加流、`DELETE /flows/{switch}/{flow_id}` 删单条）；删单条的 `flow_id` 是上游按「含 `actions=` 的行」数的 1 基序号，页面必须按同一口径计（`labFlowRowsOf()`）。`TopologyCanvas` 的 `draggable` 必须跟 `capabilities.operate` 走，否则拖动会「看起来成功但没落库」。
+- 已开放：四条 WebSocket（抓包实时流 `/lab-ws/sniffer`、Webshell `/lab-ws/terminal`、日志 `/lab-ws/logs`、监控 `/lab-ws/monitor`，均经一次性票）、抓包启停（`lab:sniffer`）与 pcap 下载、导出 JSON / 脚本与 `import_json`（W4）、写操作（按权限位）、旧前端退役（W6：纯后端 + CORS 关闭 + `legacy-mininet-gui-final` 标签）。页面对全部写动作与三条观测面板都先读能力位再渲染。
+- `pnpm build:server && pnpm check:lab-bff` 验证 116 项通道契约（含台账租户隔离、资源清单、401/403/503 与上游零命中，⑩ 覆盖导出 `text/plain` / BFF 文件名 / 未登记种类 400 / 导入 multipart 与清单并集，⑪ 覆盖 pcap 的 `lab:sniffer` 门禁与二进制直出、抓包启停、`full_reset` 的 confirm 闸门与清单清空，⑫ 覆盖 WebSocket 票的权限 / 种类 / 目标绑定、无票与篡改与重放三条 401、实时帧透传与上游零 cookie、会话审计不含载荷，⑬ 覆盖终端 / 日志 / 监控三条通道的 target 形状与台账收窄、终端上行回显与 `Ctrl-C` 控制字节、日志逐行原文、监控 `node:intf` 查询串与采样）。`pnpm check:lab-flows` 另有 21 项纯函数断言（草稿三条校验 / 请求体省略规则 / 清流请求体留空不发 `match` / 行号口径），`pnpm check:lab-run` 有 13 项（运行态三态归一 / iperf 两端与秒数校验 / 请求体省略规则 / `pingall` 与 iperf 结果文本化），`pnpm check:lab-ws` 有 21 项（四通道登记表与权限位 / `target` 四种形状 / 上游地址拼接 / 票与监控帧归一 / PTY 文本清洗），三者都不启 Nitro、不碰上游。
+- 拓扑编辑（`/scenario/simulator`，ADR-0022 W2 / W2b）只走 `/api/lab/**`：新增 / 删除节点、连线、拖动落库（`POST /node_position`）、OpenFlow 版本、流表读数（`GET /flows/{switch}`）与流表写入（`POST /flows` 加流、`DELETE /flows/{switch}/{flow_id}` 删单条、`DELETE /flows` 批量删流 —— `match` 留空即清整表，填了只删命中项）；删单条的 `flow_id` 是上游按「含 `actions=` 的行」数的 1 基序号，页面必须按同一口径计（`labFlowRowsOf()`）。`TopologyCanvas` 的 `draggable` 必须跟 `capabilities.operate` 走，否则拖动会「看起来成功但没落库」。
+- 运行控制（W3）同样只走 `/api/lab/**`：`POST /start`（`lab:create`）、`POST /stop`（`lab:operate`，确认弹窗）、`POST /pingall` / `POST /iperf`（`lab:operate`）。运行态只读 `GET /start` 的裸布尔：读到 `false` 才写「已停止」，读不到一律「未知」且四个动作全部禁用 —— 把「读不到」当成「没启动」会让启动按钮对着已在跑的网络发请求，再拿上游 400 当失败。四个动作互斥（上游单实例），失败原话（400 / 403 / 409 / 503）逐字显示。
+- 实时包列表（W5 WebSocket 段）：页面挂载先 `GET /api/lab/sniffer/history` 回填，抓包态变 `true` 时由 `useLabSnifferStream()` 先 `POST /api/lab/ws-ticket` 再连同源 `/lab-ws/sniffer`（`null` / `false` 都不连）；组件不 `new WebSocket`，列表上限 200 条，停止抓包即断流但保留已收到的包。
+- Network Tools 面板（工具栏「网络工具」，`SimulatorNetworkTools` + `useLabWsChannel(kind)`）：Webshell 要 `lab:terminal`（节点来自台账，接口/命令走 `/lab-ws/terminal`，上行排队到上游 `open`）；日志与监控只要 `lab:read`（`/lab-ws/logs` 逐行、`/lab-ws/monitor` 的 `target` 为 `<node>:<intf>`，接口选项只来自 `GET /api/lab/interfaces`）。两个能力位都没有时整块入口不渲染；日志随标签打开自动建流，终端 / 监控必须显式点按钮，切标签即断开。上游在通道内用 `Error: …` 文本表达失败，页面显示成错误行而不是「暂无数据」。终端输出先过 `labTerminalTextOf()`：真 PTY 带 ANSI 颜色码与 `\r` 重绘，原样渲染会把提示符显示成 `^[[1;32m`；「中断」发 `0x03`，「清屏」只清浏览器侧转写且不断流。
 
 ## 已落地的鉴权（NMCPS-ADR-0021 P1）
 
 - 登录 / 刷新签发 `nmcps_sess`：HMAC-SHA256、`HttpOnly`、`SameSite=Lax`、`Path=/`，载荷含 `sub` / `tid` / `iat` / `exp` / `ath`。
 - `ath` 是访问令牌的 SHA-256；会话与凭据必须同源，错配一律 401。
 - 密钥来自 `NUXT_BFF_SESSION_SECRET`（至少 32 字节），轮换窗口用 `NUXT_BFF_SESSION_SECRET_PREVIOUS` 验证旧 cookie；缺密钥回 `503 bff_auth_not_configured`。
+- **生产启动的 `.env` 加载**：`pnpm start` 现在走 `scripts/start-server.mjs` —— 它先 `process.loadEnvFile('.env')`（只填**尚未设置**的变量，显式 export / 部署平台注入的变量优先），再 import `.output/server/index.mjs`。直接 `node .output/server/index.mjs` 不读 `.env`：忘了导出密钥时，登录照常但 `/scenario/simulator` 的每个 `/api/lab/**` 都回 `503 bff_auth_not_configured`（已实测：带密钥时同一请求是 `401 bff_auth_required`）——这与角色无关，不是租户管理员被拒。密钥缺失或不足 32 字节时启动脚本会打印一条同名警告。
 - `/api/lab/**` 先解析 IAM `subject-roles → roles/{id}`，租户角色必须满足 `role.tenant_id === 会话 tid`；查询失败回 `503 bff_role_resolution_failed`，不降级成 `tenant_user`。
 - 平台管理员（`tid === null`）回 `403 lab_permission_denied`，没有运行态权限。
 - 主网关已剥离客户端 `x-tenant-id`；租户只来自签名会话，不来自请求头 / 查询 / body。
