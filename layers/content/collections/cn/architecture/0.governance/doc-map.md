@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.46.0
+version: 0.47.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -119,6 +119,7 @@ tags:
 | NMCPS-ADR-0021 | 仿真网络租户隔离 | 5 | informative | rec.adr.0021 | baseline | records/adr/adr-0021.md |
 | NMCPS-ADR-0022 | 实验台全量并入与旧前端退役 | 5 | informative | rec.adr.0022 | baseline | records/adr/adr-0022.md |
 | NMCPS-ADR-0023 | 实验网络台账与上游对账（显式接管） | 5 | informative | rec.adr.0023 | baseline | records/adr/adr-0023.md |
+| NMCPS-ADR-0024 | 无控制器的交换机默认 standalone | 5 | informative | rec.adr.0024 | baseline | records/adr/adr-0024.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -235,3 +236,6 @@ tags:
 | 2026-11-16 | 0.44.0 | 租户管理员 `tenantadmin` 的默认口令按需求方要求由 `Tenant@123456` 改为 `admin_2026`：只动单一事实源 `shared/constants/demoAccounts.ts`、`check:ui` 的预填断言与 IAM 架构 §7.7（`NMCPS-ARCH-003` → 0.8.1）；超级管理员 `admin` / `Admin@123456` 与预填机制不变，上游 IAM 账号口令需另行按其改密流程同步。 |
 | 2026-11-16 | 0.45.0 | 登记记录层 ADR `NMCPS-ADR-0022`「Mininet 实验台全量功能并入与旧前端退役」：把旧 Vite 前端（`mininet_gui_frontend`，13 组件 / 8704 行 / ~35 REST + 5 WS）的全部能力并入 `/scenario/simulator`，复刻验收后退役旧前端、`services/mininet-api` 只留纯后端。裁决包括：28 条写端点按 `(method, 模板)` 逐条登记并按 `lab:create` / `lab:operate` / `lab:delete` / `lab:sniffer` 分档（`full_reset`、`import_json` 双权限）；`channel` 能力位改为按会话计算；写操作先审计后执行（`.data/audit/lab-audit.jsonl`，失败回 `503 audit_unavailable`）；同一网络只允许一个在途写（`409 lab_operation_in_progress`）；四个 WebSocket 走同源 `/lab-ws/*` + 60 秒一次性 HMAC 票（`401 lab_ws_ticket_invalid`）；导出走独立内容类型通道（`text/plain` / pcap 附件）；上游 CORS 关闭。同时给出旧组件到新页面的逐项映射与 W1~W6 交付门禁。 |
 | 2026-11-17 | 0.46.0 | 登记记录层 ADR `NMCPS-ADR-0023`「实验网络台账与上游对账（显式接管）」：ADR-0021 P2 把台账资源清单定为租户可见边界、ADR-0022 只让**经 BFF 的写**维护它，旧前端 / 直连上游的写不会进清单（现场：上游 8 主机 + 7 交换机 + 14 链路，台账仍停在 9 节点 / 8 链路，交集只剩 6 节点 4 链路，另有 `r1 c1 h9` 三个幽灵 id）。裁决新增一条**只存在于 BFF** 的 `POST /api/lab/networks/{id}/sync`：双权限位 `lab:create` + `lab:delete`、逐字确认 `{ confirm: "<network_id>" }`、先审计后执行、同网络单写锁；读 `/hosts` `/switches` `/routers` `/nats` `/controllers` 与 `/links` 后**整体重写**资源清单，任一读取失败即原样回上游状态且**不落盘**，六类全空则写空清单（准确事实）。不做隐式自动对账（否则直连写会绕过权限门禁扩大可见面）；控制器关联与 `pingall` 不通列为范围之外。验收：`check:lab-bff` ⑭ 新增 14 条、`check:ui` 11.6b 新增 4 条（含「缺 `lab:delete` 时入口禁用」负例）。 |
+
+
+| 2026-11-17 | 0.47.0 | 登记记录层 ADR `NMCPS-ADR-0024`「无控制器的交换机默认 standalone（实验网连通性）」：现场实测 `pingall` 100% 丢包，根因是 Mininet `OVSSwitch` 默认 `failMode='secure'` —— secure 模式下没有已连接控制器就没有流表、也没有 NORMAL 兜底，帧全部丢弃；而经 BFF 新建的交换机 `controller` 恒为 `null`（`labNodes.ts` 草稿映射），`POST /start` 即 `switch.start([])`，等价于「secure + 零控制器」。裁决 fail mode 由控制器关联推导（`switch_fail_mode()`：无控制器 `standalone`、有控制器 `secure`），在创建（`add_switch_to_net()` 四个 OVS 分支）、`POST /start` 起网前、`POST /associate_switch` 重启前统一应用，`schema.py::Switch.format_switch()` 生成的导出脚本同源。明确不自动拉起控制器进程（外部依赖缺失会把「没有控制器」伪装成「启动失败」），也不改 `POST /flows` 语义（standalone 下 OVS 拒绝写流表，错误原样透出）。验收：`pnpm lab:check` 新增 3 条静态断言（映射 / 四个分支带 `failMode` / 导出脚本随关联变化），`check:lab-bff` 与 `check:ui` 用假上游不受影响；真机 `pingall` 需 root 手工验证。 |

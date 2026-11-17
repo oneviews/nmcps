@@ -75,13 +75,19 @@ class Switch(Node):
     of_version: Union[str, None] = None
 
     def format_switch(self) -> str:
+        """导出脚本与在线网络同源（NMCPS-ADR-0024）：有控制器 secure，没有则 standalone。
+
+        否则导出的脚本拿到的还是 Mininet 默认 `failMode='secure'` + 零控制器，
+        跑起来同样 100% 丢包。
+        """
         switch_type = (self.switch_type or "").lower()
+        fail_mode = "secure" if self.controller else "standalone"
         if switch_type == "user":
             return f'{self.name} = net.addSwitch("{self.name}", cls=UserSwitch)'
         if switch_type == "ovs":
-            return f'{self.name} = net.addSwitch("{self.name}", cls=OVSSwitch)'
+            return f'{self.name} = net.addSwitch("{self.name}", cls=OVSSwitch, failMode="{fail_mode}")'
         if switch_type == "ovskernel":
-            return f'{self.name} = net.addSwitch("{self.name}", cls=OVSKernelSwitch)'
+            return f'{self.name} = net.addSwitch("{self.name}", cls=OVSKernelSwitch, failMode="{fail_mode}")'
         if switch_type == "ovsbridge":
-            return f'{self.name} = net.addSwitch("{self.name}", cls=OVSBridge)'
-        return f'{self.name} = net.addSwitch("{self.name}")'
+            return f'{self.name} = net.addSwitch("{self.name}", cls=OVSBridge, failMode="{fail_mode}")'
+        return f'{self.name} = net.addSwitch("{self.name}", failMode="{fail_mode}")'

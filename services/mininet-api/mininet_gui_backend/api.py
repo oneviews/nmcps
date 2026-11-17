@@ -578,19 +578,43 @@ def _find_free_controller_port() -> int:
     raise HTTPException(status_code=400, detail="no available controller ports")
 
 
+def switch_fail_mode(controller: Optional[str]) -> str:
+    """交换机 fail mode 由控制器关联推导（NMCPS-ADR-0024）。
+
+    Mininet 的 `OVSSwitch` 默认 `failMode='secure'`：secure 模式下没有已连接的控制器就
+    既没有流表、也没有 NORMAL 兜底动作，收到的帧全部丢弃 —— 现场表现就是台账和画布都对、
+    `pingall` 100% 丢包。因此这里按关联推导：
+
+    - 有控制器 → `secure`：OpenFlow 规则（`flow_rules.py` 写的流表）才生效；
+    - 无控制器 → `standalone`：OVS 当传统自学习交换机用，开箱即通。
+
+    局限写在 `NMCPS-ADR-0024` 里：standalone 会忽略流表，想「被编排 + 写流表」必须先关联控制器。
+    """
+    return "secure" if controller else "standalone"
+
+
 def add_switch_to_net(switch: Switch, start=True):
     switch_type = (switch.switch_type or "").lower()
     switch.switch_type = switch_type or switch.switch_type
+    fail_mode = switch_fail_mode(switch.controller)
     if switch_type == "user":
         switch_node = app.net.addSwitch(switch.name, ports=switch.ports, cls=UserSwitch)
     elif switch_type == "ovs":
-        switch_node = app.net.addSwitch(switch.name, ports=switch.ports, cls=OVSSwitch)
+        switch_node = app.net.addSwitch(
+            switch.name, ports=switch.ports, cls=OVSSwitch, failMode=fail_mode
+        )
     elif switch_type == "ovskernel":
-        switch_node = app.net.addSwitch(switch.name, ports=switch.ports, cls=OVSKernelSwitch)
+        switch_node = app.net.addSwitch(
+            switch.name, ports=switch.ports, cls=OVSKernelSwitch, failMode=fail_mode
+        )
     elif switch_type == "ovsbridge":
-        switch_node = app.net.addSwitch(switch.name, ports=switch.ports, cls=OVSBridge)
+        switch_node = app.net.addSwitch(
+            switch.name, ports=switch.ports, cls=OVSBridge, failMode=fail_mode
+        )
     else:
-        switch_node = app.net.addSwitch(switch.name, ports=switch.ports)
+        switch_node = app.net.addSwitch(
+            switch.name, ports=switch.ports, failMode=fail_mode
+        )
 
     if start and switch.controller:
         switch_node.start([app.net.nameToNode.get(switch.controller)])
@@ -771,9 +795,11 @@ def start_network():
             controller_node = app.net.nameToNode.get(controller_id)
         if controller_node:
             switch.controller = controller_node
+            switch.failMode = switch_fail_mode(controller_id)
             switch.start([controller_node])
         else:
             switch.controller = None
+            switch.failMode = switch_fail_mode(None)
             switch.start([])
     app.net.is_started = True
     _apply_all_router_configurations()
@@ -1073,6 +1099,8 @@ def associate_switch(data: dict):
     if app.switches[sw_id].controller:
         raise HTTPException(status_code=400, detail="switch is already associated")
     sw.controller = ctl
+    # 关联控制器后该交换机改为 secure（NMCPS-ADR-0024）：standalone 会忽略控制器下发的流表
+    sw.failMode = switch_fail_mode(ctl_id)
     app.switches[sw_id].controller = ctl_id
     if app.net.is_started:
         sw.start([sw.controller])
