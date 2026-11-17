@@ -6,8 +6,11 @@
 // 需要测已有实例时用 CHECK_UI_BASE_URL 覆盖（此时不再拉起进程，改用下面两个变量登录）——
 // 该实例必须自己配好 `NUXT_BFF_UPSTREAM_BASE`，否则登录与「上游就绪」用例必然失败。
 // 环境变量：CHECK_UI_BASE_URL、CHECK_UI_ACCOUNT、CHECK_UI_PASSWORD、CHECK_UI_SCREENSHOT（截图输出路径）。
+import { Buffer } from "node:buffer";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { chromium } from "playwright";
-import { CATALOG_UPSTREAM_FAILURE, closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { CATALOG_UPSTREAM_FAILURE, closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, MININET_TERMINAL_BANNER, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 const ACCOUNT = process.env.CHECK_UI_ACCOUNT ?? "alice";
 const PASSWORD = process.env.CHECK_UI_PASSWORD ?? "p@ssw0rd";
@@ -20,7 +23,57 @@ let bffChild = null;
 let upstreamPort = null;
 let BASE_URL = process.env.CHECK_UI_BASE_URL?.replace(/\/+$/, "");
 
+/**
+ * 构建产物新鲜度守卫。
+ *
+ * 本脚本**不自建** `.output`：它跑的就是构建产物。改了 `layers/scenario/app` 却忘记
+ * `pnpm build:server` 时，页面加载的是旧 bundle，新加的 `data-testid` / 文案一律不存在，
+ * 失败信息全是「等不到元素」—— 2026-11-16 就因此白跑一轮（235/240），排查方向完全错。
+ * 自建模式在拉起服务前先比时间戳：源码比产物新就直接停，把「重跑」变成「先构建」。
+ * 外部实例模式（CHECK_UI_BASE_URL）不查 —— 那个实例的构建时间戳不在本机。
+ */
+const WATCHED_SOURCES = ["app", "layers", "shared", "i18n", "nuxt.config.ts", "package.json"];
+const SKIP_DIRS = new Set(["node_modules", ".nuxt", ".output", ".data", "__pycache__", ".venv"]);
+
+/** 目录树里最新的 mtime（毫秒）；读不到就当 0，不让守卫本身失败 */
+function newestMtime(target) {
+	try {
+		const info = statSync(target);
+		if (!info.isDirectory())
+			return info.mtimeMs;
+		let newest = info.mtimeMs;
+		for (const entry of readdirSync(target, { withFileTypes: true })) {
+			if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".nuxt"))
+				continue;
+			newest = Math.max(newest, newestMtime(join(target, entry.name)));
+		}
+		return newest;
+	} catch {
+		return 0;
+	}
+}
+
+function assertBuildFresh() {
+	const entry = join(process.cwd(), ".output", "server", "index.mjs");
+	if (!existsSync(entry)) {
+		console.error("\n❌ 自建模式需要构建产物，但 `.output/server/index.mjs` 不存在：先跑 `pnpm build:server`。");
+		process.exit(1);
+	}
+
+	const built = statSync(entry).mtimeMs;
+	const stale = WATCHED_SOURCES
+		.map((path) => ({ path, mtime: newestMtime(join(process.cwd(), path)) }))
+		.filter((item) => item.mtime > built)
+		.sort((left, right) => right.mtime - left.mtime);
+
+	if (stale.length) {
+		console.error(`\n❌ 构建产物比源码旧（最新改动在 \`${stale[0].path}\`）：先跑 \`pnpm build:server\`，否则本轮测的是旧 bundle，失败不代表代码有问题。`);
+		process.exit(1);
+	}
+}
+
 if (!BASE_URL) {
+	assertBuildFresh();
 	upstreamPort = await freePort();
 	upstreamServer = await startUpstream(upstreamPort);
 	const port = await freePort();
@@ -5128,7 +5181,7 @@ if (upstreamPort) {
 		};
 
 		const menuClicked = await clickIfPresent("[data-testid='mininet-add-menu']");
-		const itemClicked = menuClicked && await clickIfPresent(labPage.getByRole("menuitem", { name: "主机" }));
+		const itemClicked = menuClicked && await clickIfPresent("[data-testid='mininet-add-kind-host']");
 		await labPage.waitForTimeout(300);
 		const createOpen = itemClicked && await labPage.evaluate(() => !!document.querySelector("[data-testid='lab-node-name']"));
 		// 默认名按「画布节点数 + 1」生成（6 台 ⇒ `h7`）；这里显式写成 `h3`，
@@ -5152,6 +5205,79 @@ if (upstreamPort) {
 			&& typeof createdWrite.body?.x === "number" && typeof createdWrite.body?.y === "number"
 			&& afterCreate.nodes === 7 && !afterCreate.modal,
 			`表单=${createOpen} 提交=${submitted} 请求=${createdWrite ? JSON.stringify(createdWrite.body) : "无"} 节点=${afterCreate.nodes} 弹窗=${afterCreate.modal}`
+		);
+
+		// 拖拽新增（ADR-0022 W2 补强）：工具栏面板把类型拖到画布落点 → 表单带着落点坐标打开。
+		// 用合成 DragEvent 覆盖页面自己的 dragstart / dragover / drop 处理，不用鼠标轨迹：
+		// 无头浏览器里原生拖放不稳定，而这条链路的输入本来就是事件序列。
+		const paletteOpened = await clickIfPresent("[data-testid='mininet-add-menu']");
+		await labPage.waitForTimeout(200);
+		const chipReady = await labPage.evaluate(() => !!document.querySelector("[data-testid='mininet-add-kind-host']"));
+		const dragStartProbe = await labPage.evaluate(() => {
+			const chip = document.querySelector("[data-testid='mininet-add-kind-host']");
+			const svg = document.querySelector("[data-testid='topology-canvas']");
+			if (!chip || !svg)
+				return null;
+			const rect = svg.getBoundingClientRect();
+			const clientX = Math.round(rect.left + rect.width * 0.6);
+			const clientY = Math.round(rect.top + rect.height * 0.6);
+			const dataTransfer = new DataTransfer();
+			chip.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer, clientX, clientY }));
+			svg.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer, clientX, clientY }));
+			return { clientX, clientY };
+		});
+		await labPage.waitForTimeout(200);
+		const dropHintText = await labPage.evaluate(() => {
+			const hint = document.querySelector("[data-testid='topology-drop-hint']");
+			return hint ? (hint.textContent ?? "").trim() : "";
+		});
+		log(
+			"11.4 工具栏新增面板可拖拽：拖到画布上方出现投放提示",
+			paletteOpened && chipReady && !!dragStartProbe && dropHintText.includes("主机"),
+			`面板=${chipReady} 拖拽=${!!dragStartProbe} 提示=${dropHintText || "无"}`
+		);
+
+		const dropped = await labPage.evaluate((point) => {
+			const svg = document.querySelector("[data-testid='topology-canvas']");
+			if (!svg || !point)
+				return false;
+			svg.dispatchEvent(new DragEvent("drop", {
+				bubbles: true,
+				cancelable: true,
+				dataTransfer: new DataTransfer(),
+				clientX: point.clientX,
+				clientY: point.clientY
+			}));
+			return true;
+		}, dragStartProbe);
+		await labPage.waitForTimeout(400);
+		const dropForm = await labPage.evaluate(() => {
+			const origin = document.querySelector("[data-testid='lab-node-origin']");
+			return {
+				open: !!document.querySelector("[data-testid='lab-node-name']"),
+				origin: origin ? (origin.textContent ?? "").trim() : "",
+				hint: !!document.querySelector("[data-testid='topology-drop-hint']")
+			};
+		});
+		const originNumbers = (dropForm.origin.match(/-?\d+/g) ?? []).map(Number);
+		if (dropForm.open)
+			await labPage.locator("[data-testid='lab-node-name']").fill("h9");
+		const dropSubmitted = dropForm.open && await clickIfPresent("[data-testid='lab-node-submit']");
+		await labPage.waitForTimeout(1200);
+		const dropWrite = upstreamServer.mininetLog.find((entry) =>
+			entry.method === "POST" && entry.path === "/api/mininet/hosts" && entry.body?.name === "h9");
+		const afterDrop = await labPage.evaluate(() => document.querySelectorAll("[data-testid='topology-node']").length);
+		// 投放必须**改写**落点：此刻 7 台已有节点，默认落点是 (400, 250)，与落点坐标不同才算按放手位置建。
+		const defaultOrigin = [120 + (7 % 5) * 140, 120 + Math.floor(7 / 5) * 130];
+		log(
+			"11.4 拖到画布落点新增主机：表单带落点坐标，请求体 x/y 与落点一致",
+			!!dropped && dropForm.open && !dropForm.hint
+			&& originNumbers.length === 2
+			&& dropSubmitted && !!dropWrite
+			&& dropWrite.body?.x === originNumbers[0] && dropWrite.body?.y === originNumbers[1]
+			&& (originNumbers[0] !== defaultOrigin[0] || originNumbers[1] !== defaultOrigin[1])
+			&& afterDrop === 8,
+			`落点=${dropForm.origin || "无"} 请求=${dropWrite ? JSON.stringify(dropWrite.body) : "无"} 默认落点=${defaultOrigin.join("/")} 节点=${afterDrop}`
 		);
 
 		// 拖动：画布给的是增量，页面必须落成绝对值（h1 原坐标 80/120，拖 +40/+20 ⇒ 120/140）
@@ -5182,6 +5308,7 @@ if (upstreamPort) {
 		await labPage.waitForTimeout(300);
 		const removeOpened = await clickIfPresent("[data-testid='mininet-remove-node']");
 		await labPage.waitForTimeout(300);
+		const nodesBeforeRemove = await labPage.evaluate(() => document.querySelectorAll("[data-testid='topology-node']").length);
 		const confirmText = await labPage.evaluate(() =>
 			(document.body.textContent ?? "").replace(/\s+/g, " ").trim()
 		);
@@ -5192,8 +5319,8 @@ if (upstreamPort) {
 		const afterRemove = await labPage.evaluate(() => document.querySelectorAll("[data-testid='topology-node']").length);
 		log(
 			"11.4 删除确认写明节点 id，确认后 DELETE /api/lab/delete_node/h3 并从画布消失",
-			confirmed && confirmText.includes("h3") && !!deletedWrite && afterRemove === 6,
-			`确认文案含 h3=${confirmText.includes("h3")} 请求=${deletedWrite ? deletedWrite.path : "无"} 节点=${afterRemove}`
+			confirmed && confirmText.includes("h3") && !!deletedWrite && afterRemove === nodesBeforeRemove - 1,
+			`确认文案含 h3=${confirmText.includes("h3")} 请求=${deletedWrite ? deletedWrite.path : "无"} 节点=${nodesBeforeRemove}→${afterRemove}`
 		);
 
 		// 流表：选中交换机后读 `GET /api/lab/flows/sw1`，原文逐字上屏（不做解析）
@@ -5306,6 +5433,745 @@ if (upstreamPort) {
 			&& overflowDraft.errors[0].field === "lab-flow-priority"
 			&& flowPostCount() === flowPostsBeforeDraft,
 			`表单=${JSON.stringify(overflowDraft.values)} 报错=${JSON.stringify(overflowDraft.errors)} 请求数=${flowPostCount()}（基线 ${flowPostsBeforeDraft}）`
+		);
+
+		// 清流（批量 `DELETE /flows`，W2b）：本地只拦「匹配域夹带 actions=」一条 ——
+		// 留空是合法的（清整表），所以不能套用加流那套「动作必填」校验。
+		const flowBulkDeleteCount = () => upstreamServer.mininetLog
+			.filter((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/flows")
+			.length;
+		const clearBaseline = flowBulkDeleteCount();
+		const clearEnabled = await labPage.evaluate(() => {
+			const button = document.querySelector("[data-testid='mininet-flow-clear']");
+			return !!button && !button.hasAttribute("disabled");
+		});
+		const clearOpened = clearEnabled && await clickIfPresent("[data-testid='mininet-flow-clear']");
+		await labPage.waitForTimeout(400);
+		const clearMatchForm = await labPage.evaluate(() => !!document.querySelector("[data-testid='lab-flow-clear-match']"));
+		if (clearMatchForm)
+			await labPage.locator("[data-testid='lab-flow-clear-match']").fill("actions=output:1");
+		await clickIfPresent("[data-testid='lab-flow-clear-confirm']");
+		await labPage.waitForTimeout(500);
+		// 报错要落在弹窗自己那个输入框上：加流表单的旧报错可能还挂着，所以按「报错所在的
+		// `UFormField` 里那个 input」认领 —— 只取 `lab-flow-clear-match` 那一条，不看全页数量。
+		const clearInvalid = await labPage.evaluate(() => {
+			const input = document.querySelector("[data-testid='lab-flow-clear-match']");
+			const errors = [...document.querySelectorAll("[data-slot='error']")].map((node) => ({
+				text: (node.textContent ?? "").trim(),
+				field: node.closest("[data-slot='root']")?.querySelector("input")?.getAttribute("data-testid") ?? ""
+			})).filter((item) => item.field === "lab-flow-clear-match");
+			return {
+				open: !!input,
+				errors,
+				value: input?.value ?? ""
+			};
+		});
+		log(
+			"11.4 清流本地校验：匹配域夹带 actions= 时弹窗就地报错、不关闭且零请求",
+			clearEnabled && clearOpened && clearMatchForm && clearInvalid.open
+			&& clearInvalid.errors.length === 1
+			&& clearInvalid.errors[0].text === "匹配域不能包含 actions="
+			&& clearInvalid.value === "actions=output:1"
+			&& flowBulkDeleteCount() === clearBaseline,
+			`按钮可用=${clearEnabled} 弹窗=${clearInvalid.open} 报错=${JSON.stringify(clearInvalid.errors)} 批量删除请求=${flowBulkDeleteCount()}（基线 ${clearBaseline}）`
+		);
+
+		// 清空整表：匹配域清空后确认 ⇒ `DELETE /api/lab/flows` 只带 `switch`（不带 `match`），
+		// 上游按 `del-flows <sw>` 清空，重读后流表块消失、空态文案出现。
+		if (clearInvalid.open)
+			await labPage.locator("[data-testid='lab-flow-clear-match']").fill("");
+		await clickIfPresent("[data-testid='lab-flow-clear-confirm']");
+		await labPage.waitForTimeout(1200);
+		const clearWrite = upstreamServer.mininetLog.find((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/flows");
+		const flowsAfterClear = await labPage.evaluate(() =>
+			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
+		);
+		const emptyFlowText = await labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-flow-empty']")?.textContent ?? "").trim()
+		);
+		log(
+			"11.4 清空整表走 DELETE /api/lab/flows，请求体只有 switch，流表清空并显示空态",
+			flowBulkDeleteCount() === clearBaseline + 1
+			&& clearWrite?.body?.switch === "sw1"
+			&& !Object.hasOwn(clearWrite?.body ?? {}, "match")
+			&& flowsAfterClear === ""
+			&& emptyFlowText.length > 0,
+			`请求=${clearWrite ? JSON.stringify(clearWrite.body) : "无"} 流表=${JSON.stringify(flowsAfterClear.slice(0, 60))} 空态=${JSON.stringify(emptyFlowText)}`
+		);
+
+		// 带匹配域批量删流：清空后没有可删的行，按钮是禁用的，所以先补一条流；
+		// 再只按 `match` 删 —— 请求体必须原样带上匹配域，否则删的就是整表。
+		await labPage.locator("[data-testid='lab-flow-match']").fill("ip,nw_dst=10.2.2.2");
+		await labPage.locator("[data-testid='lab-flow-actions']").fill("output:3");
+		await labPage.locator("[data-testid='lab-flow-priority']").fill("20");
+		await clickIfPresent("[data-testid='lab-flow-submit']");
+		await labPage.waitForTimeout(1200);
+		const reseededFlows = await labPage.evaluate(() =>
+			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
+		);
+		const scopedOpened = await clickIfPresent("[data-testid='mininet-flow-clear']");
+		await labPage.waitForTimeout(400);
+		const scopedForm = await labPage.evaluate(() => !!document.querySelector("[data-testid='lab-flow-clear-match']"));
+		if (scopedForm)
+			await labPage.locator("[data-testid='lab-flow-clear-match']").fill("ip,nw_dst=10.2.2.2");
+		await clickIfPresent("[data-testid='lab-flow-clear-confirm']");
+		await labPage.waitForTimeout(1200);
+		const bulkDeletes = upstreamServer.mininetLog
+			.filter((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/flows");
+		const scopedWrite = bulkDeletes[bulkDeletes.length - 1];
+		const flowsAfterScoped = await labPage.evaluate(() =>
+			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
+		);
+		const reseedOk = reseededFlows.includes("nw_dst=10.2.2.2");
+		log(
+			"11.4 带匹配域批量删流：请求体原样透传 match，命中行删掉且流表回到空态",
+			reseedOk
+			&& scopedOpened && scopedForm
+			&& bulkDeletes.length === clearBaseline + 2
+			&& scopedWrite?.body?.switch === "sw1"
+			&& scopedWrite?.body?.match === "ip,nw_dst=10.2.2.2"
+			&& flowsAfterScoped === "",
+			`补流=${reseedOk} 弹窗=${scopedForm} 请求=${scopedWrite ? JSON.stringify(scopedWrite.body) : "无"} 流表=${JSON.stringify(flowsAfterScoped.slice(0, 60))}`
+		);
+
+		// ── 11.4 运行控制（NMCPS-ADR-0022 W3）：start / stop / pingall / iperf ──
+		// 运行态读 `GET /api/lab/start`（上游裸布尔）。三态是刻意的：读不到 ≠ 已停止，
+		// 所以「已停止」只有真的读到 `false` 才出现；按钮可用性跟着它走，
+		// 否则「没启动却点了探测」会以 400 的形式被当成「功能坏了」。
+		//
+		// 启动 / 停止 / 重启在工具栏「运行」菜单里（复刻 1.0 版式的菜单栏，NMCPS-ADR-0022 W2 修订），
+		// 所以每次都先打开菜单；Reka 的菜单项是 `role="menuitem"`，不可用态是 `data-disabled`。
+		const openRunMenu = async () => {
+			const opened = await clickIfPresent("[data-testid='mininet-run-menu']");
+			if (opened)
+				await labPage.waitForTimeout(250);
+			return opened;
+		};
+		const runMenuPick = async (label) => {
+			const opened = await openRunMenu();
+			if (!opened)
+				return false;
+			const picked = await clickIfPresent(labPage.getByRole("menuitem", { name: label, exact: true }));
+			await labPage.waitForTimeout(250);
+			return picked;
+		};
+		const runMenuProbe = async () => {
+			const opened = await openRunMenu();
+			const probe = opened
+				? await labPage.evaluate(() => {
+					const menuItems = [...document.querySelectorAll("[role='menuitem']")];
+					const itemOf = (text) => menuItems.find((node) => (node.textContent ?? "").trim() === text);
+					const unavailable = (node) => !node
+						|| node.hasAttribute("data-disabled")
+						|| node.getAttribute("aria-disabled") === "true";
+					return {
+						labels: menuItems.map((node) => (node.textContent ?? "").trim()),
+						startDisabled: unavailable(itemOf("启动")),
+						stopDisabled: unavailable(itemOf("停止")),
+						restartDisabled: unavailable(itemOf("重启"))
+					};
+				})
+				: { labels: [], startDisabled: true, stopDisabled: true, restartDisabled: true };
+			if (opened)
+				await labPage.keyboard.press("Escape");
+			await labPage.waitForTimeout(150);
+			const state = await labPage.evaluate(() =>
+				(document.querySelector("[data-testid='mininet-run-state']")?.textContent ?? "").trim());
+			return { state, ...probe };
+		};
+
+		const runBefore = await runMenuProbe();
+		log(
+			"11.4 运行控制读 GET /api/lab/start：初始已停止，启动可点而停止 / 重启 / 探测禁用",
+			runBefore.state === "已停止"
+			&& runBefore.labels.includes("启动") && runBefore.labels.includes("停止") && runBefore.labels.includes("重启")
+			&& !runBefore.startDisabled && runBefore.stopDisabled && runBefore.restartDisabled,
+			`状态=${runBefore.state} 菜单=${JSON.stringify(runBefore.labels)} 启动禁用=${runBefore.startDisabled} 停止禁用=${runBefore.stopDisabled} 重启禁用=${runBefore.restartDisabled}`
+		);
+
+		const startClicked = await runMenuPick("启动");
+		await labPage.waitForTimeout(1500);
+		const startWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/start");
+		const runRunning = await runMenuProbe();
+		log(
+			"11.4 启动走 POST /api/lab/start，徽章变为运行中且停止 / 重启 / 探测转为可用",
+			startClicked && !!startWrite
+			&& runRunning.state === "运行中"
+			&& runRunning.startDisabled && !runRunning.stopDisabled && !runRunning.restartDisabled,
+			`请求=${startWrite ? startWrite.path : "无"} 状态=${runRunning.state} 启动禁用=${runRunning.startDisabled} 停止禁用=${runRunning.stopDisabled} 重启禁用=${runRunning.restartDisabled}`
+		);
+
+		const pingClicked = await clickIfPresent("[data-testid='mininet-run-ping']");
+		await labPage.waitForTimeout(1500);
+		const pingWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/pingall");
+		const pingText = await labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-run-ping-output']")?.textContent ?? "").trim()
+		);
+		log(
+			"11.4 连通性走 POST /api/lab/pingall，上游文本逐行上屏",
+			pingClicked && !!pingWrite
+			&& pingText.includes("h1->h2") && pingText.includes("rtt min/avg/max/mdev"),
+			`请求=${pingWrite ? pingWrite.path : "无"} 输出=${JSON.stringify(pingText.slice(0, 80))}`
+		);
+
+		/** USelect 的选项在浮层里（`role="option"`）：点开触发器再按名字选 */
+		const pickSelect = async (testId, name) => {
+			const opened = await clickIfPresent(`[data-testid='${testId}']`);
+			if (!opened)
+				return false;
+			await labPage.waitForTimeout(250);
+			const chosen = await clickIfPresent(labPage.getByRole("option", { name, exact: true }));
+			await labPage.waitForTimeout(250);
+			return chosen;
+		};
+		const iperfPostCount = () => upstreamServer.mininetLog
+			.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/iperf")
+			.length;
+		const iperfBaseline = iperfPostCount();
+
+		const clientPicked = await pickSelect("mininet-iperf-client", "h1");
+		const serverSame = await pickSelect("mininet-iperf-server", "h1");
+		const sameSubmitted = await clickIfPresent("[data-testid='mininet-iperf-submit']");
+		await labPage.waitForTimeout(500);
+		const sameErrors = await labPage.evaluate(() => [...document.querySelectorAll("[data-slot='error']")]
+			.map((node) => (node.textContent ?? "").trim())
+			.filter(Boolean));
+		log(
+			"11.4 吞吐测试本地校验：两端选成同一台主机时就地报错且零请求",
+			clientPicked && serverSame && sameSubmitted
+			&& sameErrors.includes("客户端与服务端不能是同一台主机")
+			&& iperfPostCount() === iperfBaseline,
+			`客户端=${clientPicked} 服务端=${serverSame} 报错=${JSON.stringify(sameErrors)} 请求数=${iperfPostCount()}（基线 ${iperfBaseline}）`
+		);
+
+		const serverPicked = await pickSelect("mininet-iperf-server", "h2");
+		await labPage.locator("[data-testid='mininet-iperf-seconds']").fill("3");
+		const iperfSubmitted = await clickIfPresent("[data-testid='mininet-iperf-submit']");
+		await labPage.waitForTimeout(1500);
+		const iperfWrites = upstreamServer.mininetLog
+			.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/iperf");
+		const iperfWrite = iperfWrites[iperfWrites.length - 1];
+		const iperfText = await labPage.evaluate(() => [
+			document.querySelector("[data-testid='mininet-iperf-client-output']")?.textContent ?? "",
+			document.querySelector("[data-testid='mininet-iperf-server-output']")?.textContent ?? ""
+		].join(" | ").trim());
+		log(
+			"11.4 吞吐测试走 POST /api/lab/iperf：请求体带两端 / 协议 / 秒数，两侧输出上屏",
+			serverPicked && iperfSubmitted
+			&& iperfWrite?.body?.client === "h1" && iperfWrite?.body?.server === "h2"
+			&& iperfWrite?.body?.l4_type === "TCP" && iperfWrite?.body?.seconds === 3
+			&& iperfText.includes("1.02 Gbits/sec") && iperfText.includes("done"),
+			`请求=${iperfWrite ? JSON.stringify(iperfWrite.body) : "无"} 输出=${JSON.stringify(iperfText.slice(0, 100))}`
+		);
+
+		const stopOpened = await runMenuPick("停止");
+		await labPage.waitForTimeout(400);
+		const stopModalText = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
+		const stopConfirmed = stopOpened && await clickIfPresent("[data-testid='mininet-run-stop-confirm']");
+		await labPage.waitForTimeout(1500);
+		const stopWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/stop");
+		const runStopped = await runMenuProbe();
+		log(
+			"11.4 停止需确认（弹窗写明后果），确认后 POST /api/lab/stop 且徽章回到已停止",
+			stopOpened && stopModalText.includes("停止会终止全部节点进程")
+			&& stopConfirmed && !!stopWrite
+			&& runStopped.state === "已停止" && !runStopped.startDisabled && runStopped.stopDisabled,
+			`弹窗=${stopOpened} 确认=${stopConfirmed} 请求=${stopWrite ? stopWrite.path : "无"} 状态=${runStopped.state} 启动禁用=${runStopped.startDisabled}`
+		);
+
+		// ── 11.4 菜单栏（复刻 1.0 版式的「视图 / 运行」，NMCPS-ADR-0022 W2 修订）──
+		// 「视图」是四个 checkbox 项（Reka 的 `role="menuitemcheckbox"`），点完菜单不收起；
+		// 「运行」的三项已经在上面钉过启停，这里补「重启 = 停止 + 启动」。
+		const openViewMenu = async () => {
+			const opened = await clickIfPresent("[data-testid='mininet-view-menu']");
+			if (opened)
+				await labPage.waitForTimeout(250);
+			return opened;
+		};
+		const viewMenuLabels = async () => {
+			const opened = await openViewMenu();
+			const labels = opened
+				? await labPage.evaluate(() => [...document.querySelectorAll("[role='menuitemcheckbox']")]
+					.map((node) => (node.textContent ?? "").trim()))
+				: [];
+			if (opened)
+				await labPage.keyboard.press("Escape");
+			await labPage.waitForTimeout(150);
+			return labels;
+		};
+		const viewToggle = async (label) => {
+			const opened = await openViewMenu();
+			if (!opened)
+				return false;
+			const picked = await clickIfPresent(labPage.getByRole("menuitemcheckbox", { name: label, exact: true }));
+			await labPage.waitForTimeout(350);
+			await labPage.keyboard.press("Escape");
+			await labPage.waitForTimeout(200);
+			return picked;
+		};
+		const canvasProbe = () => labPage.evaluate(() => ({
+			nodes: document.querySelectorAll("[data-testid='topology-node']").length,
+			labels: [...document.querySelectorAll("[data-testid='topology-node-label']")]
+				.map((node) => (node.textContent ?? "").trim())
+		}));
+
+		const viewLabels = await viewMenuLabels();
+		log(
+			"11.4 工具栏最左是复刻的「视图 / 运行」菜单：「视图」四项显示开关齐全",
+			viewLabels.includes("显示名称") && viewLabels.includes("显示主机")
+			&& viewLabels.includes("显示控制器") && viewLabels.includes("显示主机 IP"),
+			`菜单项=${JSON.stringify(viewLabels)}`
+		);
+
+		const canvasAll = await canvasProbe();
+		const hostLabels = canvasAll.labels.filter((label) => /^h\d/.test(label));
+		const hostsToggledOff = await viewToggle("显示主机");
+		const canvasNoHosts = await canvasProbe();
+		const hostsToggledOn = await viewToggle("显示主机");
+		const canvasHostsBack = await canvasProbe();
+		log(
+			"11.4 视图「显示主机」只在渲染层过滤：主机节点消失、链路跟着走，切回即恢复",
+			hostsToggledOff && hostsToggledOn && hostLabels.length > 0
+			&& canvasNoHosts.nodes === canvasAll.nodes - hostLabels.length
+			&& !canvasNoHosts.labels.some((label) => /^h\d/.test(label))
+			&& canvasHostsBack.nodes === canvasAll.nodes,
+			`全量=${canvasAll.nodes} 主机=${hostLabels.length} 关主机=${canvasNoHosts.nodes} 恢复=${canvasHostsBack.nodes} 关后标签=${JSON.stringify(canvasNoHosts.labels)}`
+		);
+
+		const ipToggledOn = await viewToggle("显示主机 IP");
+		const labelsWithIp = (await canvasProbe()).labels.filter((label) => /10\.0\.0\.\d/.test(label));
+		const ipToggledOff = await viewToggle("显示主机 IP");
+		const labelsWithoutIp = (await canvasProbe()).labels.filter((label) => /10\.0\.0\.\d/.test(label));
+		log(
+			"11.4 视图「显示主机 IP」给主机标签补注 IP，切回即恢复纯名称",
+			ipToggledOn && ipToggledOff && labelsWithIp.length > 0 && labelsWithoutIp.length === 0,
+			`带 IP=${JSON.stringify(labelsWithIp)} 关闭后=${JSON.stringify(labelsWithoutIp)}`
+		);
+
+		const mininetWriteCount = (method, writePath) => upstreamServer.mininetLog
+			.filter((entry) => entry.method === method && entry.path === writePath)
+			.length;
+		const restartBaseline = {
+			start: mininetWriteCount("POST", "/api/mininet/start"),
+			stop: mininetWriteCount("POST", "/api/mininet/stop")
+		};
+		const restartStarted = await runMenuPick("启动");
+		await labPage.waitForTimeout(1200);
+		const restartPicked = await runMenuPick("重启");
+		await labPage.waitForTimeout(400);
+		const restartModalText = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
+		const restartConfirmed = restartPicked && await clickIfPresent("[data-testid='mininet-run-stop-confirm']");
+		await labPage.waitForTimeout(2500);
+		const runAfterRestart = await runMenuProbe();
+		log(
+			"11.4 重启 = 停止 + 启动：确认后依次发出 POST /stop 与 POST /start，徽章回到运行中",
+			restartStarted && restartPicked && restartConfirmed
+			&& restartModalText.includes("重启 = 先停止再启动")
+			&& mininetWriteCount("POST", "/api/mininet/stop") === restartBaseline.stop + 1
+			&& mininetWriteCount("POST", "/api/mininet/start") === restartBaseline.start + 2
+			&& runAfterRestart.state === "运行中",
+			`启动=${restartStarted} 重启=${restartPicked} 确认=${restartConfirmed} stop=${mininetWriteCount("POST", "/api/mininet/stop") - restartBaseline.stop} start=${mininetWriteCount("POST", "/api/mininet/start") - restartBaseline.start} 状态=${runAfterRestart.state}`
+		);
+
+		// ── 11.5 「文件」菜单（NMCPS-ADR-0022 W4：导入拓扑 / 导出 JSON / 导出 Python 脚本）──
+		// 导出为什么单列：它不是 `ApiResponse`，而是原样的文本 + `content-disposition`；
+		// 自检必须看到「另存下来的文件就是拓扑 / 源码」，而不是被信封包过的字符串。
+		const fileMenuLabels = async () => {
+			const opened = await clickIfPresent("[data-testid='mininet-file-menu']");
+			if (opened)
+				await labPage.waitForTimeout(250);
+			const labels = opened
+				? await labPage.evaluate(() => [...document.querySelectorAll("[role='menuitem']")]
+					.map((node) => (node.textContent ?? "").trim()))
+				: [];
+			if (opened)
+				await labPage.keyboard.press("Escape");
+			await labPage.waitForTimeout(150);
+			return labels;
+		};
+		const pickFileItem = async (name) => {
+			const opened = await clickIfPresent("[data-testid='mininet-file-menu']");
+			if (!opened)
+				return false;
+			await labPage.waitForTimeout(250);
+			return clickIfPresent(labPage.getByRole("menuitem", { name, exact: true }));
+		};
+
+		const fileItems = await fileMenuLabels();
+		log(
+			"11.5 工具栏最左的「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本三项齐全",
+			fileItems.length === 3
+			&& fileItems.some((label) => label.includes("导入拓扑"))
+			&& fileItems.some((label) => label.includes("导出 JSON"))
+			&& fileItems.some((label) => label.includes("导出 Python 脚本")),
+			`菜单项=${JSON.stringify(fileItems)}`
+		);
+
+		const canvasBeforeImport = await canvasProbe();
+		const importHitsBefore = upstreamServer.mininetLog.filter((entry) => entry.path === "/api/mininet/import_json").length;
+		await labPage.locator("[data-testid='mininet-import-input']").setInputFiles({
+			name: "topo.json",
+			mimeType: "application/json",
+			buffer: Buffer.from(JSON.stringify({ hosts: [{ name: "h7", ip: "10.0.0.7" }], switches: [], links: [] }))
+		});
+		await labPage.waitForTimeout(2500);
+		const importHit = upstreamServer.mininetLog.filter((entry) => entry.path === "/api/mininet/import_json").at(-1);
+		const canvasAfterImport = await canvasProbe();
+		const bodyAfterImport = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
+		log(
+			"11.5 导入：按 multipart 发往上游（上游只收 `file` 字段），画布出现新节点",
+			upstreamServer.mininetLog.filter((entry) => entry.path === "/api/mininet/import_json").length === importHitsBefore + 1
+			&& String(importHit?.contentType ?? "").startsWith("multipart/form-data")
+			&& String(importHit?.raw ?? "").includes("name=\"file\"")
+			&& canvasAfterImport.nodes > canvasBeforeImport.nodes
+			&& bodyAfterImport.includes("拓扑已导入"),
+			`nodes ${canvasBeforeImport.nodes}→${canvasAfterImport.nodes} contentType=${importHit?.contentType}`
+		);
+
+		const exportOnce = async (name) => {
+			const [download] = await Promise.all([
+				labPage.waitForEvent("download", { timeout: 15000 }),
+				(async () => {
+					const picked = await pickFileItem(name);
+					if (!picked)
+						throw new Error(`没能点中「${name}」`);
+				})()
+			]);
+			const filePath = await download.path();
+			return {
+				name: download.suggestedFilename(),
+				text: filePath ? readFileSync(filePath, "utf8") : ""
+			};
+		};
+
+		const exportedJson = await exportOnce("导出 JSON");
+		log(
+			"11.5 导出 JSON：文件名由 BFF 生成、正文是拓扑原文（不套 JSON 信封）",
+			/^lab-.+-\d{8}T\d{6}Z\.json$/.test(exportedJson.name)
+			&& exportedJson.text.trimStart().startsWith("{")
+			&& exportedJson.text.includes("\"hosts\"")
+			&& !exportedJson.text.includes("\"code\": 0"),
+			`文件=${exportedJson.name} 头部=${exportedJson.text.slice(0, 24).replace(/\s+/g, " ")}`
+		);
+
+		const exportedScript = await exportOnce("导出 Python 脚本");
+		log(
+			"11.5 导出脚本：扩展名 .py、正文是 Python 源码",
+			exportedScript.name.endsWith(".py") && exportedScript.text.startsWith("from mininet.topo import Topo"),
+			`文件=${exportedScript.name} 头部=${exportedScript.text.split("\n")[0]}`
+		);
+
+		// ── 11.6 「工具」菜单（NMCPS-ADR-0022 W5：抓包启停 + pcap 下载）与破坏性重建 ──
+		// 抓包是**独立授权位**：`lab:sniffer` 不在租户管理员的默认权限里，BFF 的导出通道也
+		// 按种类判权限（pcap 要 sniffer，json / script 只要 read）。自检账号另挂一条
+		// `r_lab_sniffer`（见 `scripts/lib/bff-harness.mjs`），否则「工具」菜单根本不该出现。
+		const openToolsMenu = async () => {
+			const opened = await clickIfPresent("[data-testid='mininet-tools-menu']");
+			if (opened)
+				await labPage.waitForTimeout(250);
+			return opened;
+		};
+		const toolMenuLabels = async () => {
+			const opened = await openToolsMenu();
+			const labels = opened
+				? await labPage.evaluate(() => [...document.querySelectorAll("[role='menuitem']")]
+					.map((node) => (node.textContent ?? "").trim()))
+				: [];
+			if (opened)
+				await labPage.keyboard.press("Escape");
+			await labPage.waitForTimeout(150);
+			return labels;
+		};
+		const pickToolItem = async (name) => {
+			const opened = await openToolsMenu();
+			if (!opened)
+				return false;
+			await labPage.waitForTimeout(250);
+			return clickIfPresent(labPage.getByRole("menuitem", { name, exact: true }));
+		};
+		const snifferReadout = () => labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-sniffer-state']")?.textContent ?? "").replace(/\s+/g, " ").trim());
+
+		const toolLabels = await toolMenuLabels();
+		const snifferIdle = await snifferReadout();
+		log(
+			"11.6 有 lab:sniffer 时渲染「工具」菜单（开始 / 停止 / 下载），读数为未抓包",
+			toolLabels.length === 3
+			&& toolLabels.some((label) => label.includes("开始抓包"))
+			&& toolLabels.some((label) => label.includes("停止抓包"))
+			&& toolLabels.some((label) => label.includes("下载抓包"))
+			&& snifferIdle.includes("未抓包"),
+			`菜单项=${JSON.stringify(toolLabels)} 读数=${snifferIdle}`
+		);
+
+		const snifferStartsBefore = upstreamServer.mininetLog
+			.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/sniffer/start")
+			.length;
+		const sniffStartPicked = await pickToolItem("开始抓包");
+		await labPage.waitForTimeout(1500);
+		const snifferRunning = await snifferReadout();
+		const snifferStartsAfter = upstreamServer.mininetLog
+			.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/sniffer/start")
+			.length;
+		log(
+			"11.6 开始抓包走 POST /api/lab/sniffer/start，读数变为抓包中",
+			sniffStartPicked && snifferStartsAfter === snifferStartsBefore + 1 && snifferRunning.includes("抓包中"),
+			`读数=${snifferRunning}`
+		);
+
+		// pcap 下载：文件名来自 BFF，正文必须是二进制魔数（`text()` 解一次就废）
+		const [captureDownload] = await Promise.all([
+			labPage.waitForEvent("download", { timeout: 15000 }),
+			(async () => {
+				const picked = await pickToolItem("下载抓包文件（pcap）");
+				if (!picked)
+					throw new Error("没能点中「下载抓包文件（pcap）」");
+			})()
+		]);
+		const capturePath = await captureDownload.path();
+		const captureBytes = capturePath ? readFileSync(capturePath) : Buffer.alloc(0);
+		log(
+			"11.6 pcap 下载：文件名由 BFF 生成、正文魔数 d4c3b2a1（二进制未被文本化）",
+			/^lab-.+-\d{8}T\d{6}Z\.pcap$/.test(captureDownload.suggestedFilename())
+			&& captureBytes.subarray(0, 4).equals(Buffer.from([0xD4, 0xC3, 0xB2, 0xA1])),
+			`文件=${captureDownload.suggestedFilename()} 魔数=${captureBytes.subarray(0, 4).toString("hex")}`
+		);
+
+		const sniffStopPicked = await pickToolItem("停止抓包");
+		await labPage.waitForTimeout(1500);
+		const snifferStopped = await snifferReadout();
+		log(
+			"11.6 停止抓包走 POST /api/lab/sniffer/stop，读数回到未抓包",
+			sniffStopPicked
+			&& upstreamServer.mininetLog.some((entry) => entry.method === "POST" && entry.path === "/api/mininet/sniffer/stop")
+			&& snifferStopped.includes("未抓包"),
+			`读数=${snifferStopped}`
+		);
+
+		/*
+		 * 破坏性重建（W5）：`POST /api/lab/full_reset` 要逐字输入网络 ID。
+		 * 断言拆成三步 —— 弹窗开着、输错不给点、输对才发请求且请求体带 confirm。
+		 */
+		const resetPicked = await runMenuPick("重建网络（清空拓扑）");
+		await labPage.waitForTimeout(400);
+		const stateBeforeReset = structuredClone(upstreamServer.mininetState);
+		const resetModalProbe = await labPage.evaluate(() => ({
+			input: !!document.querySelector("[data-testid='mininet-reset-confirm-input']"),
+			confirmDisabled: !!document.querySelector("[data-testid='mininet-reset-confirm']")?.hasAttribute("disabled")
+		}));
+		const resetInput = labPage.locator("[data-testid='mininet-reset-confirm-input']");
+		await resetInput.fill("net_wrong");
+		await labPage.waitForTimeout(200);
+		const wrongStillDisabled = await labPage.evaluate(() =>
+			!!document.querySelector("[data-testid='mininet-reset-confirm']")?.hasAttribute("disabled"));
+		await resetInput.fill("net_ui");
+		await labPage.waitForTimeout(200);
+		const rightEnabled = await labPage.evaluate(() =>
+			!document.querySelector("[data-testid='mininet-reset-confirm']")?.hasAttribute("disabled"));
+		const resetConfirmed = rightEnabled && await clickIfPresent("[data-testid='mininet-reset-confirm']");
+		await labPage.waitForTimeout(2500);
+		const resetWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/full_reset");
+		const canvasAfterReset = await canvasProbe();
+		const bodyAfterReset = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
+		log(
+			"11.6 重建网络：输错网络 ID 不放行，输对后 POST /api/lab/full_reset 带 confirm 且画布清空",
+			resetPicked && resetModalProbe.input && resetModalProbe.confirmDisabled
+			&& wrongStillDisabled && resetConfirmed
+			&& resetWrite?.body?.confirm === "net_ui"
+			&& canvasAfterReset.nodes === 0
+			&& bodyAfterReset.includes("该网络还没有主机"),
+			`弹窗=${resetModalProbe.input} 输错仍禁用=${wrongStillDisabled} confirm=${resetWrite?.body?.confirm} nodes=${canvasAfterReset.nodes}`
+		);
+
+		/*
+		 * 假上游是**整段 11.x 共用**的（后面的资源清单用例还要读它），而 `full_reset`
+		 * 已经把台账清空。这里把快照放回去 —— 恢复的是测试夹具，不是被测行为：
+		 * 页面上「重建后画布为空」已经在上一行断言完。
+		 */
+		Object.assign(upstreamServer.mininetState, structuredClone(stateBeforeReset));
+
+		/*
+		 * 11.7 抓包实时流（NMCPS-ADR-0022 D6 / W5 剩余部分）
+		 *
+		 * 页面不直连上游：先 `POST /api/lab/ws-ticket` 换一次性票，再连同源 `/lab-ws/sniffer`，
+		 * BFF 以票里的 `sub` / `tid` 建上游连接。断言三段 —— 未抓包只回填历史、
+		 * 抓包中实时帧进列表（且上游连接不带 cookie / authorization）、停止后断流但保留已收到的包。
+		 */
+		const snifferRows = () => labPage.evaluate(() =>
+			[...document.querySelectorAll("[data-testid='mininet-sniffer-packet']")]
+				.map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim()));
+		const snifferStreamState = () => labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-sniffer-stream-state']")?.textContent ?? "").trim());
+		const waitForSnifferRows = async (expected, timeout = 10000) => {
+			const deadline = Date.now() + timeout;
+			let rows = await snifferRows();
+			while (rows.length !== expected && Date.now() < deadline) {
+				await labPage.waitForTimeout(200);
+				rows = await snifferRows();
+			}
+			return rows;
+		};
+
+		const historyRows = await waitForSnifferRows(1, 5000);
+		const idleStreamState = await snifferStreamState();
+		// 11.6 已经开过一次抓包（连接记录留在日志里）；这里断言的是「空闲时不**新增**连接」
+		const socketLogAtIdle = upstreamServer.mininetSocketLog.length;
+		log(
+			"11.7 未抓包时不建流：面板回填 sniffer/history（1 条 UDP），状态为未连接",
+			historyRows.length === 1
+			&& historyRows[0]?.includes("UDP")
+			&& idleStreamState === "未连接"
+			&& socketLogAtIdle === upstreamServer.mininetSocketLog.length,
+			`历史=${JSON.stringify(historyRows)} 状态=${idleStreamState} 上游连接=${upstreamServer.mininetSocketLog.length}`
+		);
+
+		// 抓包要求网络在跑（上游 `sniffer_start` 对未启动回 400）；full_reset 已经把网停掉了
+		await runMenuPick("启动");
+		await labPage.waitForTimeout(1200);
+		const socketsBeforeStreaming = upstreamServer.mininetSocketLog.length;
+		await pickToolItem("开始抓包");
+		const liveRows = await waitForSnifferRows(3);
+		const liveStreamState = await snifferStreamState();
+		const upstreamSocket = upstreamServer.mininetSocketLog.at(-1);
+		log(
+			"11.7 开始抓包后换票连 /lab-ws/sniffer：实时帧进列表，出站不带 cookie / authorization",
+			liveRows.length === 3
+			&& liveRows.some((row) => row.includes("TCP"))
+			&& liveRows.some((row) => row.includes("ICMP"))
+			&& liveStreamState === "实时"
+			&& upstreamServer.mininetSocketLog.length === socketsBeforeStreaming + 1
+			&& upstreamSocket?.path === "/api/mininet/sniffer"
+			&& !upstreamSocket?.headers.cookie
+			&& !upstreamSocket?.headers.authorization,
+			`列表=${JSON.stringify(liveRows)} 状态=${liveStreamState} 上游连接=${upstreamServer.mininetSocketLog.length} cookie=${!!upstreamSocket?.headers.cookie}`
+		);
+
+		await pickToolItem("停止抓包");
+		await labPage.waitForTimeout(1200);
+		const stoppedStreamState = await snifferStreamState();
+		const keptRows = await snifferRows();
+		log(
+			"11.7 停止抓包后断流（状态回到未连接），已收到的包保留",
+			stoppedStreamState === "未连接" && keptRows.length === 3,
+			`状态=${stoppedStreamState} 保留=${keptRows.length}`
+		);
+
+		/*
+		 * 11.8 Network Tools（NMCPS-ADR-0022 D6 的三条剩余通道）
+		 *
+		 * 抓包之外的三块观测面：Webshell（`lab:terminal`）、日志 / 监控（`lab:read`）。
+		 * 断言三段：入口按能力位渲染、日志随标签自动建流、终端有**上行**（回显真的回来了）、
+		 * 监控把 `node:intf` 拆成上游查询串并把采样渲染出来。
+		 */
+		const toolsOpened = await clickIfPresent("[data-testid='mininet-network-tools']");
+		await labPage.waitForTimeout(400);
+		const tabLabels = toolsOpened
+			? await labPage.evaluate(() => [...document.querySelectorAll("[data-testid='mininet-network-tools-tabs'] [role='tab']")]
+				.map((node) => (node.textContent ?? "").trim()))
+			: [];
+		log(
+			"11.8 「网络工具」入口按能力位渲染，面板含 Webshell / 日志 / 监控三个标签页",
+			toolsOpened && ["Webshell", "日志", "监控"].every((label) => tabLabels.includes(label)),
+			`tabs=${JSON.stringify(tabLabels)}`
+		);
+
+		const waitForText = async (testid, predicate, timeout = 10000) => {
+			const deadline = Date.now() + timeout;
+			let text = "";
+			while (Date.now() < deadline) {
+				text = (await labPage.locator(`[data-testid='${testid}']`).textContent() ?? "").trim();
+				if (predicate(text))
+					return text;
+				await labPage.waitForTimeout(200);
+			}
+			return text;
+		};
+
+		// ── 日志：进标签即建流，两行原文进面板 ──
+		const logSocketsBefore = upstreamServer.mininetSocketLog.length;
+		await labPage.getByRole("tab", { name: "日志" }).click();
+		const logsText = await waitForText("mininet-logs-output", (text) => text.includes("mininet starting") && text.includes("link up"));
+		const logsUpstream = upstreamServer.mininetSocketLog.at(-1);
+		log(
+			"11.8 日志页自动换票连 /lab-ws/logs：两行原文进面板，上游不带 cookie / authorization",
+			logsText.includes("mininet starting")
+			&& logsText.includes("link up")
+			&& upstreamServer.mininetSocketLog.length === logSocketsBefore + 1
+			&& logsUpstream?.path === "/api/mininet/logs"
+			&& !logsUpstream?.headers.cookie
+			&& !logsUpstream?.headers.authorization,
+			`上游=${logsUpstream?.path} cookie=${!!logsUpstream?.headers.cookie}`
+		);
+
+		// ── Webshell：连接 → 问候帧 → 敲一行 → 回显回来（上行链路） ──
+		await labPage.getByRole("tab", { name: "Webshell" }).click();
+		await labPage.waitForTimeout(200);
+		const terminalSocketsBefore = upstreamServer.mininetSocketLog.length;
+		await clickIfPresent("[data-testid='mininet-terminal-connect']");
+		const bannerText = await waitForText("mininet-terminal-output", (text) => text.includes("root@"));
+		const terminalUpstream = upstreamServer.mininetSocketLog.at(-1);
+		log(
+			"11.8 Webshell 连 `/lab-ws/terminal/<node>`：问候帧进面板，上游路径带节点段",
+			bannerText.includes("root@")
+			&& upstreamServer.mininetSocketLog.length === terminalSocketsBefore + 1
+			&& /^\/api\/mininet\/terminal\/[^/]+$/.test(terminalUpstream?.path ?? "")
+			&& !terminalUpstream?.headers.cookie,
+			`上游=${terminalUpstream?.path}`
+		);
+
+		// 夹具的问候帧带 ANSI 颜色码，面板必须洗掉它：渲染 `^[[1;32m` 会把提示符变成乱码
+		log(
+			"11.8 问候帧里的 ANSI 颜色码被洗掉：上游原样带 ESC，面板里一个都不剩",
+			MININET_TERMINAL_BANNER.includes("\u001B")
+			&& bannerText.includes("root@")
+			&& !bannerText.includes("\u001B"),
+			`夹具带ESC=true 面板带ESC=${bannerText.includes("\u001B")}`
+		);
+
+		await labPage.locator("[data-testid='mininet-terminal-input']").fill("ls");
+		await clickIfPresent("[data-testid='mininet-terminal-send']");
+		const echoText = await waitForText("mininet-terminal-output", (text) => text.includes("echo:ls"));
+		log(
+			"11.8 终端上行：命令经 BFF 转给上游，回显原样回到面板（输入框已清空）",
+			echoText.includes("echo:ls") && (await labPage.locator("[data-testid='mininet-terminal-input']").inputValue()) === "",
+			`输出尾部=${JSON.stringify(echoText.slice(-24))}`
+		);
+
+		// Ctrl-C 发的是 0x03：上游只对这一字节回 `^C`，字面量 `^C` 会走 `echo:` 分支
+		await clickIfPresent("[data-testid='mininet-terminal-interrupt']");
+		const interruptText = await waitForText("mininet-terminal-output", (text) => text.includes("^C"));
+		log(
+			"11.8 中断按钮发 `Ctrl-C`（0x03）而不是字面量：上游回 `^C`",
+			interruptText.includes("^C") && !interruptText.includes("echo:^C"),
+			`输出尾部=${JSON.stringify(interruptText.slice(-16))}`
+		);
+
+		// 清屏只清浏览器侧转写：输出回到空态，连接保持（再敲一行仍然通）
+		await clickIfPresent("[data-testid='mininet-terminal-clear']");
+		const clearedText = await waitForText("mininet-terminal-output", (text) => !text.includes("echo:ls") && !text.includes("root@"));
+		const clearedState = (await labPage.locator("[data-testid='mininet-terminal-state']").textContent() ?? "").trim();
+		log(
+			"11.8 清屏回到空态但不断流：转写清空、状态仍是已连接",
+			!clearedText.includes("echo:ls") && !clearedText.includes("root@") && clearedText.length > 0 && clearedState === "已连接",
+			`输出=${JSON.stringify(clearedText.slice(0, 16))} 状态=${clearedState}`
+		);
+
+		// ── 监控：`node:intf` 拆成上游查询串，采样渲染成一行读数 ──
+		await labPage.getByRole("tab", { name: "监控" }).click();
+		await labPage.waitForTimeout(300);
+		const monitorSocketsBefore = upstreamServer.mininetSocketLog.length;
+		await clickIfPresent("[data-testid='mininet-monitor-start']");
+		const sampleText = await waitForText("mininet-monitor-samples", (text) => text.includes("TX"));
+		const monitorUpstream = upstreamServer.mininetSocketLog.at(-1);
+		const monitorParams = new URLSearchParams(monitorUpstream?.search ?? "");
+		log(
+			"11.8 监控：target `node:intf` 拼成上游查询串，采样按 TX / RX 渲染",
+			sampleText.includes("TX") && sampleText.includes("RX")
+			&& upstreamServer.mininetSocketLog.length === monitorSocketsBefore + 1
+			&& monitorUpstream?.path === "/api/mininet/monitor"
+			&& (monitorParams.get("node") ?? "") !== ""
+			&& (monitorParams.get("intf") ?? "").includes("-eth0"),
+			`上游=${monitorUpstream?.path}?${monitorParams.toString()}`
 		);
 
 		await labContext.close();

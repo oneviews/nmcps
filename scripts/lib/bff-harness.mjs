@@ -4,6 +4,7 @@
 // 使用方：`scripts/check-bff.mjs`（纯 HTTP 契约）、`scripts/check-ui.mjs`（浏览器端到端）。
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import process from "node:process";
@@ -95,8 +96,239 @@ export async function stopBff(child) {
 
 /** 关闭假上游：先销毁 keep-alive 连接，避免探针用例留下挂起的 socket 拖住 close */
 export async function closeUpstream(server) {
+	/*
+	 * 升级过的 WebSocket socket 已经从 http server 的连接表里摘出去，
+	 * `closeAllConnections()` 不会碰它们 —— 不显式销毁的话 `server.close()` 永远等不齐，
+	 * 自检会以「unsettled top-level await」退出（实测 check:ui 退出码 13）。
+	 */
+	for (const socket of server.snifferUpgradeSockets ?? [])
+		socket.destroy();
+
 	server.closeAllConnections?.();
 	await new Promise((resolve) => server.close(resolve));
+}
+
+/**
+ * 抓包历史样本（`GET /api/mininet/sniffer/history` → `{ events }`）。
+ *
+ * 单独一份、与 `MININET_SNIFFER_LIVE` 不重叠：页面挂载时先读历史、开始抓包后再追加实时流，
+ * 只有两份样本不同，自检才能区分「历史回填」与「WS 真的连上了」。
+ */
+export const MININET_SNIFFER_HISTORY = [
+	{ ts: 1_760_000_000_000_000_000, proto: "UDP", src: "10.0.0.2", dst: "10.0.0.1", len: 60, info: "5353 -> 5353", node: "h2", intf: "h2-eth0", type: "packet" }
+];
+
+/** 抓包实时流样本（WS `/api/mininet/sniffer` 推的那几帧，字段与上游 `SnifferEvent` 对齐） */
+export const MININET_SNIFFER_LIVE = [
+	{ ts: 1_760_000_001_000_000_000, proto: "TCP", src: "10.0.0.1", dst: "10.0.0.2", len: 74, info: "52210 -> 80 [SYN]", node: "h1", intf: "h1-eth0", type: "packet" },
+	{ ts: 1_760_000_002_000_000_000, proto: "ICMP", src: "10.0.0.2", dst: "10.0.0.1", len: 98, info: "type=8 code=0", node: "h2", intf: "h2-eth0", type: "packet" }
+];
+
+/** 服务端 → 客户端的文本帧（FIN + opcode 0x1，无掩码；客户端帧不参与断言） */
+function serverTextFrame(text) {
+	const body = Buffer.from(text, "utf8");
+	if (body.length < 126) {
+		return Buffer.concat([Buffer.from([0x81, body.length]), body]);
+	}
+	if (body.length < 65536) {
+		const header = Buffer.alloc(4);
+		header[0] = 0x81;
+		header[1] = 126;
+		header.writeUInt16BE(body.length, 2);
+		return Buffer.concat([header, body]);
+	}
+	const header = Buffer.alloc(10);
+	header[0] = 0x81;
+	header[1] = 127;
+	header.writeBigUInt64BE(BigInt(body.length), 2);
+	return Buffer.concat([header, body]);
+}
+
+/**
+ * 终端 WebSocket 的问候帧（真实上游由 PTY 输出，形状是**裸文本**，不是 JSON）。
+ * BFF 不在中间做任何包装，自检据此断言文本帧原样穿过。
+ *
+ * 刻意带 ANSI 颜色码（`ESC[1;32m…ESC[0m`）：真实 PTY 一定带，页面若原样渲染，
+ * 用户看到的是 `^[[1;32mroot@h1:/#` 而不是提示符 —— `check:ui` 11.8 断言面板里没有 ESC。
+ */
+export const MININET_TERMINAL_BANNER = "\u001B[1;32mroot@h1:/#\u001B[0m ";
+
+/** 终端 `Ctrl-C`（0x03）的上游回显：真 PTY 由内核终端驱动打 `^C`，不是 `echo:` */
+export const MININET_TERMINAL_INTERRUPT_ECHO = "^C\r\n";
+
+/** 日志 WS 的前两行（真实上游是 `tail -n 1000 -f mininet.log` 的逐行文本） */
+export const MININET_LOG_LINES = [
+	"2026-11-17 10:00:00,000 INFO mininet starting",
+	"2026-11-17 10:00:01,000 INFO h1 -> sw1 link up"
+];
+
+/** 监控采样（字段与上游 `websocket_interface_monitor` 对齐，速率单位 Gbit/s） */
+export const MININET_MONITOR_SAMPLE = {
+	node: "h1",
+	intf: "h1-eth0",
+	ts: "2026-11-17T10:00:02+00:00",
+	tx_gbps: 0.125,
+	rx_gbps: 0.25
+};
+
+/**
+ * 客户端 → 服务端帧解析：只处理自检用得到的小帧（FIN + 必带掩码）。
+ *
+ * 为什么手写：`ws` 不是本项目的直接依赖，而这些自检只发一行命令、只收一段回显。
+ * 返回解析出的帧与**没拼完的尾巴**（TCP 可能把一帧拆成两次 `data`）。
+ */
+function readClientFrames(buffer) {
+	const frames = [];
+	let offset = 0;
+
+	while (buffer.length - offset >= 2) {
+		const opcode = buffer[offset] & 0x0F;
+		const masked = (buffer[offset + 1] & 0x80) !== 0;
+		let length = buffer[offset + 1] & 0x7F;
+		let cursor = offset + 2;
+
+		if (length === 126) {
+			if (buffer.length < cursor + 2)
+				break;
+			length = buffer.readUInt16BE(cursor);
+			cursor += 2;
+		} else if (length === 127) {
+			if (buffer.length < cursor + 8)
+				break;
+			length = Number(buffer.readBigUInt64BE(cursor));
+			cursor += 8;
+		}
+
+		const maskLength = masked ? 4 : 0;
+		if (buffer.length < cursor + maskLength + length)
+			break;
+
+		const mask = masked ? buffer.subarray(cursor, cursor + 4) : undefined;
+		cursor += maskLength;
+		const payload = Buffer.from(buffer.subarray(cursor, cursor + length));
+		if (mask) {
+			for (let index = 0; index < payload.length; index += 1)
+				payload[index] ^= mask[index % 4];
+		}
+
+		frames.push({ opcode, text: payload.toString("utf8") });
+		offset = cursor + length;
+	}
+
+	return { frames, rest: buffer.subarray(offset) };
+}
+
+/**
+ * 给假上游挂四条实验 WebSocket（NMCPS-ADR-0022 D6）：抓包 / 终端 / 日志 / 监控。
+ *
+ * 为什么四张路由共用**一个** `upgrade` 监听：`server.on("upgrade")` 允许多个监听，
+ * 但每个都会收到同一次升级 —— 各自「不是我的路径就 destroy」会把别人的 socket 拆掉。
+ * 所以这里只有一张派发表，路径不命中才 destroy。
+ *
+ * 为什么手写握手而不是引 `ws`：自检脚本只消费**服务端**文本帧、只发一行终端输入，
+ * 握手 + 写帧 + 小帧解析不到 100 行；而 `ws` 不是本项目的直接依赖（跨层引一个传递依赖，
+ * 构建期一改就可能断）。真实上游由 FastAPI 的四个 `@app.websocket` 提供，
+ * 形状见 `mininet_gui_backend/api.py`。
+ *
+ * 返回的连接记录数组（`{ path, search, headers }`）用来断言「BFF 真的向上游建了连」——
+ * 浏览器侧握手成功只能证明 BFF 接受了升级，证明不了它连到了哪。
+ *
+ * @param {import("node:http").Server} server
+ * @param {{ events?: object[], path?: string }} [options]
+ */
+export function attachSnifferSocket(server, options = {}) {
+	const events = options.events ?? MININET_SNIFFER_LIVE;
+	const path = options.path ?? "/api/mininet/sniffer";
+	const connections = [];
+	/** 升级后的 socket 不再归 http server 管：`closeAllConnections()` 不会碰它们 */
+	const openSockets = new Set();
+	server.snifferUpgradeSockets = openSockets;
+
+	/**
+	 * 通道派发表：`prefix` 表示路径段之后还可有内容（终端是 `/terminal/<node>`）。
+	 * 终端额外带 `echo`：上游把收到的一行回成 `echo:<行>`，自检据此证明
+	 * 「浏览器 → BFF → 上游」这条上行链路通了（只有这条通道有上行）。
+	 */
+	const specs = [
+		{ path, frames: events.map((event) => JSON.stringify(event)) },
+		{ path: "/api/mininet/terminal", prefix: true, frames: [MININET_TERMINAL_BANNER], echo: true },
+		{ path: "/api/mininet/logs", frames: [...MININET_LOG_LINES] },
+		{ path: "/api/mininet/monitor", frames: [JSON.stringify(MININET_MONITOR_SAMPLE)] }
+	];
+
+	server.on("upgrade", (req, socket) => {
+		let url;
+		try {
+			url = new URL(req.url, `http://${HOST}`);
+		} catch {
+			socket.destroy();
+			return;
+		}
+
+		const spec = specs.find((item) => item.prefix
+			? url.pathname.startsWith(`${item.path}/`)
+			: url.pathname === item.path);
+		if (!spec) {
+			socket.destroy();
+			return;
+		}
+
+		const key = req.headers["sec-websocket-key"];
+		if (typeof key !== "string") {
+			socket.destroy();
+			return;
+		}
+
+		openSockets.add(socket);
+		socket.on("close", () => openSockets.delete(socket));
+		connections.push({ path: url.pathname, search: url.search, headers: req.headers });
+
+		// RFC 6455 §4.2.2：`Sec-WebSocket-Accept = base64(sha1(key + GUID))`
+		const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+		socket.write([
+			"HTTP/1.1 101 Switching Protocols",
+			"Upgrade: websocket",
+			"Connection: Upgrade",
+			`Sec-WebSocket-Accept: ${accept}`,
+			"",
+			""
+		].join("\r\n"));
+
+		socket.on("error", () => {});
+		// 终端有上行：把浏览器发来的一行回成 `echo:<行>`，其余通道不吃客户端帧
+		let pending = Buffer.alloc(0);
+		socket.on("data", (chunk) => {
+			if (!spec.echo)
+				return;
+			const parsed = readClientFrames(Buffer.concat([pending, chunk]));
+			pending = parsed.rest;
+			for (const frame of parsed.frames) {
+				if (frame.opcode === 0x8) {
+					socket.end();
+					return;
+				}
+				if (frame.opcode === 0x1) {
+					// `Ctrl-C` 走中断分支：回显 `^C`（发字面量 `^C` 则落到 `echo:` 分支）
+					socket.write(serverTextFrame(frame.text === "\u0003"
+						? MININET_TERMINAL_INTERRUPT_ECHO
+						: `echo:${frame.text.trim()}`));
+				}
+			}
+		});
+
+		// 等 BFF 侧 peer 打开再推：升级完成到 crossws `open` 之间还有一次事件循环
+		setTimeout(() => {
+			if (socket.destroyed)
+				return;
+			for (const frame of spec.frames) {
+				if (socket.destroyed)
+					return;
+				socket.write(serverTextFrame(frame));
+			}
+		}, 30).unref?.();
+	});
+
+	return connections;
 }
 
 /**
@@ -243,6 +475,25 @@ export async function startUpstream(port) {
 	 * 「发出去的到底是什么」，而不是只看画布上的数字。
 	 */
 	const mininetLog = [];
+	/**
+	 * 运行态（NMCPS-ADR-0022 W3）：`GET /api/mininet/start` 回的就是这个布尔值，
+	 * `POST start` / `POST stop` **真改它** —— 页面启停后再读一次必须看见变化，
+	 * 否则「启动了」只是按钮转了一圈。
+	 */
+	const mininetRun = { started: false };
+	/**
+	 * 抓包态（NMCPS-ADR-0022 W5）：`sniffer/state` 回 `{ active }`，启停真改它；
+	 * pcap 用真实 tcpdump 魔数开头，自检据此断言「字节原样下载」。
+	 */
+	const mininetSniffer = {
+		active: false,
+		pcap: Buffer.from([0xD4, 0xC3, 0xB2, 0xA1, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]),
+		// 历史与实时流是两份样本（`MININET_SNIFFER_HISTORY` / `MININET_SNIFFER_LIVE`）：
+		// 页面先回填历史，开始抓包后再追加 WS 推来的包，自检据此区分两者
+		history: [...MININET_SNIFFER_HISTORY]
+	};
+	/** `pingall` 的返回：上游 `run_pingall()` 拼的是这种逐行文本 */
+	const mininetPingOutput = ["h1->h2: 0/1, rtt min/avg/max/mdev 0.100/0.120/0.140/0.020 ms"];
 	const mininetState = {
 		hosts: {
 			h1: { name: "h1", ip: "10.0.0.1", mac: "00:00:00:00:00:01", x: 80, y: 120 },
@@ -463,7 +714,13 @@ export async function startUpstream(port) {
 		// `tenant_admin` 这个**下划线**编码，而本文件的 IAM 列表用的是点号编码（`tenant.admin`），
 		// 两者不是同一套词表 —— 没有这条角色，`/scenario/simulator` 的自检账号只有 `lab:read`，
 		// 「写动作先读能力位」的正向分支就永远测不到。
-		{ id: "r_lab_tenant_admin", tenant_id: "t_default", name: "实验台管理员", code: "tenant_admin", description: "仿真网络读写（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T09:00:00+08:00", updated_at: "2026-11-16T09:00:00+08:00", deleted_at: null }
+		{ id: "r_lab_tenant_admin", tenant_id: "t_default", name: "实验台管理员", code: "tenant_admin", description: "仿真网络读写（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T09:00:00+08:00", updated_at: "2026-11-16T09:00:00+08:00", deleted_at: null },
+		// 抓包授权（NMCPS-ADR-0022 W5）：`lab:sniffer` 必须单独授予，不能由 `tenant_admin` 推导；
+		// 自检账号额外挂这一条，才能在浏览器里走到「工具」菜单的启停 / 下载。
+		{ id: "r_lab_sniffer", tenant_id: "t_default", name: "实验台抓包", code: "lab_sniffer", description: "抓包启停与 pcap 下载（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T10:00:00+08:00", updated_at: "2026-11-16T10:00:00+08:00", deleted_at: null },
+		// 终端授权（NMCPS-ADR-0022 D6）：与抓包同一条纪律 —— 没有这条角色，自检账号的
+		// Network Tools 里只会有日志 / 监控两个标签页，Webshell 的正向分支永远测不到。
+		{ id: "r_lab_terminal", tenant_id: "t_default", name: "实验台终端", code: "lab_terminal", description: "Webshell 进入节点终端（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-17T10:00:00+08:00", updated_at: "2026-11-17T10:00:00+08:00", deleted_at: null }
 	];
 
 	/**
@@ -481,6 +738,10 @@ export async function startUpstream(port) {
 		{ id: "sr-alice", subject_type: "user", subject_id: "u_alice", role_id: "r_tenant_admin", created_at: "2026-11-04T09:00:00+08:00" },
 		// `/scenario/simulator` 的写路径自查用：给 alice 一条 `tenant_admin`（下划线编码）角色
 		{ id: "sr-alice-lab", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_tenant_admin", created_at: "2026-11-16T09:00:00+08:00" },
+		// 抓包单独授权（W5）：与上一行分开，正是要证明 `lab:sniffer` 不由 `tenant_admin` 推导
+		{ id: "sr-alice-sniffer", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_sniffer", created_at: "2026-11-16T10:00:00+08:00" },
+		// 终端单独授权（D6）：同上，`lab:terminal` 也不由 `tenant_admin` 推导
+		{ id: "sr-alice-terminal", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_terminal", created_at: "2026-11-17T10:00:00+08:00" },
 		{ id: "sr-bob", subject_type: "user", subject_id: "u_bob", role_id: "r_tenant_admin", created_at: "2026-11-04T09:01:00+08:00" },
 		{ id: "sr-orphan", subject_type: "user", subject_id: "u_ghost", role_id: "r_tenant_admin", created_at: "2026-11-04T09:02:00+08:00" }
 	];
@@ -510,11 +771,17 @@ export async function startUpstream(port) {
 	/** 最近一次列表请求的查询串（自查看「控件真的改了请求」时可直接读） */
 	const auditLog = { lastQuery: null };
 
-	/** 读并解析请求体（每个请求只能读一次：账号域与 `/auth/*` 各自在分支内调用） */
-	async function readJsonBody(req) {
+	/** 读原始请求体（multipart 也照原样交回：导入自检要取证「发出去的是不是文件」） */
+	async function readRawBody(req) {
 		let raw = "";
 		for await (const chunk of req)
 			raw += chunk;
+		return raw;
+	}
+
+	/** 读并解析请求体（每个请求只能读一次：账号域与 `/auth/*` 各自在分支内调用） */
+	async function readJsonBody(req) {
+		const raw = await readRawBody(req);
 		try {
 			return raw ? JSON.parse(raw) : undefined;
 		} catch {
@@ -1835,10 +2102,92 @@ export async function startUpstream(port) {
 
 			// ── 写：先记账再落表，自检读的是「页面发了什么」 ──
 			if (req.method !== "GET") {
-				const body = await readJsonBody(req);
-				mininetLog.push({ method: req.method, path: url.pathname, body });
+				const raw = await readRawBody(req);
+				const body = (() => {
+					try {
+						return raw ? JSON.parse(raw) : undefined;
+					} catch {
+						return undefined;
+					}
+				})();
+				mininetLog.push({ method: req.method, path: url.pathname, body, raw, contentType: req.headers["content-type"] });
 
 				const collection = segments[0];
+
+				// 导入（NMCPS-ADR-0022 W4）：真实上游只收 multipart 的 `file` 字段，
+				// 照 JSON 转发会 422 —— 自检据此断言 BFF 出站的是不是文件。
+				if (collection === "import_json") {
+					if (!String(req.headers["content-type"] ?? "").startsWith("multipart/form-data"))
+						return send(422, { detail: [{ loc: ["body", "file"], msg: "field required" }] });
+
+					const fileText = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+					const incoming = JSON.parse(fileText);
+					for (const host of incoming.hosts ?? [])
+						mininetState.hosts[host.name ?? host.id] = { name: host.name ?? host.id, ip: host.ip ?? "", mac: "00:00:00:00:00:99", x: host.x ?? 420, y: host.y ?? 60 };
+					for (const sw of incoming.switches ?? [])
+						mininetState.switches[sw.name ?? sw.id] = { name: sw.name ?? sw.id, x: sw.x ?? 420, y: sw.y ?? 140, ports: sw.ports ?? 4, of_version: null };
+					return send(200, { message: "Topology successfully imported" });
+				}
+
+				// 运行控制（ADR-0022 W3）：四个动作都真改状态 / 真回文本，
+				// 页面「启动 → 停止 → 探测 → 测速」的每一步都要能读回证据。
+				if (collection === "start") {
+					if (mininetRun.started)
+						return send(400, { detail: "network already started" });
+					mininetRun.started = true;
+					return send(200, { status: "ok" });
+				}
+
+				if (collection === "stop") {
+					mininetRun.started = false;
+					return send(200, { status: "ok" });
+				}
+
+				if (collection === "pingall") {
+					if (!mininetRun.started)
+						return send(400, { detail: "network must be started to run pingall" });
+					return send(200, mininetPingOutput.join("\n"));
+				}
+
+				if (collection === "iperf") {
+					if (!mininetRun.started)
+						return send(400, { detail: "network must be started to run iperf" });
+					if (!body?.client || !body?.server)
+						return send(422, { detail: "client and server are required" });
+					if (body.client === body.server)
+						return send(400, { detail: "client and server must be different hosts" });
+					return send(200, {
+						client: `${String(body.l4_type ?? "TCP")} ${body.client} -> ${body.server} ${body.seconds ?? 5}s: 1.02 Gbits/sec`,
+						server: `${String(body.l4_type ?? "TCP")} ${body.server}: done`
+					});
+				}
+
+				// 抓包启停（ADR-0022 W5）：形状与真实后端一致，都回 `{ active }`；
+				// 上游对**未启动**的网络回 400，页面据此把「开始」禁用掉。
+				if (collection === "sniffer" && segments[1] === "start") {
+					if (!mininetRun.started)
+						return send(400, { detail: "network must be started to begin sniffing" });
+					mininetSniffer.active = true;
+					return send(200, { active: mininetSniffer.active });
+				}
+
+				if (collection === "sniffer" && segments[1] === "stop") {
+					mininetSniffer.active = false;
+					return send(200, { active: mininetSniffer.active });
+				}
+
+				// 整表重建（W5）：清空五类节点与链路，页面重读 `GET /hosts` 必须看见空网
+				if (collection === "full_reset") {
+					mininetState.hosts = {};
+					mininetState.switches = {};
+					mininetState.routers = {};
+					mininetState.nats = {};
+					mininetState.controllers = {};
+					mininetState.links = [];
+					mininetRun.started = false;
+					mininetSniffer.active = false;
+					return send(200, { status: "ok" });
+				}
 
 				// 流表（ADR-0022 W2b）：三条写都真改表 —— 页面写完重读 `GET /flows/{sw}`
 				// 必须看得见变化，否则「加流成功」就成了空口断言。
@@ -1933,6 +2282,37 @@ export async function startUpstream(port) {
 			}
 
 			// ── 读：五类节点回对象字典、链路回数组、流表回 `ovs-ofctl` 原文 ──
+			// 导出（NMCPS-ADR-0022 W4）：真实上游回 `PlainTextResponse`，不是 JSON
+			if (segments.length === 1 && segments[0] === "export_json")
+				return sendText(200, JSON.stringify({ hosts: mininetState.hosts, switches: mininetState.switches, links: mininetState.links }, null, 4));
+			if (segments.length === 1 && segments[0] === "export_script")
+				return sendText(200, "from mininet.topo import Topo\n\ntopo = Topo()\n");
+			// 运行态（ADR-0022 W3）：上游 `GET /api/mininet/start` 回的就是裸布尔
+			if (segments.length === 1 && segments[0] === "start")
+				return send(200, mininetRun.started);
+			// 抓包读数与下载（ADR-0022 W5）：导出是 pcap 二进制，不能走 `send()`（会 JSON 化）
+			if (segments[0] === "sniffer" && segments[1] === "state")
+				return send(200, { active: mininetSniffer.active });
+			if (segments[0] === "sniffer" && segments[1] === "history")
+				return send(200, { events: mininetSniffer.history });
+			if (segments[0] === "sniffer" && segments[1] === "export") {
+				res.writeHead(200, {
+					"content-type": "application/vnd.tcpdump.pcap",
+					"content-disposition": "attachment; filename=sniffer.pcap"
+				});
+				return res.end(mininetSniffer.pcap);
+			}
+			// 接口清单（ADR-0022 D6 监控通道）：与上游同形状 `{ nodes: [{ id, type, intfs, pid }] }`，
+			// 从当前台账派生 —— `full_reset` 之后这里必须也空掉，页面才不会有可点的旧接口。
+			if (segments.length === 1 && segments[0] === "interfaces") {
+				const rows = [];
+				const buckets = [["hosts", "host"], ["switches", "switch"], ["routers", "router"], ["nats", "nat"]];
+				for (const [bucket, type] of buckets) {
+					for (const id of Object.keys(mininetState[bucket]))
+						rows.push({ id, type, intfs: [`${id}-eth0`], pid: 1000 + rows.length });
+				}
+				return send(200, { nodes: rows });
+			}
 			if (segments.length === 1 && Object.hasOwn(mininetState, segments[0])) {
 				const value = mininetState[segments[0]];
 				return send(200, Array.isArray(value) ? value : { ...value });
@@ -2068,6 +2448,10 @@ export async function startUpstream(port) {
 	server.control = control;
 	server.mininetLog = mininetLog;
 	server.mininetState = mininetState;
+	server.mininetRun = mininetRun;
+	server.mininetSniffer = mininetSniffer;
+	// 抓包实时流（NMCPS-ADR-0022 D6）：连上就推 `MININET_SNIFFER_LIVE` 那两帧
+	server.mininetSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
 
 	return server;
 }

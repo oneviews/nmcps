@@ -18,7 +18,7 @@
 #   i18n        → `✅ 文案自查 10/10 通过`
 #   governance  → `结果：N 通过 / 0 失败 / 0 告警`（check:doc-system 的小结；N 随文档增减变化，不写死）
 #   bff         → `128/128 项通过`
-#   ui          → `237/237 项通过`
+#   ui          → `272/272 项通过`
 set -eu
 
 KEYS='lint typecheck i18n governance bff ui'

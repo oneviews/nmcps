@@ -14,6 +14,9 @@ import process from "node:process";
 import {
 	LAB_FLOW_PRIORITY_MAX,
 	labFlowActionsOf,
+	labFlowClearError,
+	labFlowClearMatchOf,
+	labFlowClearPayloadOf,
 	labFlowDraftError,
 	labFlowDraftOf,
 	labFlowPayloadOf,
@@ -195,6 +198,33 @@ check("序号与上游 delete_flow_by_id() 同源：两流夹一条非流行 ⇒
 	const pageIds = labFlowRowsOf(dump).flatMap((row) => (row.id ? [row.id] : []));
 	assert.deepEqual(pageIds, [1, 2]);
 	assert.equal(labFlowRowsOf(dump).filter((row) => row.id).length, 2);
+});
+
+check("清流匹配域归一：去空白，空串 / 空白归一为空（= 清整表）", () => {
+	assert.equal(labFlowClearMatchOf("  ip,nw_dst=10.0.0.9  "), "ip,nw_dst=10.0.0.9");
+	assert.equal(labFlowClearMatchOf("   "), "");
+	assert.equal(labFlowClearMatchOf(""), "");
+});
+
+check("清流校验只拦 `actions=`：留空与正常匹配域都放行", () => {
+	assert.equal(labFlowClearError(""), undefined, "留空 = 清整表，必须放行");
+	assert.equal(labFlowClearError("   "), undefined);
+	assert.equal(labFlowClearError("ip,nw_dst=10.0.0.9"), undefined);
+	for (const match of ["actions=output:1", "Actions=drop", "ip,nw_dst=1.1.1.1 actions=output:2"]) {
+		assert.equal(labFlowClearError(match), "matchInvalid", `match=${JSON.stringify(match)}`);
+	}
+});
+
+check("清流请求体：匹配域留空时整个 `match` 字段不发送（上游据此清整表）", () => {
+	assert.deepEqual(labFlowClearPayloadOf("sw1", ""), { switch: "sw1" });
+	assert.deepEqual(labFlowClearPayloadOf("sw1", "   "), { switch: "sw1" });
+});
+
+check("清流请求体：带了匹配域就原样透传（去空白，不剥动作、不补 table）", () => {
+	assert.deepEqual(
+		labFlowClearPayloadOf("sw1", " ip,nw_dst=10.0.0.9 "),
+		{ switch: "sw1", match: "ip,nw_dst=10.0.0.9" }
+	);
 });
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
