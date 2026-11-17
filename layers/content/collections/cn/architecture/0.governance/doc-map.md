@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.40.0
+version: 0.46.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-16"
+updatedAt: "2026-11-17"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -118,6 +118,7 @@ tags:
 | NMCPS-ADR-0020 | Mininet 只读 BFF 通道 | 5 | informative | rec.adr.0020 | baseline | records/adr/adr-0020.md |
 | NMCPS-ADR-0021 | 仿真网络租户隔离 | 5 | informative | rec.adr.0021 | baseline | records/adr/adr-0021.md |
 | NMCPS-ADR-0022 | 实验台全量并入与旧前端退役 | 5 | informative | rec.adr.0022 | baseline | records/adr/adr-0022.md |
+| NMCPS-ADR-0023 | 实验网络台账与上游对账（显式接管） | 5 | informative | rec.adr.0023 | baseline | records/adr/adr-0023.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -233,3 +234,4 @@ tags:
 | 2026-11-15 | 0.43.0 | **ADR-0021 P2 落码并迁移仿真页**：`labLedger.ts` 以签名会话的 `tenant_id` + `engine` + BFF 资源 ID 为键记录网络归属，列表出口只保留本租户网络，节点 / 链路在台账未命中或清单外统一回 `404 lab_resource_not_found` 且上游零命中；无实例租户仍回 `503 tenant_runtime_unavailable`。`check:lab-bff` 39 → 51 项（⑥ 台账与清单出口、⑦ 台账未命中与空列表）。Mininet 路由 `/api/lab/**`、`MININET_ROUTES`、通道类型、BFF 实现（`labGuard` / `labLedger` / `labEgress` / `mininet*`）与自查脚本整体迁入 `layers/scenario`，删除空壳 `layers/lab`；新增 `/scenario/simulator`（读取台账 + 五类节点 + 链路，投影到 `TopologyCanvas`），旧 `/scenario/sim-generation` 仅保留重定向。 |
 | 2026-11-16 | 0.44.0 | 租户管理员 `tenantadmin` 的默认口令按需求方要求由 `Tenant@123456` 改为 `admin_2026`：只动单一事实源 `shared/constants/demoAccounts.ts`、`check:ui` 的预填断言与 IAM 架构 §7.7（`NMCPS-ARCH-003` → 0.8.1）；超级管理员 `admin` / `Admin@123456` 与预填机制不变，上游 IAM 账号口令需另行按其改密流程同步。 |
 | 2026-11-16 | 0.45.0 | 登记记录层 ADR `NMCPS-ADR-0022`「Mininet 实验台全量功能并入与旧前端退役」：把旧 Vite 前端（`mininet_gui_frontend`，13 组件 / 8704 行 / ~35 REST + 5 WS）的全部能力并入 `/scenario/simulator`，复刻验收后退役旧前端、`services/mininet-api` 只留纯后端。裁决包括：28 条写端点按 `(method, 模板)` 逐条登记并按 `lab:create` / `lab:operate` / `lab:delete` / `lab:sniffer` 分档（`full_reset`、`import_json` 双权限）；`channel` 能力位改为按会话计算；写操作先审计后执行（`.data/audit/lab-audit.jsonl`，失败回 `503 audit_unavailable`）；同一网络只允许一个在途写（`409 lab_operation_in_progress`）；四个 WebSocket 走同源 `/lab-ws/*` + 60 秒一次性 HMAC 票（`401 lab_ws_ticket_invalid`）；导出走独立内容类型通道（`text/plain` / pcap 附件）；上游 CORS 关闭。同时给出旧组件到新页面的逐项映射与 W1~W6 交付门禁。 |
+| 2026-11-17 | 0.46.0 | 登记记录层 ADR `NMCPS-ADR-0023`「实验网络台账与上游对账（显式接管）」：ADR-0021 P2 把台账资源清单定为租户可见边界、ADR-0022 只让**经 BFF 的写**维护它，旧前端 / 直连上游的写不会进清单（现场：上游 8 主机 + 7 交换机 + 14 链路，台账仍停在 9 节点 / 8 链路，交集只剩 6 节点 4 链路，另有 `r1 c1 h9` 三个幽灵 id）。裁决新增一条**只存在于 BFF** 的 `POST /api/lab/networks/{id}/sync`：双权限位 `lab:create` + `lab:delete`、逐字确认 `{ confirm: "<network_id>" }`、先审计后执行、同网络单写锁；读 `/hosts` `/switches` `/routers` `/nats` `/controllers` 与 `/links` 后**整体重写**资源清单，任一读取失败即原样回上游状态且**不落盘**，六类全空则写空清单（准确事实）。不做隐式自动对账（否则直连写会绕过权限门禁扩大可见面）；控制器关联与 `pingall` 不通列为范围之外。验收：`check:lab-bff` ⑭ 新增 14 条、`check:ui` 11.6b 新增 4 条（含「缺 `lab:delete` 时入口禁用」负例）。 |
