@@ -295,8 +295,15 @@ export function attachSnifferSocket(server, options = {}) {
 		].join("\r\n"));
 
 		socket.on("error", () => {});
-		// 终端有上行：把浏览器发来的一行回成 `echo:<行>`，其余通道不吃客户端帧
+		/*
+		 * 终端有上行：假上游按**真 PTY 的形状**回答（NMCPS-ADR-0022 W8）——
+		 * 收到的可打印字节原样回显（面板逐键发送，回显由上游给，不是本地画的），
+		 * 换行（`\r` / `\n` / `\r\n`）把整行回成 `echo:<line>`，`0x03` 走中断分支回 `^C`。
+		 * 其余通道不吃客户端帧。
+		 */
 		let pending = Buffer.alloc(0);
+		/** 假 PTY 的行缓冲：回车才回一行 `echo:<line>`，与真 bash 的「回车才执行」一致 */
+		let line = "";
 		socket.on("data", (chunk) => {
 			if (!spec.echo)
 				return;
@@ -307,11 +314,25 @@ export function attachSnifferSocket(server, options = {}) {
 					socket.end();
 					return;
 				}
-				if (frame.opcode === 0x1) {
-					// `Ctrl-C` 走中断分支：回显 `^C`（发字面量 `^C` 则落到 `echo:` 分支）
-					socket.write(serverTextFrame(frame.text === "\u0003"
-						? MININET_TERMINAL_INTERRUPT_ECHO
-						: `echo:${frame.text.trim()}`));
+				if (frame.opcode !== 0x1)
+					continue;
+
+				// `Ctrl-C` 走中断分支：回显 `^C`（发字面量 `^C` 则落到 `echo:` 分支）
+				if (frame.text === "\u0003") {
+					line = "";
+					socket.write(serverTextFrame(MININET_TERMINAL_INTERRUPT_ECHO));
+					continue;
+				}
+
+				const typed = frame.text.replace(/\r\n|[\r\n]/g, "");
+				if (typed) {
+					line += typed;
+					socket.write(serverTextFrame(typed));
+				}
+				if (typed.length !== frame.text.length) {
+					socket.write(serverTextFrame("\r\n"));
+					socket.write(serverTextFrame(`echo:${line}\r\n`));
+					line = "";
 				}
 			}
 		});

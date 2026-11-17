@@ -808,10 +808,18 @@
 			"description": "读取实验网台账的实时 Mininet 拓扑：主机、交换机、路由器、NAT、控制器及其链路。",
 			"title": "仿真网络验证",
 			"toolbar": {
-				"refresh": "刷新",
-				"add": "新增",
-				"addPalette": "新增节点",
-				"addHint": "点击类型直接新增，或把类型拖到画布上的落点"
+				"refresh": "刷新"
+			},
+			"palette": {
+				"title": "节点面板",
+				"expand": "展开节点面板",
+				"collapse": "收起节点面板",
+				"hint": "点一下按默认落点新增，或把图标拖到画布上的落点"
+			},
+			"panel": {
+				"title": "实验台",
+				"expand": "展开右栏面板",
+				"collapse": "收起右栏面板"
 			},
 			"stats": {
 				"network": "网络",
@@ -864,14 +872,14 @@
 				"terminal": {
 					"node": "节点",
 					"nodePlaceholder": "选择要进入的节点",
-					"connect": "连接",
-					"disconnect": "断开",
-					"send": "发送",
-					"empty": "连接后这里是节点终端的输出。",
-					"commandPlaceholder": "输入命令后回车",
+					"open": "打开会话",
+					"closeSession": "关闭 {node} 的会话",
+					"empty": "选一个节点，点「打开会话」进入它的终端。",
+					"idle": "会话已就绪：点一下终端就能开始输入。",
+					"keysHint": "点一下终端直接输入；Ctrl-C 中断，清屏只清本地转写。",
 					"interrupt": "中断（Ctrl-C）",
 					"clear": "清屏",
-					"closedHint": "连接已断开：上游会话结束或网络已停止，重新点「连接」即可继续，已输出内容保留。"
+					"closedHint": "会话已断开：上游会话结束或网络已停止，重新点「打开会话」即可继续，已输出内容保留。"
 				},
 				"logs": {
 					"hint": "打开即跟随上游 mininet.log（最近 1000 行 + 实时追加）。",

@@ -105,60 +105,11 @@
 					@click="load()"
 				/>
 				<!--
-					工具栏节点面板（NMCPS-ADR-0022 W2 补强）：五个类型都**可拖**，拖到画布上就落在
-					放手的位置；点一下则用默认落点打开同一张表单（校验与请求体只有一份）。
-
-					用 `UPopover` 而不是 `UDropdownMenu`：菜单项按 `menuitem` 语义会在按下时收起，
-					原生 HTML5 拖放会把作为拖源的菜单一起拆掉 —— 拖到一半源没了就没有 `drop`。
+					节点面板不在工具栏（NMCPS-ADR-0022 W7）：五个类型改成拓扑图右侧的纵向图标列
+					（`SimulatorNodePaletteRail`）—— 图标常驻，点一下用默认落点、拖到画布上用
+					放手位置。1.0 把这张面板放在侧栏里，2.0 若塞回工具栏的 `UPopover`，就要
+					「先点开菜单再拖出来」，而菜单一收起拖源就没了。
 				-->
-				<UPopover v-if="canCreate" v-model:open="paletteOpen" :content="{ align: 'start' }">
-					<UButton
-						data-testid="mininet-add-menu"
-						size="xs"
-						color="neutral"
-						variant="subtle"
-						icon="carbon:add"
-						trailing-icon="carbon:chevron-down"
-						:label="$t('pages.scenario-simulator.toolbar.add')"
-					/>
-					<template #content>
-						<div data-testid="mininet-add-palette" class="w-64 space-y-1.5 p-2">
-							<p class="text-[11px] font-medium text-(--ui-text-highlighted)">
-								{{ $t("pages.scenario-simulator.toolbar.addPalette") }}
-							</p>
-							<p class="text-[11px] leading-4 text-(--ui-text-muted)">
-								{{ $t("pages.scenario-simulator.toolbar.addHint") }}
-							</p>
-							<div class="grid grid-cols-2 gap-1">
-								<!--
-									拖源是这层 div；按钮上也显式 `draggable` —— 按下的若是表单控件，
-									Chrome 只在被按元素自己可拖时才启动拖放，只靠祖先会拖不动。
-								-->
-								<div
-									v-for="kind in LAB_NODE_KINDS"
-									:key="kind"
-									:data-testid="`mininet-add-kind-${kind}`"
-									:data-kind="kind"
-									draggable="true"
-									class="cursor-grab active:cursor-grabbing"
-									@dragstart="onPaletteDragStart($event, kind)"
-									@dragend="onPaletteDragEnd"
-									@click="pickKind(kind)"
-								>
-									<UButton
-										size="xs"
-										color="neutral"
-										variant="subtle"
-										class="w-full justify-start"
-										draggable="true"
-										:icon="NODE_KIND_ICONS[kind]"
-										:label="$t(`pages.scenario-simulator.kinds.${kind}`)"
-									/>
-								</div>
-							</div>
-						</div>
-					</template>
-				</UPopover>
 			</div>
 		</Teleport>
 
@@ -242,458 +193,507 @@
 						{{ $t("pages.scenario-simulator.empty.topology") }}
 					</p>
 				</div>
+				<!--
+					节点面板（复刻 1.0 `Side.vue` 的 palette，NMCPS-ADR-0022 W7）：贴着拓扑图右侧
+					纵向排列五个类型图标。点一下 = 用默认落点打开表单；拖到画布上 = 用放手位置。
+					两条路都进同一张 `NodeFormModal`（校验与请求体只有一份）。
+				-->
+				<SimulatorNodePaletteRail
+					v-if="canCreate"
+					:kinds="LAB_NODE_KINDS"
+					:icons="NODE_KIND_ICONS"
+					:hint="$t('pages.scenario-simulator.palette.hint')"
+					@pick="pickKind"
+					@dragstart="onPaletteDragStart"
+					@dragend="onPaletteDragEnd"
+				/>
 			</div>
 
-			<aside data-testid="mininet-detail" class="flex w-full shrink-0 flex-col gap-3 lg:w-72">
-				<!--
-					运行控制（NMCPS-ADR-0022 W3）：`start` 要 `lab:create`，`stop` / `pingall` / `iperf` 要 `lab:operate`。
-
-					状态读 `GET /api/lab/start`（上游 `app.net.is_started`）：读不到就写「未知」，**不假设
-					「应该没启动」** —— 猜错会让启动按钮对着一个已在跑的网络发请求，再拿 400 当失败。
-					按钮的禁用条件跟着运行态走：已启动不给启动、没启动不给停 / 不给跑测试，
-					免得把「状态坏了」当成「操作失败」。
-				-->
-				<div data-testid="mininet-run" class="rounded-lg border border-(--ui-border) p-3">
-					<div class="mb-2 flex items-center justify-between gap-2">
-						<h2 class="text-sm font-semibold">
-							{{ $t("pages.scenario-simulator.run.title") }}
+			<!--
+				右栏复刻 1.0 版式（NMCPS-ADR-0022 W7）：一整块可折叠面板 —— 顶部一行标题 +
+				折叠按钮，下面是「运行 / 网络 / 详情」三个分组，组标题带分隔线（1.0 `Side.vue`
+				的 `.sidebar-group h2` 同款），动作按钮左侧对齐、图标 + 文字。
+				折叠只收宽度，不动画布：收起后留一条窄条，点箭头即展开。
+			-->
+			<aside
+				data-testid="mininet-detail"
+				class="flex w-full shrink-0 flex-col"
+				:class="panelOpen ? 'lg:w-80' : 'lg:w-10'"
+			>
+				<div class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--ui-border)">
+					<div
+						class="flex items-center gap-2 border-b border-(--ui-border) px-2 py-2"
+						:class="panelOpen ? 'justify-between' : 'justify-center'"
+					>
+						<h2 v-if="panelOpen" class="truncate text-[13px] font-semibold tracking-wide">
+							{{ $t("pages.scenario-simulator.panel.title") }}
 						</h2>
-						<UBadge data-testid="mininet-run-state" size="sm" variant="subtle" :color="runStateColor">
-							{{ runStateLabel }}
-						</UBadge>
-					</div>
-
-					<div class="flex flex-wrap items-center gap-1.5">
 						<UButton
-							v-if="canOperate"
-							data-testid="mininet-run-ping"
+							data-testid="mininet-detail-toggle"
 							size="xs"
 							color="neutral"
-							variant="subtle"
-							icon="carbon:connect"
-							:label="$t('pages.scenario-simulator.run.ping')"
-							:loading="runAction === 'pingall'"
-							:disabled="runState !== true || runBusy"
-							@click="runPingall"
+							variant="ghost"
+							class="size-7 justify-center"
+							:icon="panelOpen ? 'carbon:chevron-right' : 'carbon:chevron-left'"
+							:aria-label="panelOpen
+								? $t('pages.scenario-simulator.panel.collapse')
+								: $t('pages.scenario-simulator.panel.expand')"
+							@click="panelOpen = !panelOpen"
 						/>
 					</div>
-
-					<!--
-						抓包读数（W5）：只在有 `lab:sniffer` 时显示，动作入口在「运行」旁边的「工具」菜单。
-						这里只报状态 —— 同一动作全页只有一个入口（NMCPS-ARCH-006 §4）。
-					-->
-					<p
-						v-if="canSniff"
-						data-testid="mininet-sniffer-state"
-						class="mt-2 text-[11px] text-(--ui-text-muted)"
-					>
-						{{ $t("pages.scenario-simulator.sniffer.title") }} · {{ snifferStateLabel }}
-					</p>
-					<p v-if="canSniff && snifferError" data-testid="mininet-sniffer-error" class="mt-1 text-xs text-(--ui-text-error)">
-						{{ snifferError }}
-					</p>
-
-					<!--
-						实时包列表（`/lab-ws/sniffer`，NMCPS-ADR-0022 D6）：抓包中自动连流，
-						未抓包时只展示 `sniffer/history` 回填的历史。载荷只在本机渲染，不入审计。
-					-->
-					<div v-if="canSniff" data-testid="mininet-sniffer-panel" class="mt-2 rounded-lg border border-(--ui-border)">
-						<div class="flex items-center justify-between gap-2 border-b border-(--ui-border) px-2 py-1">
-							<h3 class="text-[11px] font-medium">
-								{{ $t("pages.scenario-simulator.sniffer.streamTitle") }}
-							</h3>
-							<UBadge data-testid="mininet-sniffer-stream-state" size="sm" variant="subtle" :color="snifferStreamColor">
-								{{ snifferStreamLabel }}
-							</UBadge>
-						</div>
-						<p v-if="!snifferPackets.length" data-testid="mininet-sniffer-empty" class="px-2 py-2 text-[11px] text-(--ui-text-muted)">
-							{{ $t("pages.scenario-simulator.sniffer.streamEmpty") }}
-						</p>
-						<ul v-else data-testid="mininet-sniffer-packets" class="max-h-44 divide-y divide-(--ui-border) overflow-auto text-[11px]">
-							<li
-								v-for="packet in snifferPackets"
-								:key="packet.id"
-								data-testid="mininet-sniffer-packet"
-								class="flex items-center gap-2 px-2 py-1"
-							>
-								<span class="shrink-0 font-mono">{{ packet.proto }}</span>
-								<span class="truncate font-mono">{{ packet.src || "—" }} → {{ packet.dst || "—" }}</span>
-								<span class="ml-auto shrink-0 text-(--ui-text-muted)">{{ packet.len ?? "—" }}</span>
-							</li>
-						</ul>
-						<p v-if="snifferStreamError" data-testid="mininet-sniffer-stream-error" class="border-t border-(--ui-border) px-2 py-1 text-[11px] text-(--ui-text-error)">
-							{{ snifferStreamError }}
-						</p>
-					</div>
-
-					<!-- 失败原话（上游 400 / 403 / 409 / 503）逐字显示：不吞 4xx，也不自造文案 -->
-					<p v-if="runError" data-testid="mininet-run-error" class="mt-2 text-xs text-(--ui-text-error)">
-						{{ runError }}
-					</p>
-
-					<template v-if="pingOutput">
-						<h3 class="mt-2 text-xs font-medium">
-							{{ $t("pages.scenario-simulator.run.pingOutput") }}
-						</h3>
-						<pre
-							data-testid="mininet-run-ping-output"
-							class="mt-1 max-h-32 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
-						>{{ pingOutput }}</pre>
-					</template>
-
-					<!-- 吞吐测试（`lab:operate`）：两台 host 之间跑 `net.iperf()`，结果两侧原文照登 -->
-					<div v-if="canOperate" class="mt-3 space-y-1.5 rounded border border-(--ui-border) p-2">
-						<h3 class="text-xs font-medium">
-							{{ $t("pages.scenario-simulator.run.iperfTitle") }}
-						</h3>
-						<div class="grid grid-cols-2 gap-1.5">
-							<UFormField
-								:label="$t('pages.scenario-simulator.run.iperfClient')"
-								:error="iperfError === 'clientRequired' ? iperfErrorText : undefined"
-							>
-								<USelect
-									v-model="iperfDraft.client"
-									data-testid="mininet-iperf-client"
-									size="xs"
-									class="w-full"
-									:items="hostItems"
-									:placeholder="$t('pages.scenario-simulator.run.iperfHostPlaceholder')"
-								/>
-							</UFormField>
-							<UFormField
-								:label="$t('pages.scenario-simulator.run.iperfServer')"
-								:error="iperfError === 'serverRequired' || iperfError === 'sameEndpoint' ? iperfErrorText : undefined"
-							>
-								<USelect
-									v-model="iperfDraft.server"
-									data-testid="mininet-iperf-server"
-									size="xs"
-									class="w-full"
-									:items="hostItems"
-									:placeholder="$t('pages.scenario-simulator.run.iperfHostPlaceholder')"
-								/>
-							</UFormField>
-							<UFormField :label="$t('pages.scenario-simulator.run.iperfL4')">
-								<USelect
-									v-model="iperfDraft.l4Type"
-									data-testid="mininet-iperf-l4"
-									size="xs"
-									class="w-full"
-									:items="iperfL4Items"
-								/>
-							</UFormField>
-							<UFormField
-								:label="$t('pages.scenario-simulator.run.iperfSeconds')"
-								:error="iperfError === 'secondsInvalid' ? iperfErrorText : undefined"
-							>
-								<UInput
-									v-model="iperfDraft.seconds"
-									data-testid="mininet-iperf-seconds"
-									size="xs"
-									class="w-full"
-									type="number"
-									min="1"
-									:max="LAB_IPERF_SECONDS_MAX"
-									:placeholder="$t('pages.scenario-simulator.run.iperfSecondsHint')"
-								/>
-							</UFormField>
-						</div>
-						<p class="text-[11px] text-(--ui-text-muted)">
-							{{ $t("pages.scenario-simulator.run.iperfSecondsHint") }}
-						</p>
-						<UButton
-							data-testid="mininet-iperf-submit"
-							class="w-full justify-center"
-							size="xs"
-							color="primary"
-							variant="subtle"
-							icon="carbon:chart-line-smooth"
-							:label="$t('pages.scenario-simulator.run.iperfSubmit')"
-							:loading="runAction === 'iperf'"
-							:disabled="runState !== true || runBusy"
-							@click="runIperf"
-						/>
-						<template v-if="iperfResult">
-							<p class="text-[11px] font-medium">
-								{{ $t("pages.scenario-simulator.run.iperfClientResult") }}
-							</p>
-							<pre
-								data-testid="mininet-iperf-client-output"
-								class="max-h-32 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
-							>{{ iperfResult.client || $t("pages.scenario-simulator.run.pingEmpty") }}</pre>
-							<p class="text-[11px] font-medium">
-								{{ $t("pages.scenario-simulator.run.iperfServerResult") }}
-							</p>
-							<pre
-								data-testid="mininet-iperf-server-output"
-								class="max-h-32 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
-							>{{ iperfResult.server || $t("pages.scenario-simulator.run.pingEmpty") }}</pre>
-						</template>
-					</div>
-				</div>
-
-				<div class="rounded-lg border border-(--ui-border) p-3">
-					<h2 class="mb-2 text-sm font-semibold">
-						{{ $t("pages.scenario-simulator.network.title") }}
-					</h2>
-					<dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-						<template v-for="row in networkRows" :key="row.key">
-							<dt class="text-(--ui-text-muted)">
-								{{ row.label }}
-							</dt>
-							<dd class="truncate">
-								{{ row.value }}
-							</dd>
-						</template>
-					</dl>
-				</div>
-
-				<div class="rounded-lg border border-(--ui-border) p-3">
-					<h2 class="mb-2 text-sm font-semibold">
-						{{ $t("pages.scenario-simulator.detail.title") }}
-					</h2>
-
-					<template v-if="selectedLink">
-						<div class="flex items-center justify-between gap-2">
-							<span class="truncate font-medium">{{ selectedLink.source }} ↔ {{ selectedLink.target }}</span>
-							<UBadge size="sm" variant="subtle" color="success">
-								{{ $t("pages.scenario-simulator.detail.link") }}
-							</UBadge>
-						</div>
-						<dl class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.scenario-simulator.detail.from") }}
-							</dt>
-							<dd class="truncate">
-								{{ selectedLink.source }}
-							</dd>
-							<dt class="text-(--ui-text-muted)">
-								{{ $t("pages.scenario-simulator.detail.to") }}
-							</dt>
-							<dd class="truncate">
-								{{ selectedLink.target }}
-							</dd>
-						</dl>
-						<UButton
-							v-if="canOperate"
-							data-testid="mininet-remove-link"
-							class="mt-3 w-full justify-center"
-							size="xs"
-							color="error"
-							variant="subtle"
-							icon="carbon:unlink"
-							:label="$t('pages.scenario-simulator.edit.removeLink')"
-							@click="askRemoveLink"
-						/>
-					</template>
-
-					<template v-else-if="selectedNode">
-						<div class="flex items-center justify-between gap-2">
-							<span class="truncate font-medium">{{ selectedNode.positioned.label }}</span>
-							<UBadge size="sm" variant="subtle" color="neutral">
-								{{ selectedNode.kind }}
-							</UBadge>
-						</div>
-						<dl class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-							<template v-for="row in nodeRows" :key="row.key">
-								<dt class="text-(--ui-text-muted)">
-									{{ row.label }}
-								</dt>
-								<dd class="truncate">
-									{{ row.value }}
-								</dd>
-							</template>
-						</dl>
-
+					<div v-show="panelOpen" class="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
 						<!--
-							交换机附加项（NMCPS-ADR-0022 W2 / W2b）：OpenFlow 版本与流表写入（`lab:operate`）。
-							流表落库在交换机侧（`ovs-ofctl`），页面只呈现原文 —— 解析归后端；
-							单条删除的行号按「含 actions= 的行」计，口径见 labFlowRowsOf()。
+							运行控制（NMCPS-ADR-0022 W3）：`start` 要 `lab:create`，`stop` / `pingall` / `iperf` 要 `lab:operate`。
+
+							状态读 `GET /api/lab/start`（上游 `app.net.is_started`）：读不到就写「未知」，**不假设
+							「应该没启动」** —— 猜错会让启动按钮对着一个已在跑的网络发请求，再拿 400 当失败。
+							按钮的禁用条件跟着运行态走：已启动不给启动、没启动不给停 / 不给跑测试，
+							免得把「状态坏了」当成「操作失败」。
 						-->
-						<div v-if="selectedNode.kind === 'switch'" class="mt-3 space-y-2">
-							<UFormField v-if="canOperate" :label="$t('pages.scenario-simulator.edit.openflow')">
-								<USelect
-									data-testid="mininet-openflow"
-									size="xs"
-									class="w-full"
-									:items="openflowItems"
-									:model-value="openflowValue"
-									@update:model-value="applyOpenflow"
-								/>
-							</UFormField>
-							<div>
-								<div class="mb-1 flex items-center justify-between gap-2">
-									<h3 class="text-xs font-medium">
-										{{ $t("pages.scenario-simulator.flows.title") }}
-									</h3>
-									<div class="flex items-center gap-1">
-										<!--
-											清流（`lab:operate`）：批量 `DELETE /flows`，留空 = 清整表。
-											按钮常驻但无流时禁用 —— 让「没有可删的」和「没权限」在视觉上分开。
-										-->
-										<UButton
-											v-if="canOperate"
-											data-testid="mininet-flow-clear"
-											size="xs"
-											color="error"
-											variant="ghost"
-											icon="carbon:delete"
-											:disabled="!flowRows.length || acting"
-											:aria-label="$t('pages.scenario-simulator.flows.clear')"
-											@click="openClearFlows"
-										/>
-										<UButton
-											v-if="canOperate"
-											data-testid="mininet-flow-reload"
-											size="xs"
-											color="neutral"
-											variant="ghost"
-											icon="carbon:renew"
-											:aria-label="$t('pages.scenario-simulator.flows.reload')"
-											@click="reloadFlows"
-										/>
-									</div>
-								</div>
-								<p v-if="flowLoading" class="text-xs text-(--ui-text-muted)">
-									{{ $t("pages.scenario-simulator.flows.loading") }}
-								</p>
-								<p v-else-if="flowError" data-testid="mininet-flow-error" class="text-xs text-(--ui-text-error)">
-									{{ flowError }}
-								</p>
-								<template v-else>
-									<div
-										v-if="flowRows.length"
-										data-testid="mininet-flows"
-										class="max-h-40 space-y-1 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4"
-									>
-										<div
-											v-for="(row, index) in flowRows"
-											:key="`${row.id ?? 'note'}-${index}`"
-											class="flex items-start gap-1"
-										>
-											<code class="min-w-0 flex-1 break-all">{{ row.text }}</code>
-											<UButton
-												v-if="canOperate && row.id"
-												data-testid="mininet-flow-remove"
-												:data-flow-id="row.id"
-												size="xs"
-												color="error"
-												variant="ghost"
-												icon="carbon:trash-can"
-												:aria-label="$t('pages.scenario-simulator.flows.remove', { id: row.id })"
-												@click="removeFlow(row.id)"
-											/>
-										</div>
-									</div>
-									<p v-else data-testid="mininet-flow-empty" class="text-xs text-(--ui-text-muted)">
-										{{ $t("pages.scenario-simulator.flows.empty") }}
-									</p>
-								</template>
+						<div data-testid="mininet-run">
+							<div class="mb-2 flex items-center justify-between gap-2 border-b border-(--ui-border) pb-1">
+								<h2 class="text-[13px] font-semibold tracking-wide">
+									{{ $t("pages.scenario-simulator.run.title") }}
+								</h2>
+								<UBadge data-testid="mininet-run-state" size="sm" variant="subtle" :color="runStateColor">
+									{{ runStateLabel }}
+								</UBadge>
 							</div>
 
-							<!-- 写失败（加流 / 删流）原话照实显示：页面不吞上游 4xx，也不自造文案 -->
-							<p v-if="actionError" data-testid="lab-flow-error" class="text-xs text-(--ui-text-error)">
-								{{ actionError }}
+							<div class="flex">
+								<UButton
+									v-if="canOperate"
+									data-testid="mininet-run-ping"
+									class="w-full justify-start"
+									size="xs"
+									color="neutral"
+									variant="subtle"
+									icon="carbon:connect"
+									:label="$t('pages.scenario-simulator.run.ping')"
+									:loading="runAction === 'pingall'"
+									:disabled="runState !== true || runBusy"
+									@click="runPingall"
+								/>
+							</div>
+
+							<!--
+								抓包读数（W5）：只在有 `lab:sniffer` 时显示，动作入口在「运行」旁边的「工具」菜单。
+								这里只报状态 —— 同一动作全页只有一个入口（NMCPS-ARCH-006 §4）。
+							-->
+							<p
+								v-if="canSniff"
+								data-testid="mininet-sniffer-state"
+								class="mt-2 text-[11px] text-(--ui-text-muted)"
+							>
+								{{ $t("pages.scenario-simulator.sniffer.title") }} · {{ snifferStateLabel }}
+							</p>
+							<p v-if="canSniff && snifferError" data-testid="mininet-sniffer-error" class="mt-1 text-xs text-(--ui-text-error)">
+								{{ snifferError }}
 							</p>
 
-							<!-- 加流（lab:operate）：动作必填，其余留空走上游默认 -->
-							<div v-if="canOperate" class="space-y-1.5 rounded border border-(--ui-border) p-2">
-								<!-- 就地报错：三条校验各落到出错的那个字段，不再挤在优先级下面 -->
-								<UFormField
-									:label="$t('pages.scenario-simulator.flows.match')"
-									:error="flowDraftError === 'matchInvalid' ? flowDraftErrorText : undefined"
-								>
-									<UInput
-										v-model="flowDraft.match"
-										data-testid="lab-flow-match"
-										size="xs"
-										class="w-full"
-										:placeholder="$t('pages.scenario-simulator.flows.matchPlaceholder')"
-									/>
-								</UFormField>
-								<UFormField
-									:label="$t('pages.scenario-simulator.flows.actions')"
-									:error="flowDraftError === 'actionsRequired' ? flowDraftErrorText : undefined"
-								>
-									<UInput
-										v-model="flowDraft.actions"
-										data-testid="lab-flow-actions"
-										size="xs"
-										class="w-full"
-										:placeholder="$t('pages.scenario-simulator.flows.actionsPlaceholder')"
-									/>
-								</UFormField>
-								<UFormField
-									:label="$t('pages.scenario-simulator.flows.priority')"
-									:error="flowDraftError === 'priorityInvalid' ? flowDraftErrorText : undefined"
-								>
-									<UInput
-										v-model="flowDraft.priority"
-										data-testid="lab-flow-priority"
-										size="xs"
-										class="w-full"
-										type="number"
-										min="0"
-										:max="LAB_FLOW_PRIORITY_MAX"
-										:placeholder="$t('pages.scenario-simulator.flows.priorityPlaceholder')"
-									/>
-								</UFormField>
+							<!--
+								实时包列表（`/lab-ws/sniffer`，NMCPS-ADR-0022 D6）：抓包中自动连流，
+								未抓包时只展示 `sniffer/history` 回填的历史。载荷只在本机渲染，不入审计。
+							-->
+							<div v-if="canSniff" data-testid="mininet-sniffer-panel" class="mt-2 rounded-lg border border-(--ui-border)">
+								<div class="flex items-center justify-between gap-2 border-b border-(--ui-border) px-2 py-1">
+									<h3 class="text-[11px] font-medium">
+										{{ $t("pages.scenario-simulator.sniffer.streamTitle") }}
+									</h3>
+									<UBadge data-testid="mininet-sniffer-stream-state" size="sm" variant="subtle" :color="snifferStreamColor">
+										{{ snifferStreamLabel }}
+									</UBadge>
+								</div>
+								<p v-if="!snifferPackets.length" data-testid="mininet-sniffer-empty" class="px-2 py-2 text-[11px] text-(--ui-text-muted)">
+									{{ $t("pages.scenario-simulator.sniffer.streamEmpty") }}
+								</p>
+								<ul v-else data-testid="mininet-sniffer-packets" class="max-h-44 divide-y divide-(--ui-border) overflow-auto text-[11px]">
+									<li
+										v-for="packet in snifferPackets"
+										:key="packet.id"
+										data-testid="mininet-sniffer-packet"
+										class="flex items-center gap-2 px-2 py-1"
+									>
+										<span class="shrink-0 font-mono">{{ packet.proto }}</span>
+										<span class="truncate font-mono">{{ packet.src || "—" }} → {{ packet.dst || "—" }}</span>
+										<span class="ml-auto shrink-0 text-(--ui-text-muted)">{{ packet.len ?? "—" }}</span>
+									</li>
+								</ul>
+								<p v-if="snifferStreamError" data-testid="mininet-sniffer-stream-error" class="border-t border-(--ui-border) px-2 py-1 text-[11px] text-(--ui-text-error)">
+									{{ snifferStreamError }}
+								</p>
+							</div>
+
+							<!-- 失败原话（上游 400 / 403 / 409 / 503）逐字显示：不吞 4xx，也不自造文案 -->
+							<p v-if="runError" data-testid="mininet-run-error" class="mt-2 text-xs text-(--ui-text-error)">
+								{{ runError }}
+							</p>
+
+							<template v-if="pingOutput">
+								<h3 class="mt-2 text-xs font-medium">
+									{{ $t("pages.scenario-simulator.run.pingOutput") }}
+								</h3>
+								<pre
+									data-testid="mininet-run-ping-output"
+									class="mt-1 max-h-32 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
+								>{{ pingOutput }}</pre>
+							</template>
+
+							<!-- 吞吐测试（`lab:operate`）：两台 host 之间跑 `net.iperf()`，结果两侧原文照登 -->
+							<div v-if="canOperate" class="mt-3 space-y-1.5 rounded border border-(--ui-border) p-2">
+								<h3 class="text-xs font-medium">
+									{{ $t("pages.scenario-simulator.run.iperfTitle") }}
+								</h3>
+								<div class="grid grid-cols-2 gap-1.5">
+									<UFormField
+										:label="$t('pages.scenario-simulator.run.iperfClient')"
+										:error="iperfError === 'clientRequired' ? iperfErrorText : undefined"
+									>
+										<USelect
+											v-model="iperfDraft.client"
+											data-testid="mininet-iperf-client"
+											size="xs"
+											class="w-full"
+											:items="hostItems"
+											:placeholder="$t('pages.scenario-simulator.run.iperfHostPlaceholder')"
+										/>
+									</UFormField>
+									<UFormField
+										:label="$t('pages.scenario-simulator.run.iperfServer')"
+										:error="iperfError === 'serverRequired' || iperfError === 'sameEndpoint' ? iperfErrorText : undefined"
+									>
+										<USelect
+											v-model="iperfDraft.server"
+											data-testid="mininet-iperf-server"
+											size="xs"
+											class="w-full"
+											:items="hostItems"
+											:placeholder="$t('pages.scenario-simulator.run.iperfHostPlaceholder')"
+										/>
+									</UFormField>
+									<UFormField :label="$t('pages.scenario-simulator.run.iperfL4')">
+										<USelect
+											v-model="iperfDraft.l4Type"
+											data-testid="mininet-iperf-l4"
+											size="xs"
+											class="w-full"
+											:items="iperfL4Items"
+										/>
+									</UFormField>
+									<UFormField
+										:label="$t('pages.scenario-simulator.run.iperfSeconds')"
+										:error="iperfError === 'secondsInvalid' ? iperfErrorText : undefined"
+									>
+										<UInput
+											v-model="iperfDraft.seconds"
+											data-testid="mininet-iperf-seconds"
+											size="xs"
+											class="w-full"
+											type="number"
+											min="1"
+											:max="LAB_IPERF_SECONDS_MAX"
+											:placeholder="$t('pages.scenario-simulator.run.iperfSecondsHint')"
+										/>
+									</UFormField>
+								</div>
+								<p class="text-[11px] text-(--ui-text-muted)">
+									{{ $t("pages.scenario-simulator.run.iperfSecondsHint") }}
+								</p>
 								<UButton
-									data-testid="lab-flow-submit"
+									data-testid="mininet-iperf-submit"
 									class="w-full justify-center"
 									size="xs"
 									color="primary"
 									variant="subtle"
-									icon="carbon:flow"
-									:label="$t('pages.scenario-simulator.flows.submit')"
-									:loading="acting"
-									@click="addFlow"
+									icon="carbon:chart-line-smooth"
+									:label="$t('pages.scenario-simulator.run.iperfSubmit')"
+									:loading="runAction === 'iperf'"
+									:disabled="runState !== true || runBusy"
+									@click="runIperf"
 								/>
+								<template v-if="iperfResult">
+									<p class="text-[11px] font-medium">
+										{{ $t("pages.scenario-simulator.run.iperfClientResult") }}
+									</p>
+									<pre
+										data-testid="mininet-iperf-client-output"
+										class="max-h-32 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
+									>{{ iperfResult.client || $t("pages.scenario-simulator.run.pingEmpty") }}</pre>
+									<p class="text-[11px] font-medium">
+										{{ $t("pages.scenario-simulator.run.iperfServerResult") }}
+									</p>
+									<pre
+										data-testid="mininet-iperf-server-output"
+										class="max-h-32 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
+									>{{ iperfResult.server || $t("pages.scenario-simulator.run.pingEmpty") }}</pre>
+								</template>
 							</div>
 						</div>
 
-						<!-- 连线（`lab:create`）：从选中节点连到另一台设备，单向一次请求 -->
-						<div v-if="canCreate && linkTargetItems.length" class="mt-3 space-y-2">
-							<UFormField :label="$t('pages.scenario-simulator.edit.linkTo')">
-								<USelect
-									v-model="linkTarget"
-									data-testid="mininet-link-target"
-									size="xs"
-									class="w-full"
-									:items="linkTargetItems"
-									:placeholder="$t('pages.scenario-simulator.edit.linkPlaceholder')"
-								/>
-							</UFormField>
-							<UButton
-								data-testid="mininet-link-create"
-								class="w-full justify-center"
-								size="xs"
-								color="primary"
-								variant="subtle"
-								icon="carbon:link"
-								:label="$t('pages.scenario-simulator.edit.linkSubmit')"
-								:disabled="!linkTarget"
-								:loading="acting"
-								@click="createLink"
-							/>
+						<div>
+							<h2 class="mb-2 border-b border-(--ui-border) pb-1 text-[13px] font-semibold tracking-wide">
+								{{ $t("pages.scenario-simulator.network.title") }}
+							</h2>
+							<dl class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+								<template v-for="row in networkRows" :key="row.key">
+									<dt class="text-(--ui-text-muted)">
+										{{ row.label }}
+									</dt>
+									<dd class="truncate">
+										{{ row.value }}
+									</dd>
+								</template>
+							</dl>
 						</div>
 
-						<UButton
-							v-if="canDelete"
-							data-testid="mininet-remove-node"
-							class="mt-3 w-full justify-center"
-							size="xs"
-							color="error"
-							variant="subtle"
-							icon="carbon:trash-can"
-							:label="$t('pages.scenario-simulator.edit.removeNode')"
-							@click="askRemoveNode"
-						/>
-					</template>
+						<div>
+							<h2 class="mb-2 border-b border-(--ui-border) pb-1 text-[13px] font-semibold tracking-wide">
+								{{ $t("pages.scenario-simulator.detail.title") }}
+							</h2>
 
-					<p v-else class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.scenario-simulator.detail.hint") }}
-					</p>
+							<template v-if="selectedLink">
+								<div class="flex items-center justify-between gap-2">
+									<span class="truncate font-medium">{{ selectedLink.source }} ↔ {{ selectedLink.target }}</span>
+									<UBadge size="sm" variant="subtle" color="success">
+										{{ $t("pages.scenario-simulator.detail.link") }}
+									</UBadge>
+								</div>
+								<dl class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+									<dt class="text-(--ui-text-muted)">
+										{{ $t("pages.scenario-simulator.detail.from") }}
+									</dt>
+									<dd class="truncate">
+										{{ selectedLink.source }}
+									</dd>
+									<dt class="text-(--ui-text-muted)">
+										{{ $t("pages.scenario-simulator.detail.to") }}
+									</dt>
+									<dd class="truncate">
+										{{ selectedLink.target }}
+									</dd>
+								</dl>
+								<UButton
+									v-if="canOperate"
+									data-testid="mininet-remove-link"
+									class="mt-3 w-full justify-start"
+									size="xs"
+									color="error"
+									variant="subtle"
+									icon="carbon:unlink"
+									:label="$t('pages.scenario-simulator.edit.removeLink')"
+									@click="askRemoveLink"
+								/>
+							</template>
+
+							<template v-else-if="selectedNode">
+								<div class="flex items-center justify-between gap-2">
+									<span class="truncate font-medium">{{ selectedNode.positioned.label }}</span>
+									<UBadge size="sm" variant="subtle" color="neutral">
+										{{ selectedNode.kind }}
+									</UBadge>
+								</div>
+								<dl class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+									<template v-for="row in nodeRows" :key="row.key">
+										<dt class="text-(--ui-text-muted)">
+											{{ row.label }}
+										</dt>
+										<dd class="truncate">
+											{{ row.value }}
+										</dd>
+									</template>
+								</dl>
+
+								<!--
+									交换机附加项（NMCPS-ADR-0022 W2 / W2b）：OpenFlow 版本与流表写入（`lab:operate`）。
+									流表落库在交换机侧（`ovs-ofctl`），页面只呈现原文 —— 解析归后端；
+									单条删除的行号按「含 actions= 的行」计，口径见 labFlowRowsOf()。
+								-->
+								<div v-if="selectedNode.kind === 'switch'" class="mt-3 space-y-2">
+									<UFormField v-if="canOperate" :label="$t('pages.scenario-simulator.edit.openflow')">
+										<USelect
+											data-testid="mininet-openflow"
+											size="xs"
+											class="w-full"
+											:items="openflowItems"
+											:model-value="openflowValue"
+											@update:model-value="applyOpenflow"
+										/>
+									</UFormField>
+									<div>
+										<div class="mb-1 flex items-center justify-between gap-2">
+											<h3 class="text-xs font-medium">
+												{{ $t("pages.scenario-simulator.flows.title") }}
+											</h3>
+											<div class="flex items-center gap-1">
+												<!--
+													清流（`lab:operate`）：批量 `DELETE /flows`，留空 = 清整表。
+													按钮常驻但无流时禁用 —— 让「没有可删的」和「没权限」在视觉上分开。
+												-->
+												<UButton
+													v-if="canOperate"
+													data-testid="mininet-flow-clear"
+													size="xs"
+													color="error"
+													variant="ghost"
+													icon="carbon:delete"
+													:disabled="!flowRows.length || acting"
+													:aria-label="$t('pages.scenario-simulator.flows.clear')"
+													@click="openClearFlows"
+												/>
+												<UButton
+													v-if="canOperate"
+													data-testid="mininet-flow-reload"
+													size="xs"
+													color="neutral"
+													variant="ghost"
+													icon="carbon:renew"
+													:aria-label="$t('pages.scenario-simulator.flows.reload')"
+													@click="reloadFlows"
+												/>
+											</div>
+										</div>
+										<p v-if="flowLoading" class="text-xs text-(--ui-text-muted)">
+											{{ $t("pages.scenario-simulator.flows.loading") }}
+										</p>
+										<p v-else-if="flowError" data-testid="mininet-flow-error" class="text-xs text-(--ui-text-error)">
+											{{ flowError }}
+										</p>
+										<template v-else>
+											<div
+												v-if="flowRows.length"
+												data-testid="mininet-flows"
+												class="max-h-40 space-y-1 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4"
+											>
+												<div
+													v-for="(row, index) in flowRows"
+													:key="`${row.id ?? 'note'}-${index}`"
+													class="flex items-start gap-1"
+												>
+													<code class="min-w-0 flex-1 break-all">{{ row.text }}</code>
+													<UButton
+														v-if="canOperate && row.id"
+														data-testid="mininet-flow-remove"
+														:data-flow-id="row.id"
+														size="xs"
+														color="error"
+														variant="ghost"
+														icon="carbon:trash-can"
+														:aria-label="$t('pages.scenario-simulator.flows.remove', { id: row.id })"
+														@click="removeFlow(row.id)"
+													/>
+												</div>
+											</div>
+											<p v-else data-testid="mininet-flow-empty" class="text-xs text-(--ui-text-muted)">
+												{{ $t("pages.scenario-simulator.flows.empty") }}
+											</p>
+										</template>
+									</div>
+
+									<!-- 写失败（加流 / 删流）原话照实显示：页面不吞上游 4xx，也不自造文案 -->
+									<p v-if="actionError" data-testid="lab-flow-error" class="text-xs text-(--ui-text-error)">
+										{{ actionError }}
+									</p>
+
+									<!-- 加流（lab:operate）：动作必填，其余留空走上游默认 -->
+									<div v-if="canOperate" class="space-y-1.5 rounded border border-(--ui-border) p-2">
+										<!-- 就地报错：三条校验各落到出错的那个字段，不再挤在优先级下面 -->
+										<UFormField
+											:label="$t('pages.scenario-simulator.flows.match')"
+											:error="flowDraftError === 'matchInvalid' ? flowDraftErrorText : undefined"
+										>
+											<UInput
+												v-model="flowDraft.match"
+												data-testid="lab-flow-match"
+												size="xs"
+												class="w-full"
+												:placeholder="$t('pages.scenario-simulator.flows.matchPlaceholder')"
+											/>
+										</UFormField>
+										<UFormField
+											:label="$t('pages.scenario-simulator.flows.actions')"
+											:error="flowDraftError === 'actionsRequired' ? flowDraftErrorText : undefined"
+										>
+											<UInput
+												v-model="flowDraft.actions"
+												data-testid="lab-flow-actions"
+												size="xs"
+												class="w-full"
+												:placeholder="$t('pages.scenario-simulator.flows.actionsPlaceholder')"
+											/>
+										</UFormField>
+										<UFormField
+											:label="$t('pages.scenario-simulator.flows.priority')"
+											:error="flowDraftError === 'priorityInvalid' ? flowDraftErrorText : undefined"
+										>
+											<UInput
+												v-model="flowDraft.priority"
+												data-testid="lab-flow-priority"
+												size="xs"
+												class="w-full"
+												type="number"
+												min="0"
+												:max="LAB_FLOW_PRIORITY_MAX"
+												:placeholder="$t('pages.scenario-simulator.flows.priorityPlaceholder')"
+											/>
+										</UFormField>
+										<UButton
+											data-testid="lab-flow-submit"
+											class="w-full justify-center"
+											size="xs"
+											color="primary"
+											variant="subtle"
+											icon="carbon:flow"
+											:label="$t('pages.scenario-simulator.flows.submit')"
+											:loading="acting"
+											@click="addFlow"
+										/>
+									</div>
+								</div>
+
+								<!-- 连线（`lab:create`）：从选中节点连到另一台设备，单向一次请求 -->
+								<div v-if="canCreate && linkTargetItems.length" class="mt-3 space-y-2">
+									<UFormField :label="$t('pages.scenario-simulator.edit.linkTo')">
+										<USelect
+											v-model="linkTarget"
+											data-testid="mininet-link-target"
+											size="xs"
+											class="w-full"
+											:items="linkTargetItems"
+											:placeholder="$t('pages.scenario-simulator.edit.linkPlaceholder')"
+										/>
+									</UFormField>
+									<UButton
+										data-testid="mininet-link-create"
+										class="w-full justify-center"
+										size="xs"
+										color="primary"
+										variant="subtle"
+										icon="carbon:link"
+										:label="$t('pages.scenario-simulator.edit.linkSubmit')"
+										:disabled="!linkTarget"
+										:loading="acting"
+										@click="createLink"
+									/>
+								</div>
+
+								<UButton
+									v-if="canDelete"
+									data-testid="mininet-remove-node"
+									class="mt-3 w-full justify-start"
+									size="xs"
+									color="error"
+									variant="subtle"
+									icon="carbon:trash-can"
+									:label="$t('pages.scenario-simulator.edit.removeNode')"
+									@click="askRemoveNode"
+								/>
+							</template>
+
+							<p v-else class="text-xs text-(--ui-text-muted)">
+								{{ $t("pages.scenario-simulator.detail.hint") }}
+							</p>
+						</div>
+					</div>
 				</div>
 			</aside>
 		</div>
@@ -1449,9 +1449,9 @@
 		iperfError.value = undefined;
 	}, { deep: true });
 
-	/** 节点面板（工具栏 `UPopover`）的开关：点类型即新增，拖类型则先收起再等投放 */
-	const paletteOpen = ref(false);
-	/** 正在从工具栏拖出来的类型（`null` = 没在拖）：画布的投放提示与 `drop` 都看它 */
+	/** 右栏面板折叠态（复刻 1.0 侧栏的收起，NMCPS-ADR-0022 W7）：收起只收宽度，不动画布 */
+	const panelOpen = ref(true);
+	/** 正在从右侧节点面板拖出来的类型（`null` = 没在拖）：画布的投放提示与 `drop` 都看它 */
 	const dragKind = ref<NodeKind | null>(null);
 	/** 投放落点（上游 `x` / `y`）：非空时新增表单用它代替默认落点 */
 	const dropOrigin = ref<LabNodeOrigin | null>(null);
@@ -1749,9 +1749,8 @@
 		createOpen.value = true;
 	}
 
-	/** 面板里点一下类型：等同「新增这类节点」，落点回落到默认值 */
+	/** 右侧面板里点一下类型：等同「新增这类节点」，落点回落到默认值 */
 	function pickKind(kind: NodeKind): void {
-		paletteOpen.value = false;
 		openCreate(kind);
 	}
 
@@ -1809,7 +1808,6 @@
 	function onCanvasDrop(point: { x: number, y: number }): void {
 		const kind = dragKind.value;
 		dragKind.value = null;
-		paletteOpen.value = false;
 		if (!kind || !canCreate.value)
 			return;
 		openCreate(kind, labNodeOriginAt(point));

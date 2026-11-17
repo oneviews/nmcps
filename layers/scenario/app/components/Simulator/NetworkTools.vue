@@ -40,42 +40,75 @@
 							size="xs"
 							color="primary"
 							variant="subtle"
-							:icon="terminalLive ? 'carbon:close' : 'carbon:terminal'"
-							:label="terminalLive
-								? $t('pages.scenario-simulator.networkTools.terminal.disconnect')
-								: $t('pages.scenario-simulator.networkTools.terminal.connect')"
+							icon="carbon:terminal"
+							:label="$t('pages.scenario-simulator.networkTools.terminal.open')"
 							:disabled="!terminalNode"
-							@click="toggleTerminal"
+							@click="openTerminal"
 						/>
 						<UBadge data-testid="mininet-terminal-state" size="sm" variant="subtle" :color="channelColor(terminalStatus)">
 							{{ channelLabel(terminalStatus) }}
 						</UBadge>
 					</div>
 
-					<pre
+					<!--
+						会话标签（复刻 1.0 的「每节点一条终端」）：切换只换视图、不断流，
+						标签上的 × 才断那一条 —— 换回来时远端 PTY 还在原处。
+					-->
+					<div v-if="terminalSessions.length" data-testid="mininet-terminal-sessions" class="flex flex-wrap items-center gap-1">
+						<div
+							v-for="session in terminalSessions"
+							:key="session.target"
+							class="flex items-center rounded border border-(--ui-border) pr-0.5"
+							:class="session.target === terminalActive ? 'bg-(--ui-bg-muted)' : ''"
+						>
+							<UButton
+								:data-testid="`mininet-terminal-session-${session.target}`"
+								size="xs"
+								color="neutral"
+								variant="ghost"
+								class="font-mono"
+								:label="nodeLabel(session.target)"
+								@click="terminalActive = session.target"
+							/>
+							<UButton
+								:data-testid="`mininet-terminal-session-close-${session.target}`"
+								size="xs"
+								color="neutral"
+								variant="ghost"
+								icon="carbon:close"
+								:aria-label="$t('pages.scenario-simulator.networkTools.terminal.closeSession', { node: nodeLabel(session.target) })"
+								@click="closeTerminal(session.target)"
+							/>
+						</div>
+					</div>
+
+					<!--
+						终端本体：可聚焦的观测窗 + 一枚透明的 textarea 收键盘。
+						点一下就聚焦；之后逐键上行（回车 `\r`、退格 `0x7f`、方向键走 CSI），
+						中文等 IME 输入不进 keydown，由 textarea 的 `input` 事件兜底。
+					-->
+					<div
 						ref="terminalBody"
 						data-testid="mininet-terminal-output"
-						class="max-h-64 min-h-40 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
-					>{{ terminalDisplay || $t("pages.scenario-simulator.networkTools.terminal.empty") }}</pre>
-
-					<form class="flex items-center gap-2" @submit.prevent="submitCommand">
-						<UInput
-							v-model="command"
+						class="relative max-h-64 min-h-40 overflow-auto rounded bg-(--ui-bg-elevated) p-2 font-mono text-[11px] leading-4 focus:ring-1 focus:ring-(--ui-primary) focus:outline-none"
+						tabindex="0"
+						@click="focusTerminalKeys"
+					>
+						<pre class="pointer-events-none whitespace-pre-wrap">{{ terminalDisplay || terminalPlaceholder }}<span v-if="terminalLive" class="text-(--ui-primary)">▍</span></pre>
+						<textarea
+							ref="terminalKeys"
 							data-testid="mininet-terminal-input"
-							size="xs"
-							class="flex-1"
-							:disabled="!terminalLive"
-							:placeholder="$t('pages.scenario-simulator.networkTools.terminal.commandPlaceholder')"
+							class="absolute top-0 left-0 h-px w-px resize-none border-0 p-0 opacity-0"
+							autocapitalize="off"
+							autocomplete="off"
+							spellcheck="false"
+							:aria-label="$t('pages.scenario-simulator.networkTools.terminal.keysHint')"
+							@keydown="onTerminalKeydown"
+							@input="onTerminalInput"
 						/>
-						<UButton
-							type="submit"
-							data-testid="mininet-terminal-send"
-							size="xs"
-							color="primary"
-							icon="carbon:send"
-							:disabled="!terminalLive || !command.trim()"
-							:label="$t('pages.scenario-simulator.networkTools.terminal.send')"
-						/>
+					</div>
+
+					<div class="flex flex-wrap items-center gap-2">
 						<UButton
 							type="button"
 							data-testid="mininet-terminal-interrupt"
@@ -94,11 +127,14 @@
 							color="neutral"
 							variant="subtle"
 							icon="carbon:clean"
-							:disabled="!terminalDisplay && !terminalText"
+							:disabled="!terminalDisplay"
 							:label="$t('pages.scenario-simulator.networkTools.terminal.clear')"
 							@click="clearTerminalOutput"
 						/>
-					</form>
+						<p class="text-[11px] text-(--ui-text-muted)">
+							{{ $t("pages.scenario-simulator.networkTools.terminal.keysHint") }}
+						</p>
+					</div>
 
 					<p v-if="terminalStatus === 'closed'" data-testid="mininet-terminal-closed" class="text-xs text-(--ui-text-muted)">
 						{{ $t("pages.scenario-simulator.networkTools.terminal.closedHint") }}
@@ -222,14 +258,15 @@
 	const { t } = useI18n();
 
 	const {
-		text: terminalText,
-		status: terminalStatus,
-		error: terminalError,
-		connect: connectTerminal,
-		disconnect: disconnectTerminal,
+		sessions: terminalSessions,
+		active: terminalActive,
+		activeSession: terminalSession,
+		open: openTerminalSession,
+		close: closeTerminalSession,
+		closeAll: closeTerminalSessions,
 		clear: clearTerminal,
 		send: sendTerminal
-	} = useLabWsChannel("terminal");
+	} = useLabTerminalSessions();
 	const {
 		lines: logsLines,
 		status: logsStatus,
@@ -248,8 +285,9 @@
 	type ToolTab = "webshell" | "logs" | "monitor";
 
 	const tab = ref<ToolTab>("webshell");
-	const command = ref("");
 	const terminalBody = ref<HTMLElement | null>(null);
+	/** 收键盘的载体：不是输入框（终端里没有「一行输入」），只负责把按键交出去 */
+	const terminalKeys = ref<HTMLTextAreaElement | null>(null);
 	const terminalNode = ref<string>();
 	const monitorNode = ref<string>();
 	const monitorIntf = ref<string>();
@@ -283,11 +321,18 @@
 		?.intfs
 		.map((intf) => ({ label: intf, value: intf })) ?? []);
 
+	/** 当前标签会话的读数：没有会话就是 `idle`，不继承「上一条已连接」 */
+	const terminalStatus = computed<LabWsChannelStatus>(() => terminalSession.value?.status ?? "idle");
+	const terminalError = computed(() => terminalSession.value?.error);
 	const terminalLive = computed(() => terminalStatus.value === "live");
+	/** PTY 原文洗成可读文本：剥 ANSI 颜色码 / 退格 / 行内 `\r` 覆盖（`labTerminalTextOf()`） */
+	const terminalDisplay = computed(() => labTerminalTextOf(terminalSession.value?.text ?? ""));
+	/** 空窗的两档：还没开会话 vs 会话开着但远端还没吐字（别把「没打开」说成「没输出」） */
+	const terminalPlaceholder = computed(() => terminalActive.value
+		? t("pages.scenario-simulator.networkTools.terminal.idle")
+		: t("pages.scenario-simulator.networkTools.terminal.empty"));
 	const monitorLive = computed(() => monitorStatus.value === "live");
 	const logsText = computed(() => logsLines.value.join("\n"));
-	/** PTY 原文洗成可读文本：剥 ANSI 颜色码 / 退格 / 行内 `\r` 覆盖（`labTerminalTextOf()`） */
-	const terminalDisplay = computed(() => labTerminalTextOf(terminalText.value));
 
 	const CHANNEL_COLORS: Record<LabWsChannelStatus, "neutral" | "info" | "success" | "warning" | "error"> = {
 		idle: "neutral",
@@ -321,32 +366,144 @@
 		}
 	}
 
-	function toggleTerminal(): void {
-		if (terminalStatus.value === "live" || terminalStatus.value === "connecting") {
-			disconnectTerminal();
-			return;
-		}
-		if (terminalNode.value)
-			void connectTerminal(terminalNode.value);
+	/** 会话标签上的节点名：台账 label 优先，缺了就写 id（不编一个名字） */
+	function nodeLabel(id: string): string {
+		return props.nodes.find((node) => node.id === id)?.label ?? id;
 	}
 
-	/** 终端上行按「一整行」发：上游 PTY 需要 `\n` 才会执行，逐键发会把命令卡在缓冲区里 */
-	function submitCommand(): void {
-		if (!command.value.trim())
+	/** 工具栏那一个按钮：选中节点的会话没开就开，开着就切过去（不重连，远端 PTY 不丢） */
+	function openTerminal(): void {
+		if (!terminalNode.value)
 			return;
-		if (sendTerminal(`${command.value}\n`))
-			command.value = "";
+		void openTerminalSession(terminalNode.value).then(() => nextTick(focusTerminalKeys));
+	}
+
+	function closeTerminal(target: string): void {
+		closeTerminalSession(target);
+	}
+
+	/** 点终端 = 聚焦键盘载体：终端里没有「输入框」，按键直接进 PTY */
+	function focusTerminalKeys(): void {
+		terminalKeys.value?.focus();
+	}
+
+	/**
+	 * 非可打印键 → PTY 字节。回车是 `\r` 而不是 `\n`（PTY 的行规程只认 `\r`），
+	 * 退格是 `0x7f`（DEL），方向键 / Home / End / Delete 走 ANSI CSI。
+	 */
+	const TERMINAL_KEYS: Record<string, string> = {
+		Enter: "\r",
+		Backspace: "\u007F",
+		Tab: "\t",
+		Escape: "\u001B",
+		ArrowUp: "\u001B[A",
+		ArrowDown: "\u001B[B",
+		ArrowRight: "\u001B[C",
+		ArrowLeft: "\u001B[D",
+		Home: "\u001B[H",
+		End: "\u001B[F",
+		Delete: "\u001B[3~",
+		PageUp: "\u001B[5~",
+		PageDown: "\u001B[6~"
+	};
+
+	/** 连打字符的攒帧缓冲：一帧一个字母会把一次输入拆成几十帧，PTY 侧没有必要 */
+	let keyBuffer = "";
+	let keyTarget = "";
+	let keyTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function flushTerminalKeys(): void {
+		if (keyTimer) {
+			clearTimeout(keyTimer);
+			keyTimer = undefined;
+		}
+		const target = keyTarget;
+		const text = keyBuffer;
+		keyBuffer = "";
+		keyTarget = "";
+		if (target && text)
+			sendTerminal(target, text);
+	}
+
+	function queueTerminalKeys(target: string, text: string): void {
+		if (keyTarget !== target)
+			flushTerminalKeys();
+		keyTarget = target;
+		keyBuffer += text;
+		keyTimer ??= setTimeout(flushTerminalKeys, 8);
+	}
+
+	/**
+	 * 逐键上行（NMCPS-ADR-0022 W8）：
+	 * - 可打印字符随打随发，回显交给 PTY（做本地回显会让一次输入出现两份）；
+	 * - `Ctrl+字母` 发 `0x01–0x1A`（`Ctrl-C` 中断、`Ctrl-D` 退出、`Ctrl-L` 清屏），
+	 *   不是发字面量 `^C`；`Ctrl-V` 留给浏览器（粘贴由 textarea 的 `input` 事件送出）；
+	 * - 控制键与回车先把攒着的字符冲刷掉，按键顺序不会乱。
+	 */
+	function onTerminalKeydown(event: KeyboardEvent): void {
+		const target = terminalActive.value;
+		if (!target)
+			return;
+
+		if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1 && event.key.toLowerCase() !== "v") {
+			const code = event.key.toUpperCase().charCodeAt(0);
+			if (code >= 64 && code <= 95) {
+				event.preventDefault();
+				flushTerminalKeys();
+				sendTerminal(target, String.fromCharCode(code - 64));
+				return;
+			}
+		}
+
+		if (event.altKey && event.key.length === 1) {
+			event.preventDefault();
+			flushTerminalKeys();
+			sendTerminal(target, `\u001B${event.key}`);
+			return;
+		}
+
+		// Shift+Tab 是反向补全（CSI Z），不是 `\t`
+		const sequence = event.key === "Tab" && event.shiftKey ? "\u001B[Z" : TERMINAL_KEYS[event.key];
+		if (sequence !== undefined) {
+			event.preventDefault();
+			flushTerminalKeys();
+			sendTerminal(target, sequence);
+			return;
+		}
+
+		if (event.key.length === 1 && !event.metaKey) {
+			event.preventDefault();
+			queueTerminalKeys(target, event.key);
+		}
+	}
+
+	/** IME（中文等）不进 keydown：textarea 收下后整段发出，随即清空 —— 它只是键盘载体 */
+	function onTerminalInput(): void {
+		const element = terminalKeys.value;
+		const target = terminalActive.value;
+		if (!element)
+			return;
+		const text = element.value;
+		element.value = "";
+		if (!target || !text)
+			return;
+		flushTerminalKeys();
+		sendTerminal(target, text);
 	}
 
 	/** `Ctrl-C`（0x03）是 PTY 的中断字节：跑着的命令靠它停，不是发字面量 `^C` */
 	function interruptTerminal(): void {
-		sendTerminal("\u0003");
+		const target = terminalActive.value;
+		if (!target)
+			return;
+		flushTerminalKeys();
+		sendTerminal(target, "\u0003");
 	}
 
-	/** 清屏只清浏览器这一侧的转写（连同上一条错误行）：远端屏幕要清得自己敲 `clear` */
+	/** 清屏只清浏览器这一侧的转写：远端屏幕要清得自己敲 `clear` */
 	function clearTerminalOutput(): void {
-		clearTerminal();
-		terminalError.value = undefined;
+		if (terminalActive.value)
+			clearTerminal(terminalActive.value);
 	}
 
 	function toggleMonitor(): void {
@@ -410,13 +567,14 @@
 	/**
 	 * 面板开合 / 标签切换的连线策略：
 	 * - 日志是「打开就看」的观测面：进日志标签自动建连，离开就断；
-	 * - 终端与监控有目标选择，必须显式点按钮，切换标签时断开（旧目标不该留在后台）；
-	 * - 面板关闭时三条全断，不留没人收的 socket。
+	 * - WebShell 是**显式多会话**：切到日志 / 监控并不断流（那是用户自己开的会话，
+	 *   标签上有 ×），回到标签时把键盘焦点还给终端；面板关闭才全断，不留没人收的 socket；
+	 * - 监控只有一个目标：切走就停（留着会继续采样一个看不见的接口）。
 	 */
 	watch([open, tab], ([isOpen, current]) => {
 		if (!isOpen) {
 			disconnectLogs();
-			disconnectTerminal();
+			closeTerminalSessions();
 			disconnectMonitor();
 			return;
 		}
@@ -426,8 +584,8 @@
 		else
 			disconnectLogs();
 
-		if (current !== "webshell")
-			disconnectTerminal();
+		if (current === "webshell")
+			void nextTick(focusTerminalKeys);
 		if (current !== "monitor")
 			disconnectMonitor();
 	});

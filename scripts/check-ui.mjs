@@ -5165,16 +5165,16 @@ if (upstreamPort) {
 		});
 		await labPage.waitForTimeout(300);
 		const editProbe = await labPage.evaluate(() => ({
-			addMenu: !!document.querySelector("[data-testid='mininet-add-menu']"),
+			palette: !!document.querySelector("[data-testid='mininet-node-palette']"),
 			removeNode: !!document.querySelector("[data-testid='mininet-remove-node']")
 		}));
 		log(
-			"11.4 会话有写能力位时渲染新增菜单与删除节点入口",
-			editProbe.addMenu && editProbe.removeNode,
-			`add=${editProbe.addMenu} remove=${editProbe.removeNode}`
+			"11.4 会话有写能力位时渲染右侧节点面板与删除节点入口",
+			editProbe.palette && editProbe.removeNode,
+			`palette=${editProbe.palette} remove=${editProbe.removeNode}`
 		);
 
-		// 新增主机：菜单 → 表单 → 提交。默认名 `h3`，默认 IP 与坐标由页面给，这里只填名称。
+		// 新增主机：右侧节点面板 → 表单 → 提交。默认名 `h3`，默认 IP 与坐标由页面给，这里只填名称。
 		// 元素缺失时**不抛**（Playwright 点空会等 30s 再中断整个自查），改成记一次失败继续跑。
 		const clickIfPresent = async (target) => {
 			const locator = typeof target === "string" ? labPage.locator(target) : target;
@@ -5184,8 +5184,7 @@ if (upstreamPort) {
 			return true;
 		};
 
-		const menuClicked = await clickIfPresent("[data-testid='mininet-add-menu']");
-		const itemClicked = menuClicked && await clickIfPresent("[data-testid='mininet-add-kind-host']");
+		const itemClicked = await clickIfPresent("[data-testid='mininet-add-kind-host']");
 		await labPage.waitForTimeout(300);
 		const createOpen = itemClicked && await labPage.evaluate(() => !!document.querySelector("[data-testid='lab-node-name']"));
 		// 默认名按「画布节点数 + 1」生成（6 台 ⇒ `h7`）；这里显式写成 `h3`，
@@ -5211,11 +5210,9 @@ if (upstreamPort) {
 			`表单=${createOpen} 提交=${submitted} 请求=${createdWrite ? JSON.stringify(createdWrite.body) : "无"} 节点=${afterCreate.nodes} 弹窗=${afterCreate.modal}`
 		);
 
-		// 拖拽新增（ADR-0022 W2 补强）：工具栏面板把类型拖到画布落点 → 表单带着落点坐标打开。
+		// 拖拽新增（ADR-0022 W2 补强 / W7 迁移到右侧面板）：把类型图标拖到画布落点 → 表单带着落点坐标打开。
 		// 用合成 DragEvent 覆盖页面自己的 dragstart / dragover / drop 处理，不用鼠标轨迹：
 		// 无头浏览器里原生拖放不稳定，而这条链路的输入本来就是事件序列。
-		const paletteOpened = await clickIfPresent("[data-testid='mininet-add-menu']");
-		await labPage.waitForTimeout(200);
 		const chipReady = await labPage.evaluate(() => !!document.querySelector("[data-testid='mininet-add-kind-host']"));
 		const dragStartProbe = await labPage.evaluate(() => {
 			const chip = document.querySelector("[data-testid='mininet-add-kind-host']");
@@ -5236,8 +5233,8 @@ if (upstreamPort) {
 			return hint ? (hint.textContent ?? "").trim() : "";
 		});
 		log(
-			"11.4 工具栏新增面板可拖拽：拖到画布上方出现投放提示",
-			paletteOpened && chipReady && !!dragStartProbe && dropHintText.includes("主机"),
+			"11.4 右侧节点面板可拖拽：拖到画布上方出现投放提示",
+			chipReady && !!dragStartProbe && dropHintText.includes("主机"),
 			`面板=${chipReady} 拖拽=${!!dragStartProbe} 提示=${dropHintText || "无"}`
 		);
 
@@ -6189,7 +6186,7 @@ if (upstreamPort) {
 			`上游=${logsUpstream?.path} cookie=${!!logsUpstream?.headers.cookie}`
 		);
 
-		// ── Webshell：连接 → 问候帧 → 敲一行 → 回显回来（上行链路） ──
+		// ── Webshell：连接 → 问候帧 → 逐键敲一行 → 回车执行（上行链路） ──
 		await labPage.getByRole("tab", { name: "Webshell" }).click();
 		await labPage.waitForTimeout(200);
 		const terminalSocketsBefore = upstreamServer.mininetSocketLog.length;
@@ -6214,13 +6211,70 @@ if (upstreamPort) {
 			`夹具带ESC=true 面板带ESC=${bannerText.includes("\u001B")}`
 		);
 
-		await labPage.locator("[data-testid='mininet-terminal-input']").fill("ls");
-		await clickIfPresent("[data-testid='mininet-terminal-send']");
+		// ── 逐键上行：点终端拿焦点 → 敲两个字母 → 回显是上游逐个字节回来的 ──
+		await labPage.locator("[data-testid='mininet-terminal-output']").click();
+		await labPage.keyboard.type("ls");
+		const typedText = await waitForText("mininet-terminal-output", (text) => text.includes("ls"));
+		log(
+			"11.8 终端逐键上行：敲下的字符由上游回显（面板不做本地回显，否则一次输入两份）",
+			typedText.includes("ls") && !typedText.includes("echo:ls"),
+			`输出尾部=${JSON.stringify(typedText.slice(-16))}`
+		);
+
+		// 回车发 `\r`（PTY 的行规程只认它）：上游把整行回成 `echo:ls`
+		await labPage.keyboard.press("Enter");
 		const echoText = await waitForText("mininet-terminal-output", (text) => text.includes("echo:ls"));
 		log(
-			"11.8 终端上行：命令经 BFF 转给上游，回显原样回到面板（输入框已清空）",
-			echoText.includes("echo:ls") && (await labPage.locator("[data-testid='mininet-terminal-input']").inputValue()) === "",
+			"11.8 回车发 `\\r`：整行经 BFF 转给上游，`echo:ls` 回显进面板",
+			echoText.includes("echo:ls"),
 			`输出尾部=${JSON.stringify(echoText.slice(-24))}`
+		);
+
+		// ── 多会话（1.0 的「每节点一条终端」）：第二个节点开新标签、独立一条上游连 ──
+		/** 上游建连是换票之后的异步动作：等到日志里真的多出一条，别和请求赛跑 */
+		const waitForSockets = async (count) => {
+			const deadline = Date.now() + 10000;
+			while (Date.now() < deadline && upstreamServer.mininetSocketLog.length < count)
+				await labPage.waitForTimeout(100);
+			return upstreamServer.mininetSocketLog.length;
+		};
+		const multiSocketsBefore = upstreamServer.mininetSocketLog.length;
+		await labPage.locator("[data-testid='mininet-terminal-node']").click();
+		const secondNodePicked = await clickIfPresent(labPage.getByRole("option").nth(1));
+		await clickIfPresent("[data-testid='mininet-terminal-connect']");
+		const multiSockets = await waitForSockets(multiSocketsBefore + 1);
+		const sessionTabs = labPage.locator("[data-testid='mininet-terminal-sessions'] > div");
+		const tabCount = await sessionTabs.count();
+		const secondUpstream = upstreamServer.mininetSocketLog.at(-1);
+		log(
+			"11.8 多会话：第二个节点开新标签、独立一条上游连，第一条仍在",
+			secondNodePicked
+			&& tabCount === 2
+			&& multiSockets === multiSocketsBefore + 1
+			&& secondUpstream?.path !== terminalUpstream?.path
+			&& /^\/api\/mininet\/terminal\/[^/]+$/.test(secondUpstream?.path ?? ""),
+			`标签=${tabCount} 上游=${secondUpstream?.path}`
+		);
+
+		// 切回第一条标签：只换视图，不重新建连，转写仍是它自己的
+		const switchSocketsBefore = upstreamServer.mininetSocketLog.length;
+		await clickIfPresent(sessionTabs.first().locator("button").first());
+		const backText = await waitForText("mininet-terminal-output", (text) => text.includes("echo:ls"));
+		log(
+			"11.8 标签切换只换视图：切回第一条仍是它自己的转写，不重新建连",
+			backText.includes("echo:ls") && upstreamServer.mininetSocketLog.length === switchSocketsBefore,
+			`输出尾部=${JSON.stringify(backText.slice(-16))} 新建连=${upstreamServer.mininetSocketLog.length - switchSocketsBefore}`
+		);
+
+		// 关掉第二条会话：只断那一条，第一条仍是已连接
+		await clickIfPresent(sessionTabs.nth(1).locator("button").last());
+		await labPage.waitForTimeout(200);
+		const remainingTabs = await labPage.locator("[data-testid='mininet-terminal-sessions'] > div").count();
+		const remainingState = (await labPage.locator("[data-testid='mininet-terminal-state']").textContent() ?? "").trim();
+		log(
+			"11.8 关掉一条会话只断那条：标签消失，剩下那条仍是已连接",
+			remainingTabs === 1 && remainingState === "已连接",
+			`剩余标签=${remainingTabs} 状态=${remainingState}`
 		);
 
 		// Ctrl-C 发的是 0x03：上游只对这一字节回 `^C`，字面量 `^C` 会走 `echo:` 分支
@@ -6241,7 +6295,6 @@ if (upstreamPort) {
 			!clearedText.includes("echo:ls") && !clearedText.includes("root@") && clearedText.length > 0 && clearedState === "已连接",
 			`输出=${JSON.stringify(clearedText.slice(0, 16))} 状态=${clearedState}`
 		);
-
 		// ── 监控：`node:intf` 拆成上游查询串，采样渲染成一行读数 ──
 		await labPage.getByRole("tab", { name: "监控" }).click();
 		await labPage.waitForTimeout(300);

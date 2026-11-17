@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.47.0
+version: 0.50.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -120,6 +120,7 @@ tags:
 | NMCPS-ADR-0022 | 实验台全量并入与旧前端退役 | 5 | informative | rec.adr.0022 | baseline | records/adr/adr-0022.md |
 | NMCPS-ADR-0023 | 实验网络台账与上游对账（显式接管） | 5 | informative | rec.adr.0023 | baseline | records/adr/adr-0023.md |
 | NMCPS-ADR-0024 | 无控制器的交换机默认 standalone | 5 | informative | rec.adr.0024 | baseline | records/adr/adr-0024.md |
+| NMCPS-ADR-0025 | Webshell 的渲染边界（暂不引入终端模拟器） | 5 | informative | rec.adr.0025 | baseline | records/adr/adr-0025.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -239,3 +240,6 @@ tags:
 
 
 | 2026-11-17 | 0.47.0 | 登记记录层 ADR `NMCPS-ADR-0024`「无控制器的交换机默认 standalone（实验网连通性）」：现场实测 `pingall` 100% 丢包，根因是 Mininet `OVSSwitch` 默认 `failMode='secure'` —— secure 模式下没有已连接控制器就没有流表、也没有 NORMAL 兜底，帧全部丢弃；而经 BFF 新建的交换机 `controller` 恒为 `null`（`labNodes.ts` 草稿映射），`POST /start` 即 `switch.start([])`，等价于「secure + 零控制器」。裁决 fail mode 由控制器关联推导（`switch_fail_mode()`：无控制器 `standalone`、有控制器 `secure`），在创建（`add_switch_to_net()` 四个 OVS 分支）、`POST /start` 起网前、`POST /associate_switch` 重启前统一应用，`schema.py::Switch.format_switch()` 生成的导出脚本同源。明确不自动拉起控制器进程（外部依赖缺失会把「没有控制器」伪装成「启动失败」），也不改 `POST /flows` 语义（standalone 下 OVS 拒绝写流表，错误原样透出）。验收：`pnpm lab:check` 新增 3 条静态断言（映射 / 四个分支带 `failMode` / 导出脚本随关联变化），`check:lab-bff` 与 `check:ui` 用假上游不受影响；真机 `pingall` 需 root 手工验证。 |
+| 2026-11-17 | 0.48.0 | **`NMCPS-ADR-0022` W7 落码（右栏与节点面板复刻 1.0 版式）**：应需求方「复刻原前端右侧功能设计、把工具栏新增按钮改成拓扑图右侧纵向节点图标」，把工具栏 `UPopover` 节点面板换成画布容器内的 `SimulatorNodePaletteRail`（五个类型图标纵向常驻，展开图标 + 名称 / 收起只剩图标，点一下用默认落点、拖到画布用放手位置，两条路仍进同一张 `NodeFormModal`；只在 `lab:create` 渲染），右栏三张卡片改成一块可折叠面板（标题 + 折叠按钮、组标题带分隔线、动作按钮左对齐，收起只收宽度）。`check:ui` 11.4 的三条入口用例改为直接对右侧面板取证，用例数与断言语义不变；文案 `toolbar.add*` 三条由 `palette.*` / `panel.*` 取代。 |
+| 2026-11-17 | 0.49.0 | **`NMCPS-ADR-0022` W8 落码（Webshell 真交互 + 多会话）**：把「一行输入 + 发送」的 Webshell 换成真终端 —— 新增 `useLabTerminalSessions()` 按节点 id 维护多条 socket（`open` 已开就只切标签、不重连；标签上的 × 只断那一条；关面板 / 组件销毁才全断），面板把 `keydown` 翻成 PTY 字节（回车 `\r`、退格 `0x7f`、方向键 CSI、`Ctrl+字母` 发 `0x01–0x1A`），连续字符攒 8ms 一帧再发，中文等 IME 输入走隐藏 textarea 的 `input`，回显交给 PTY、面板不做本地回显；状态徽标与「已断开」提示取当前标签的会话。假上游终端改成**真 PTY 形状**（逐字节回显，换行才回 `echo:<line>`），`check:ui` 11.8 由 8 条扩到 12 条（276 → 280），`check:lab-bff` ⑬ 读取帧数 2 → 4（用例数不变）。 |
+| 2026-11-17 | 0.50.0 | 登记记录层 ADR `NMCPS-ADR-0025`「Webshell 的渲染边界（暂不引入终端模拟器）」：W8 之后输入侧已是真终端（2026-11-17 用真 `bash --norc -i` + PTY 复测 6/6：退格按字符删、`\r` 执行、`0x03` 打断、`\t` 补全、CSI 光标、`0x0c` 清屏），渲染侧仍是 `labTerminalTextOf()` + `<pre>` 的文本观测窗。裁决：暂不引入 xterm.js 一类模拟器（不新增未使用依赖，收益未被确认）；渲染只保留一条纯函数路径，禁止自研 CSI 光标定位；能力边界（行式命令 / 补全 / `Ctrl-C`·`Ctrl-D`·`Ctrl-L` 可用，全屏 TUI、颜色、宽字符对齐、窗口缩放不支持）写进文档而不是让用户撞墙发现；重估触发条件写死（明确要求 `vi`/`top` 类交互、颜色 / 光标 / 宽字符缺陷单 ≥ 3、上游需要真终端语义的操作），届时应新开 ADR 并评估 `xterm.js` + `@xterm/addon-fit`、CSP、bundle 预算与断言路径。服务端语义不变（字节原样转发，不做服务端渲染或裁剪）。验收：新增 `pnpm check:lab-terminal`（真 bash + PTY，非 POSIX 跳过并说明），`check:ui` 11.8 的 12 条与 `check:lab-bff` ⑬ 不变。 |

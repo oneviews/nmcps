@@ -808,10 +808,18 @@
 			"description": "Live Mininet topology from the lab ledger: hosts, switches, routers, NAT and controllers with their links.",
 			"title": "Simulation",
 			"toolbar": {
-				"refresh": "Refresh",
-				"add": "Add",
-				"addPalette": "Add node",
-				"addHint": "Click a type to add it, or drag a type onto the canvas"
+				"refresh": "Refresh"
+			},
+			"palette": {
+				"title": "Node palette",
+				"expand": "Expand the node palette",
+				"collapse": "Collapse the node palette",
+				"hint": "Click to add at the default spot, or drag an icon onto the canvas"
+			},
+			"panel": {
+				"title": "Lab controls",
+				"expand": "Expand the side panel",
+				"collapse": "Collapse the side panel"
 			},
 			"stats": {
 				"network": "Network",
@@ -864,14 +872,14 @@
 				"terminal": {
 					"node": "Node",
 					"nodePlaceholder": "Pick a node to enter",
-					"connect": "Connect",
-					"disconnect": "Disconnect",
-					"send": "Send",
-					"empty": "Node terminal output appears here once connected.",
-					"commandPlaceholder": "Type a command and press Enter",
+					"open": "Open session",
+					"closeSession": "Close the {node} session",
+					"empty": "Pick a node and open a session to enter its terminal.",
+					"idle": "Session ready — click the terminal to start typing.",
+					"keysHint": "Click the terminal and type; Ctrl-C interrupts, Clear only wipes the local transcript.",
 					"interrupt": "Interrupt (Ctrl-C)",
 					"clear": "Clear",
-					"closedHint": "Connection closed — the upstream session ended or the network stopped. Press Connect again to continue; output received so far is kept."
+					"closedHint": "Session closed — the upstream session ended or the network stopped. Open it again to continue; output received so far is kept."
 				},
 				"logs": {
 					"hint": "Opens an upstream tail of mininet.log (last 1000 lines plus live appends).",

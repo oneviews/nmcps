@@ -7,7 +7,8 @@
 - `/scenario/*`：场景筹划页面。
 - `/scenario/simulator`：仿真网总览 + 拓扑编辑（`app/pages/scenario/simulator.vue`），读取 `/api/lab/networks` 的台账并投影为 `TopologyCanvas`；旧的 `/sim-generation` 仅保留重定向。
 - 编辑动作按 `GET /api/lab/channel` 的能力位分档渲染（NMCPS-ADR-0022 W2）：新增节点（五类）/ 连线用 `create`，删节点用 `delete`，拖动落库 / OpenFlow / 删链路用 `operate`；没有 `operate` 时画布不接收拖动。
-- 新增节点两个入口共用一张表单：工具栏节点面板（`UPopover`）里点类型用默认落点，把类型拖到画布上用放手位置 —— 落点由 `TopologyCanvas` 的 `canvasDrop` 反解成图坐标（含缩放 / 平移），页面再按最近节点锚点换算成上游 `x` / `y`；`dropEnabled` 缺省关闭，只在有 `lab:create` 且正在拖拽时打开。
+- 新增节点两个入口共用一张表单：拓扑图右侧的纵向节点面板（`SimulatorNodePaletteRail`，五个类型图标可点可拖）里点类型用默认落点，把图标拖到画布上用放手位置 —— 落点由 `TopologyCanvas` 的 `canvasDrop` 反解成图坐标（含缩放 / 平移），页面再按最近节点锚点换算成上游 `x` / `y`；`dropEnabled` 缺省关闭，只在有 `lab:create` 且正在拖拽时打开。面板常驻画布容器内（`absolute right-2 top-1/2`），展开时图标 + 名称、收起时只剩图标；不要塞回工具栏 `UPopover`（菜单一收起拖源就被拆掉）。
+- 右栏是复刻 1.0 版式的一块可折叠面板（`NMCPS-ADR-0022` W7）：顶部标题 + 折叠按钮，组标题带分隔线，动作按钮左对齐；收起只收宽度，不动画布。
 - 表单与确认组件在 `app/components/Simulator/`（`NodeFormModal` / `DeleteTargetModal` / `ClearFlowsModal` / `StopNetworkModal`），校验与请求体组装在 `shared/types/labNodes.ts`、`shared/types/labFlows.ts` 与 `shared/types/labRun.ts`（纯函数）。
 - 所有 Mininet 文案在 `i18n/locales/{cn,en}.json` 的 `pages.scenario-simulator.*`。
 - 流表三档写路径都由 `operate` 把关：加流（`POST /flows`）、删单条流（`DELETE /flows/{switch}/{flow_id}`，行号按「含 `actions=` 的行」计）、清流（`DELETE /flows`，`match` 留空 = 清整表，填了只删命中项；确认弹窗写出交换机 id）。
@@ -41,5 +42,5 @@ pnpm typecheck
 ## 边界
 
 - 浏览器不得直连 Mininet `:8000`，只经 `/api/lab/**`。
-- 终端、抓包、WebSocket 与抓包下载的状态：四条 WebSocket 全部开放（`/lab-ws/sniffer` 实时包、`/lab-ws/terminal` Webshell、`/lab-ws/logs` 上游日志、`/lab-ws/monitor` 单接口速率，均走一次性票 + `createLabWsRelay()`），抓包启停 / pcap 下载已开放（W5）；导出 JSON / 脚本与导入已开放（W4）。`GET /api/lab/channel` 的 `writeEnabled` / `capabilities` 按会话计算，页面先读能力位再渲染。
+- 终端、抓包、WebSocket 与抓包下载的状态：四条 WebSocket 全部开放（`/lab-ws/sniffer` 实时包、`/lab-ws/terminal` Webshell、`/lab-ws/logs` 上游日志、`/lab-ws/monitor` 单接口速率，均走一次性票 + `createLabWsRelay()`），抓包启停 / pcap 下载已开放（W5）；导出 JSON / 脚本与导入已开放（W4）。Webshell 是逐键交互的多会话终端（`useLabTerminalSessions()` 一个节点一条 socket，`useLabWsChannel(kind)` 只服务日志 / 监控，W8）。`GET /api/lab/channel` 的 `writeEnabled` / `capabilities` 按会话计算，页面先读能力位再渲染。
 - 仿真网页面不把 `sim_id` / 节点 ID 当权限凭据；写失败原话（403 / 404 / 409 / 503）照实展示，不做二次解释。

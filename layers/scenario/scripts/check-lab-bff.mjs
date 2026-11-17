@@ -1226,10 +1226,11 @@ try {
 		const terminalUrl = terminalTicket.json?.data?.url;
 		const terminalExpectedUrl = `/lab-ws/terminal?${new URLSearchParams({ ticket: String(terminalTicket.json?.data?.ticket ?? ""), target: "h1" })}`;
 		const socketsBeforeTerminal = mininet.snifferSocketLog.length;
-		const terminalStream = await readSocketMessages(`ws://${HOST}:${port}${terminalUrl ?? ""}`, 2, "ls\n");
+		// 假 PTY 的形状：问候帧 + 逐字节回显 + 换行 + `echo:<line>`（4 帧，见 `bff-harness`）
+		const terminalStream = await readSocketMessages(`ws://${HOST}:${port}${terminalUrl ?? ""}`, 4, "ls\n");
 		const terminalUpstream = mininet.snifferSocketLog.at(-1);
 		log("⑬ 终端签票：同源 url 带 target=h1，不含上游地址", terminalTicket.status === 200 && terminalUrl === terminalExpectedUrl && !JSON.stringify(terminalTicket.json?.data).includes(mininetBase), `${terminalTicket.status} ${describe(terminalUrl)}`);
-		log("⑬ 终端：问候帧与上行命令的回显都穿过 BFF", terminalStream.messages.includes(MININET_TERMINAL_BANNER) && terminalStream.messages.includes("echo:ls"), describe(terminalStream.messages));
+		log("⑬ 终端：问候帧与上行命令的回显都穿过 BFF", terminalStream.messages.includes(MININET_TERMINAL_BANNER) && terminalStream.messages.some((text) => text.includes("echo:ls")), describe(terminalStream.messages));
 		log("⑬ 终端上游路径是 /api/mininet/terminal/h1，出站不带 cookie / authorization", mininet.snifferSocketLog.length === socketsBeforeTerminal + 1 && terminalUpstream?.path === "/api/mininet/terminal/h1" && !terminalUpstream?.headers.authorization && !terminalUpstream?.headers.cookie, `${terminalUpstream?.path} cookie=${!!terminalUpstream?.headers.cookie}`);
 
 		// Ctrl-C：0x03 是控制字节，BFF 必须原样转（一旦被当文本处理/裁剪，跑着的命令就停不下来）

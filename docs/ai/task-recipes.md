@@ -27,7 +27,7 @@
 2. 在 `layers/scenario/shared/constants/labWs.ts` 的 `LAB_WS_UPSTREAMS` 登记通道：`upstream`、`permission`、`targetRequired`、`targetKind`（`network` / `node` / `node-intf` / `none`，决定 `target` 怎么校验）、`clientToUpstream`（只有终端是 `true`）。上游地址不是常量时改 `labWsUpstreamPath()`（终端拼路径段、监控拼 `?node=&intf=`）。
 3. 新建 `layers/scenario/server/routes/lab-ws/<kind>.ts`，内容只有 `export default createLabWsRelay("<kind>")`：验票 / 连上游 / 透传 / 审计都在 `layers/scenario/server/utils/bff/labWsRelay.ts`，不要复制第二份。
 4. `layers/scenario/server/api/lab/ws-ticket.post.ts` 已按 `targetKind` 判形状与台账收窄（`network` 等于本网 id；`node` / `node-intf` 在 `resources.nodes` 已登记时只放行清单内节点）。新增通道若引入新的 `target` 语义，改 `labWsTargetError()` / `labWsTargetParts()`，不要在 handler 里另写一套判断。未登记种类必须继续回 `400 lab_ws_kind_invalid`。
-5. 页面侧在 `layers/scenario/app/composables/` 消费：抓包用 `useLabSnifferStream()`（含历史回填），其余三条用 `useLabWsChannel(kind)`（`lines` / `text` / `status` / `send`），组件里不出现 `new WebSocket`。归一（监控采样、日志行、终端转写）放 `layers/scenario/shared/types/` 的纯函数，便于 `check:lab-*` 直接断言。
+5. 页面侧在 `layers/scenario/app/composables/` 消费：抓包用 `useLabSnifferStream()`（含历史回填），日志 / 监控用 `useLabWsChannel(kind)`（`lines` / `text` / `status` / `send`），Webshell 用 `useLabTerminalSessions()`（每个节点一条 socket + 一条标签，`open` / `close` / `send` / `clear`），组件里不出现 `new WebSocket`。归一（监控采样、日志行、终端转写）放 `layers/scenario/shared/types/` 的纯函数，便于 `check:lab-*` 直接断言。
 6. 手动验证：断网重连、后端重启、页面切换、权限过期（票 60 秒 / 一次性，重放应得 `401 lab_ws_ticket_invalid`）。
 7. 跑 `pnpm build:server && pnpm check:lab-bff`（⑫ 票与抓包流、⑬ 终端 / 日志 / 监控）与 `pnpm check:ui`（11.7 实时包列表、11.8 Network Tools）。假上游的 WS 只有在 `scripts/lib/bff-harness.mjs` 的 `attachSnifferSocket()` 派发表里登记过才会接受升级 —— 它同时监听四条路径，别另挂第二个 `server.on("upgrade")`（会互相 `destroy`）。
 
