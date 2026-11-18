@@ -161,6 +161,15 @@ GET /iam/subject-roles?page=1&page_size=200
 顺带确认两条「顺带发现」不影响主链路：本次没有触发约束冲突（旧行已随修复回填，不是靠
 `RevokeRole` + 重分配绕过的），`GET /iam/subject-roles` 仍忽略 `role_id`（本次未用到该参数）。
 
+**④ 第二个能力位（`lab_sniffer`）同链路可用**：`POST /iam/roles` 建 `lab_sniffer`
+（`bcadd871-d4f2-40f5-9ac6-1c4ad28e096f`，落库 `tenant_id = tnt_default`）后 `AssignRole` 给 alice，
+`GET /iam/subject-roles?subject_id=a6541d3f-…` 回 `total: 2`，两行 `tenant_id` 都是 `tnt_default`。
+`/api/lab/channel` 变 `{"read":true,"terminal":true,"sniffer":true,其余 false}`，右栏 5 个标签
+（Webshell / 日志 / 监控 / 网络 / 连通）；「连通」里只有抓包读数，**探测按钮不出现**（要 `lab:operate`）。
+「工具 → 开始抓包」把 `/api/lab/sniffer/state` 推到 `{"active":true}`、实时流显示「实时」，
+「停止抓包」回到 `{"active":false}`。页面上首次点不动是 `runState` 尚未读回（`null`）导致菜单项
+`disabled`，约 1 秒后可用，与权限无关。
+
 ## 8. 附件
 
 - 实测原始输出：`/tmp/iam-probe.txt`、`/tmp/iam-probe2.txt` … `/tmp/iam-probe6.txt`（本机临时目录，非仓库内容）
