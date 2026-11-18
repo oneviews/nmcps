@@ -6438,6 +6438,60 @@ if (upstreamPort) {
 			`上游=${monitorUpstream?.path}?${monitorParams.toString()}`
 		);
 
+		// ── 能力位裁剪（NMCPS-ADR-0022 D6）：标签页按能力位出现，不由 `lab:read` 推导写入口 ──
+		// 两种形态各一条：只读会话（实验台操作员）与只有 `lab:operate` 的会话（租户管理员）。
+		// 两者都不含 `lab:terminal`，所以 Webshell 一律不出现 —— 这是「终端不由 operate 推导」的
+		// 可见证据；只读会话连「连通」也不出现，因为探测 / 测速 / 抓包读数都要写位。
+		// 假上游固定给 alice 全能力位（其余用例靠它），这里直接改写 `GET /api/lab/channel` 的
+		// 能力位来覆盖裁剪分支，而不是去动共用角色表。
+		const overrideChannel = async (capabilities) => {
+			await labPage.unroute("**/api/lab/channel");
+			await labPage.route("**/api/lab/channel", async (route) => {
+				const response = await route.fetch();
+				const body = await response.json();
+				const writeEnabled = capabilities.create || capabilities.operate || capabilities.delete || capabilities.sniffer;
+				await route.fulfill({
+					status: 200,
+					contentType: "application/json; charset=utf-8",
+					body: JSON.stringify({ ...body, data: { ...body.data, readOnly: !writeEnabled, writeEnabled, capabilities } })
+				});
+			});
+			await labPage.reload({ waitUntil: "networkidle" });
+			await labPage.waitForTimeout(600);
+			return await labPage.evaluate(() => ({
+				labels: [...document.querySelectorAll("[data-testid='mininet-side-tabs'] [role='tab']")]
+					.map((node) => (node.textContent ?? "").trim()),
+				connectivityText: (document.body.textContent ?? "").includes("连通"),
+				terminalPanel: Boolean(document.querySelector("[data-testid='mininet-terminal-panel']"))
+			}));
+		};
+
+		const readOnlyProbe = await overrideChannel({ read: true, create: false, operate: false, delete: false, terminal: false, sniffer: false });
+		log(
+			"11.9 只读会话（实验台操作员）：右栏只剩 日志 / 监控 / 网络，Webshell 与连通都不出现",
+			readOnlyProbe.labels.length === 3
+			&& ["日志", "监控", "网络"].every((label) => readOnlyProbe.labels.includes(label))
+			&& !readOnlyProbe.labels.includes("Webshell") && !readOnlyProbe.labels.includes("连通")
+			&& !readOnlyProbe.connectivityText && !readOnlyProbe.terminalPanel,
+			`tabs=${JSON.stringify(readOnlyProbe.labels)} 连通字样=${readOnlyProbe.connectivityText}`
+		);
+
+		const operateProbe = await overrideChannel({ read: true, create: false, operate: true, delete: false, terminal: false, sniffer: false });
+		const operateTab = await openSideTab("连通");
+		const operatePanel = await labPage.evaluate(() => ({
+			runState: Boolean(document.querySelector("[data-testid='mininet-run-state']")),
+			ping: Boolean(document.querySelector("[data-testid='mininet-run-ping']")),
+			iperf: Boolean(document.querySelector("[data-testid='mininet-iperf-client']")),
+			sniffer: Boolean(document.querySelector("[data-testid='mininet-sniffer-panel']"))
+		}));
+		log(
+			"11.9 只有 lab:operate 的会话（租户管理员）：连通出现且探测 / 测速可用，Webshell 与抓包读数都不出现",
+			operateTab && operateProbe.labels.includes("连通") && !operateProbe.labels.includes("Webshell")
+			&& !operateProbe.terminalPanel
+			&& operatePanel.runState && operatePanel.ping && operatePanel.iperf && !operatePanel.sniffer,
+			`tabs=${JSON.stringify(operateProbe.labels)} 运行态=${operatePanel.runState} 探测=${operatePanel.ping} 测速=${operatePanel.iperf} 抓包=${operatePanel.sniffer}`
+		);
+
 		await labContext.close();
 	} finally {
 		await stopBff(labBff);

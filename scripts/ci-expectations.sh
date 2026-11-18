@@ -18,7 +18,7 @@
 #   i18n        → `✅ 文案自查 10/10 通过`
 #   governance  → `结果：N 通过 / 0 失败 / 0 告警`（check:doc-system 的小结；N 随文档增减变化，不写死）
 #   bff         → `130/130 项通过`
-#   ui          → `287/287 项通过`
+#   ui          → `289/289 项通过`
 #   lab-terminal → `6/6 项通过（真实 bash + PTY）`
 set -eu
 
