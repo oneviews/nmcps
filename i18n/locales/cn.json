@@ -47,6 +47,7 @@
 			"title": "演示种子账号",
 			"superAdmin": "超级管理员",
 			"tenantAdmin": "租户管理员",
+			"labOperator": "实验台操作员",
 			"hint": "演示环境已按身份预填种子账号，点击按钮即可切换；账号与口令仍可手动修改。"
 		},
 		"username": "用户名",
@@ -819,7 +820,14 @@
 			"panel": {
 				"title": "实验台",
 				"expand": "展开右栏面板",
-				"collapse": "收起右栏面板"
+				"collapse": "收起右栏面板",
+				"tabs": {
+					"webshell": "Webshell",
+					"logs": "日志",
+					"monitor": "监控",
+					"network": "网络",
+					"connectivity": "连通"
+				}
 			},
 			"stats": {
 				"network": "网络",
@@ -851,17 +859,9 @@
 				"hosts": "显示主机",
 				"controllers": "显示控制器",
 				"hostIp": "显示主机 IP",
-				"networkTools": "网络工具",
 				"reconcile": "台账对账…"
 			},
 			"networkTools": {
-				"title": "网络工具",
-				"description": "Webshell、上游日志与单接口速率：三条通道都经 BFF 换票建连，浏览器不直连实验服务。",
-				"tabs": {
-					"webshell": "Webshell",
-					"logs": "日志",
-					"monitor": "监控"
-				},
 				"state": {
 					"idle": "未连接",
 					"connecting": "连接中",

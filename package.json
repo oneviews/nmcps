@@ -17,6 +17,7 @@
 		"check:lab-flows": "tsx scripts/check-lab-flows.ts",
 		"check:lab-run": "tsx scripts/check-lab-run.ts",
 		"check:lab-terminal": "python3 layers/scenario/scripts/check-lab-terminal.py",
+		"check:lab-real": "node layers/scenario/scripts/check-lab-real.mjs",
 		"check:lab-ws": "tsx scripts/check-lab-ws.ts",
 		"contracts:gen": "python3 scripts/gen-mininet-contracts.py",
 		"contracts:check": "python3 scripts/gen-mininet-contracts.py --check",

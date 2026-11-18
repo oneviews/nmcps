@@ -98,7 +98,15 @@ export default defineNuxtConfig({
 		},
 		public: {
 			// 前端访问 BFF 的基址：web 同源留空；桌面构建必须指向已部署的 BFF
-			bffBase: ""
+			bffBase: "",
+			/*
+			 * 登录页是否提供「实验台操作员」演示身份（`NUXT_PUBLIC_DEMO_LAB_OPERATOR`）。
+			 *
+			 * 该账号是本地假上游 / 本机 Mininet 的 `alice`，真实 IAM 里没有它的实验室角色
+			 * （`docs/ai/lab-boundary.md` 的 AssignRole 缺陷一节）。缺省 false ⇒ 只给
+			 * `admin` / `tenantadmin` 两个种子身份、预填回到平台管理员；本机演示时置 true。
+			 */
+			demoLabOperator: false
 		}
 	},
 	app: {

@@ -1,258 +1,249 @@
 <template>
 	<!--
-		Network Tools（NMCPS-ADR-0022 D6 剩余通道）：Webshell / 日志 / 监控三块观测面。
+		右栏观测面（NMCPS-ADR-0022 D6）：Webshell / 上游日志 / 单接口速率三块内容。
 
-		一条纪律：**动作入口只有一个**。观察窗（抓包列表、运行读数）留在右栏，这里只放
-		需要选中目标（节点 / 接口）的交互面板；没有对应能力位的标签页不渲染，而不是
-		渲染出来再让人点出 403。
+		面板本身（标签页、折叠、宽度）归页面：标签状态是页面的 `sideTab`，这里的 `tab` 只是
+		「现在该渲染哪一页」的只读输入 —— 标签定义只有一份，不会出现组件内换页而页面不知道的分叉。
+
+		一条纪律：**动作入口只有一个**。观察窗（抓包列表、运行读数）留在右栏「连通」标签，
+		这里只放需要选中目标（节点 / 接口）的交互面板。
 	-->
-	<USlideover
-		v-model:open="open"
-		:title="$t('pages.scenario-simulator.networkTools.title')"
-		:description="$t('pages.scenario-simulator.networkTools.description')"
-		:ui="{ content: 'max-w-3xl' }"
-	>
-		<template #body>
-			<div class="space-y-3">
-				<UTabs
-					v-model="tab"
-					data-testid="mininet-network-tools-tabs"
-					size="sm"
-					:items="tabItems"
-					:content="false"
+	<div class="space-y-3">
+		<!-- ── Webshell（`lab:terminal`，单独授权） ── -->
+		<section v-if="tab === 'webshell'" data-testid="mininet-terminal-panel" class="space-y-2">
+			<div class="flex flex-wrap items-end gap-2">
+				<UFormField :label="$t('pages.scenario-simulator.networkTools.terminal.node')" class="min-w-40 flex-1">
+					<USelect
+						v-model="terminalNode"
+						data-testid="mininet-terminal-node"
+						size="xs"
+						class="w-full"
+						:items="nodeItems"
+						:placeholder="$t('pages.scenario-simulator.networkTools.terminal.nodePlaceholder')"
+					/>
+				</UFormField>
+				<UButton
+					data-testid="mininet-terminal-connect"
+					size="xs"
+					color="primary"
+					variant="subtle"
+					icon="carbon:terminal"
+					:label="$t('pages.scenario-simulator.networkTools.terminal.open')"
+					:disabled="!terminalNode"
+					@click="openTerminal"
 				/>
+				<UBadge data-testid="mininet-terminal-state" size="sm" variant="subtle" :color="channelColor(terminalStatus)">
+					{{ channelLabel(terminalStatus) }}
+				</UBadge>
+			</div>
 
-				<!-- ── Webshell（`lab:terminal`，单独授权） ── -->
-				<section v-if="tab === 'webshell'" data-testid="mininet-terminal-panel" class="space-y-2">
-					<div class="flex flex-wrap items-end gap-2">
-						<UFormField :label="$t('pages.scenario-simulator.networkTools.terminal.node')" class="min-w-40 flex-1">
-							<USelect
-								v-model="terminalNode"
-								data-testid="mininet-terminal-node"
-								size="xs"
-								class="w-full"
-								:items="nodeItems"
-								:placeholder="$t('pages.scenario-simulator.networkTools.terminal.nodePlaceholder')"
-							/>
-						</UFormField>
-						<UButton
-							data-testid="mininet-terminal-connect"
-							size="xs"
-							color="primary"
-							variant="subtle"
-							icon="carbon:terminal"
-							:label="$t('pages.scenario-simulator.networkTools.terminal.open')"
-							:disabled="!terminalNode"
-							@click="openTerminal"
-						/>
-						<UBadge data-testid="mininet-terminal-state" size="sm" variant="subtle" :color="channelColor(terminalStatus)">
-							{{ channelLabel(terminalStatus) }}
-						</UBadge>
-					</div>
-
-					<!--
+			<!--
 						会话标签（复刻 1.0 的「每节点一条终端」）：切换只换视图、不断流，
 						标签上的 × 才断那一条 —— 换回来时远端 PTY 还在原处。
 					-->
-					<div v-if="terminalSessions.length" data-testid="mininet-terminal-sessions" class="flex flex-wrap items-center gap-1">
-						<div
-							v-for="session in terminalSessions"
-							:key="session.target"
-							class="flex items-center rounded border border-(--ui-border) pr-0.5"
-							:class="session.target === terminalActive ? 'bg-(--ui-bg-muted)' : ''"
-						>
-							<UButton
-								:data-testid="`mininet-terminal-session-${session.target}`"
-								size="xs"
-								color="neutral"
-								variant="ghost"
-								class="font-mono"
-								:label="nodeLabel(session.target)"
-								@click="terminalActive = session.target"
-							/>
-							<UButton
-								:data-testid="`mininet-terminal-session-close-${session.target}`"
-								size="xs"
-								color="neutral"
-								variant="ghost"
-								icon="carbon:close"
-								:aria-label="$t('pages.scenario-simulator.networkTools.terminal.closeSession', { node: nodeLabel(session.target) })"
-								@click="closeTerminal(session.target)"
-							/>
-						</div>
-					</div>
+			<div v-if="terminalSessions.length" data-testid="mininet-terminal-sessions" class="flex flex-wrap items-center gap-1">
+				<div
+					v-for="session in terminalSessions"
+					:key="session.target"
+					class="flex items-center rounded border border-(--ui-border) pr-0.5"
+					:class="session.target === terminalActive ? 'bg-(--ui-bg-muted)' : ''"
+				>
+					<UButton
+						:data-testid="`mininet-terminal-session-${session.target}`"
+						size="xs"
+						color="neutral"
+						variant="ghost"
+						class="font-mono"
+						:label="nodeLabel(session.target)"
+						@click="terminalActive = session.target"
+					/>
+					<UButton
+						:data-testid="`mininet-terminal-session-close-${session.target}`"
+						size="xs"
+						color="neutral"
+						variant="ghost"
+						icon="carbon:close"
+						:aria-label="$t('pages.scenario-simulator.networkTools.terminal.closeSession', { node: nodeLabel(session.target) })"
+						@click="closeTerminal(session.target)"
+					/>
+				</div>
+			</div>
 
-					<!--
+			<!--
 						终端本体：可聚焦的观测窗 + 一枚透明的 textarea 收键盘。
 						点一下就聚焦；之后逐键上行（回车 `\r`、退格 `0x7f`、方向键走 CSI），
 						中文等 IME 输入不进 keydown，由 textarea 的 `input` 事件兜底。
 					-->
-					<div
-						ref="terminalBody"
-						data-testid="mininet-terminal-output"
-						class="relative max-h-64 min-h-40 overflow-auto rounded bg-(--ui-bg-elevated) p-2 font-mono text-[11px] leading-4 focus:ring-1 focus:ring-(--ui-primary) focus:outline-none"
-						tabindex="0"
-						@click="focusTerminalKeys"
-					>
-						<pre class="pointer-events-none whitespace-pre-wrap">{{ terminalDisplay || terminalPlaceholder }}<span v-if="terminalLive" class="text-(--ui-primary)">▍</span></pre>
-						<textarea
-							ref="terminalKeys"
-							data-testid="mininet-terminal-input"
-							class="absolute top-0 left-0 h-px w-px resize-none border-0 p-0 opacity-0"
-							autocapitalize="off"
-							autocomplete="off"
-							spellcheck="false"
-							:aria-label="$t('pages.scenario-simulator.networkTools.terminal.keysHint')"
-							@keydown="onTerminalKeydown"
-							@input="onTerminalInput"
-						/>
-					</div>
-
-					<div class="flex flex-wrap items-center gap-2">
-						<UButton
-							type="button"
-							data-testid="mininet-terminal-interrupt"
-							size="xs"
-							color="warning"
-							variant="subtle"
-							icon="carbon:stop-filled"
-							:disabled="!terminalLive"
-							:label="$t('pages.scenario-simulator.networkTools.terminal.interrupt')"
-							@click="interruptTerminal"
-						/>
-						<UButton
-							type="button"
-							data-testid="mininet-terminal-clear"
-							size="xs"
-							color="neutral"
-							variant="subtle"
-							icon="carbon:clean"
-							:disabled="!terminalDisplay"
-							:label="$t('pages.scenario-simulator.networkTools.terminal.clear')"
-							@click="clearTerminalOutput"
-						/>
-						<p class="text-[11px] text-(--ui-text-muted)">
-							{{ $t("pages.scenario-simulator.networkTools.terminal.keysHint") }}
-						</p>
-					</div>
-
-					<p v-if="terminalStatus === 'closed'" data-testid="mininet-terminal-closed" class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.scenario-simulator.networkTools.terminal.closedHint") }}
-					</p>
-
-					<p v-if="terminalError" data-testid="mininet-terminal-error" class="text-xs text-(--ui-text-error)">
-						{{ terminalError }}
-					</p>
-				</section>
-
-				<!-- ── 上游日志（`lab:read`） ── -->
-				<section v-else-if="tab === 'logs'" data-testid="mininet-logs-panel" class="space-y-2">
-					<div class="flex items-center justify-between gap-2">
-						<p class="text-[11px] text-(--ui-text-muted)">
-							{{ $t("pages.scenario-simulator.networkTools.logs.hint") }}
-						</p>
-						<UBadge data-testid="mininet-logs-state" size="sm" variant="subtle" :color="channelColor(logsStatus)">
-							{{ channelLabel(logsStatus) }}
-						</UBadge>
-					</div>
-					<pre
-						data-testid="mininet-logs-output"
-						class="max-h-64 min-h-40 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
-					>{{ logsText || $t("pages.scenario-simulator.networkTools.logs.empty") }}</pre>
-					<p v-if="logsError" data-testid="mininet-logs-error" class="text-xs text-(--ui-text-error)">
-						{{ logsError }}
-					</p>
-				</section>
-
-				<!-- ── 单接口速率（`lab:read`） ── -->
-				<section v-else-if="tab === 'monitor'" data-testid="mininet-monitor-panel" class="space-y-2">
-					<div class="flex flex-wrap items-end gap-2">
-						<UFormField :label="$t('pages.scenario-simulator.networkTools.monitor.node')" class="min-w-32 flex-1">
-							<USelect
-								v-model="monitorNode"
-								data-testid="mininet-monitor-node"
-								size="xs"
-								class="w-full"
-								:items="nodeItems"
-								:placeholder="$t('pages.scenario-simulator.networkTools.monitor.nodePlaceholder')"
-							/>
-						</UFormField>
-						<UFormField :label="$t('pages.scenario-simulator.networkTools.monitor.intf')" class="min-w-32 flex-1">
-							<USelect
-								v-model="monitorIntf"
-								data-testid="mininet-monitor-intf"
-								size="xs"
-								class="w-full"
-								:items="intfItems"
-								:disabled="!intfItems.length"
-								:placeholder="$t('pages.scenario-simulator.networkTools.monitor.intfPlaceholder')"
-							/>
-						</UFormField>
-						<UButton
-							data-testid="mininet-monitor-start"
-							size="xs"
-							color="primary"
-							variant="subtle"
-							:icon="monitorLive ? 'carbon:close' : 'carbon:chart-line'"
-							:label="monitorLive
-								? $t('pages.scenario-simulator.networkTools.monitor.stop')
-								: $t('pages.scenario-simulator.networkTools.monitor.start')"
-							:disabled="!monitorNode || !monitorIntf"
-							@click="toggleMonitor"
-						/>
-						<UBadge data-testid="mininet-monitor-state" size="sm" variant="subtle" :color="channelColor(monitorStatus)">
-							{{ channelLabel(monitorStatus) }}
-						</UBadge>
-					</div>
-
-					<p v-if="!interfaces.length" data-testid="mininet-monitor-empty-interfaces" class="text-[11px] text-(--ui-text-muted)">
-						{{ $t("pages.scenario-simulator.networkTools.monitor.noInterfaces") }}
-					</p>
-
-					<ul v-if="monitorSamples.length" data-testid="mininet-monitor-samples" class="max-h-56 divide-y divide-(--ui-border) overflow-auto rounded border border-(--ui-border) text-[11px]">
-						<li
-							v-for="(sample, index) in monitorSamples"
-							:key="`${sample.ts}-${index}`"
-							data-testid="mininet-monitor-sample"
-							class="flex items-center gap-2 px-2 py-1"
-						>
-							<span class="shrink-0 font-mono">{{ sample.intf }}</span>
-							<span class="shrink-0 text-(--ui-text-muted)">TX {{ formatRate(sample.txGbps) }}</span>
-							<span class="shrink-0 text-(--ui-text-muted)">RX {{ formatRate(sample.rxGbps) }}</span>
-							<span class="ml-auto shrink-0 text-(--ui-text-muted)">{{ sample.ts }}</span>
-						</li>
-					</ul>
-					<p v-else data-testid="mininet-monitor-empty" class="text-[11px] text-(--ui-text-muted)">
-						{{ $t("pages.scenario-simulator.networkTools.monitor.empty") }}
-					</p>
-					<p v-if="monitorError" data-testid="mininet-monitor-error" class="text-xs text-(--ui-text-error)">
-						{{ monitorError }}
-					</p>
-				</section>
+			<div
+				ref="terminalBody"
+				data-testid="mininet-terminal-output"
+				class="relative max-h-64 min-h-40 overflow-auto rounded bg-(--ui-bg-elevated) p-2 font-mono text-[11px] leading-4 focus:ring-1 focus:ring-(--ui-primary) focus:outline-none"
+				tabindex="0"
+				@click="focusTerminalKeys"
+			>
+				<pre class="pointer-events-none whitespace-pre-wrap">{{ terminalDisplay || terminalPlaceholder }}<span v-if="terminalLive" class="text-(--ui-primary)">▍</span></pre>
+				<textarea
+					ref="terminalKeys"
+					data-testid="mininet-terminal-input"
+					class="absolute top-0 left-0 h-px w-px resize-none border-0 p-0 opacity-0"
+					autocapitalize="off"
+					autocomplete="off"
+					spellcheck="false"
+					:aria-label="$t('pages.scenario-simulator.networkTools.terminal.keysHint')"
+					@keydown="onTerminalKeydown"
+					@input="onTerminalInput"
+					@paste="onTerminalPaste"
+				/>
 			</div>
-		</template>
-	</USlideover>
+
+			<div class="flex flex-wrap items-center gap-2">
+				<UButton
+					type="button"
+					data-testid="mininet-terminal-interrupt"
+					size="xs"
+					color="warning"
+					variant="subtle"
+					icon="carbon:stop-filled"
+					:disabled="!terminalLive"
+					:label="$t('pages.scenario-simulator.networkTools.terminal.interrupt')"
+					@click="interruptTerminal"
+				/>
+				<UButton
+					type="button"
+					data-testid="mininet-terminal-clear"
+					size="xs"
+					color="neutral"
+					variant="subtle"
+					icon="carbon:clean"
+					:disabled="!terminalDisplay"
+					:label="$t('pages.scenario-simulator.networkTools.terminal.clear')"
+					@click="clearTerminalOutput"
+				/>
+				<p class="text-[11px] text-(--ui-text-muted)">
+					{{ $t("pages.scenario-simulator.networkTools.terminal.keysHint") }}
+				</p>
+			</div>
+
+			<p v-if="terminalStatus === 'closed'" data-testid="mininet-terminal-closed" class="text-xs text-(--ui-text-muted)">
+				{{ $t("pages.scenario-simulator.networkTools.terminal.closedHint") }}
+			</p>
+
+			<p v-if="terminalError" data-testid="mininet-terminal-error" class="text-xs text-(--ui-text-error)">
+				{{ terminalError }}
+			</p>
+		</section>
+
+		<!-- ── 上游日志（`lab:read`） ── -->
+		<section v-else-if="tab === 'logs'" data-testid="mininet-logs-panel" class="space-y-2">
+			<div class="flex items-center justify-between gap-2">
+				<p class="text-[11px] text-(--ui-text-muted)">
+					{{ $t("pages.scenario-simulator.networkTools.logs.hint") }}
+				</p>
+				<UBadge data-testid="mininet-logs-state" size="sm" variant="subtle" :color="channelColor(logsStatus)">
+					{{ channelLabel(logsStatus) }}
+				</UBadge>
+			</div>
+			<pre
+				data-testid="mininet-logs-output"
+				class="max-h-64 min-h-40 overflow-auto rounded bg-(--ui-bg-elevated) p-2 text-[11px] leading-4 whitespace-pre-wrap"
+			>{{ logsText || $t("pages.scenario-simulator.networkTools.logs.empty") }}</pre>
+			<p v-if="logsError" data-testid="mininet-logs-error" class="text-xs text-(--ui-text-error)">
+				{{ logsError }}
+			</p>
+		</section>
+
+		<!-- ── 单接口速率（`lab:read`） ── -->
+		<section v-else-if="tab === 'monitor'" data-testid="mininet-monitor-panel" class="space-y-2">
+			<div class="flex flex-wrap items-end gap-2">
+				<UFormField :label="$t('pages.scenario-simulator.networkTools.monitor.node')" class="min-w-32 flex-1">
+					<USelect
+						v-model="monitorNode"
+						data-testid="mininet-monitor-node"
+						size="xs"
+						class="w-full"
+						:items="nodeItems"
+						:placeholder="$t('pages.scenario-simulator.networkTools.monitor.nodePlaceholder')"
+					/>
+				</UFormField>
+				<UFormField :label="$t('pages.scenario-simulator.networkTools.monitor.intf')" class="min-w-32 flex-1">
+					<USelect
+						v-model="monitorIntf"
+						data-testid="mininet-monitor-intf"
+						size="xs"
+						class="w-full"
+						:items="intfItems"
+						:disabled="!intfItems.length"
+						:placeholder="$t('pages.scenario-simulator.networkTools.monitor.intfPlaceholder')"
+					/>
+				</UFormField>
+				<UButton
+					data-testid="mininet-monitor-start"
+					size="xs"
+					color="primary"
+					variant="subtle"
+					:icon="monitorLive ? 'carbon:close' : 'carbon:chart-line'"
+					:label="monitorLive
+						? $t('pages.scenario-simulator.networkTools.monitor.stop')
+						: $t('pages.scenario-simulator.networkTools.monitor.start')"
+					:disabled="!monitorNode || !monitorIntf"
+					@click="toggleMonitor"
+				/>
+				<UBadge data-testid="mininet-monitor-state" size="sm" variant="subtle" :color="channelColor(monitorStatus)">
+					{{ channelLabel(monitorStatus) }}
+				</UBadge>
+			</div>
+
+			<p v-if="!interfaces.length" data-testid="mininet-monitor-empty-interfaces" class="text-[11px] text-(--ui-text-muted)">
+				{{ $t("pages.scenario-simulator.networkTools.monitor.noInterfaces") }}
+			</p>
+
+			<ul v-if="monitorSamples.length" data-testid="mininet-monitor-samples" class="max-h-56 divide-y divide-(--ui-border) overflow-auto rounded border border-(--ui-border) text-[11px]">
+				<li
+					v-for="(sample, index) in monitorSamples"
+					:key="`${sample.ts}-${index}`"
+					data-testid="mininet-monitor-sample"
+					class="flex items-center gap-2 px-2 py-1"
+				>
+					<span class="shrink-0 font-mono">{{ sample.intf }}</span>
+					<span class="shrink-0 text-(--ui-text-muted)">TX {{ formatRate(sample.txGbps) }}</span>
+					<span class="shrink-0 text-(--ui-text-muted)">RX {{ formatRate(sample.rxGbps) }}</span>
+					<span class="ml-auto shrink-0 text-(--ui-text-muted)">{{ sample.ts }}</span>
+				</li>
+			</ul>
+			<p v-else data-testid="mininet-monitor-empty" class="text-[11px] text-(--ui-text-muted)">
+				{{ $t("pages.scenario-simulator.networkTools.monitor.empty") }}
+			</p>
+			<p v-if="monitorError" data-testid="mininet-monitor-error" class="text-xs text-(--ui-text-error)">
+				{{ monitorError }}
+			</p>
+		</section>
+	</div>
 </template>
 
 <script setup lang="ts">
 	import type { LabWsChannelStatus } from "#layers/scenario/app/composables/useLabWsChannel";
 	import type { LabInterfaceNode } from "#layers/scenario/shared/types/labInterfaces";
+	import type { LabSideTab } from "#layers/scenario/shared/types/labSideTabs";
 	import type { LabMonitorSample } from "#layers/scenario/shared/types/labWs";
-	import type { MininetChannelCapabilities } from "#layers/scenario/shared/types/mininet";
 	import { labInterfaceNodesOf } from "#layers/scenario/shared/types/labInterfaces";
 	import { labMonitorFrameOf, labTerminalTextOf } from "#layers/scenario/shared/types/labWs";
 
 	/**
-	 * 动作入口：工具栏「网络工具」按钮（页面唯一入口）。三个面板各自换票建连，
-	 * 连接状态与内容都由 `useLabWsChannel()` 管理 —— 组件不碰 `new WebSocket`。
+	 * 右栏三个观测页的内容（标签页由页面的 `UTabs` 驱动）：`tab` 是页面的 `sideTab`，
+	 * `panelOpen` 是右栏折叠状态。切到「网络 / 连通」不断 WebShell 会话（那是用户自己开的），
+	 * 收起右栏才全断 —— 不留没人收的 socket，也不把「切个标签」变成「关终端」。
+	 *
+	 * 连接状态与内容都由 `useLabWsChannel()` / `useLabTerminalSessions()` 管理 ——
+	 * 组件不碰 `new WebSocket`。
 	 */
 	const props = defineProps<{
-		capabilities: MininetChannelCapabilities | null
 		nodes: Array<{ id: string, label: string }>
 		selectedId?: string | null
+		/** 当前标签页：页面持有唯一的一份标签定义 */
+		tab: LabSideTab
+		/** 右栏是否展开：收起即断流 */
+		panelOpen: boolean
 	}>();
-
-	const open = defineModel<boolean>("open", { default: false });
 
 	const api = useApi();
 	const { t } = useI18n();
@@ -282,9 +273,6 @@
 		disconnect: disconnectMonitor
 	} = useLabWsChannel("monitor");
 
-	type ToolTab = "webshell" | "logs" | "monitor";
-
-	const tab = ref<ToolTab>("webshell");
 	const terminalBody = ref<HTMLElement | null>(null);
 	/** 收键盘的载体：不是输入框（终端里没有「一行输入」），只负责把按键交出去 */
 	const terminalKeys = ref<HTMLTextAreaElement | null>(null);
@@ -293,27 +281,6 @@
 	const monitorIntf = ref<string>();
 	const interfaces = ref<LabInterfaceNode[]>([]);
 	const monitorSamples = ref<LabMonitorSample[]>([]);
-
-	/** 标签页按能力位裁剪：没有 `lab:terminal` 就没有 Webshell，没有 `lab:read` 就没有日志 / 监控 */
-	const tabItems = computed(() => [
-		...(props.capabilities?.terminal ? [{ label: t("pages.scenario-simulator.networkTools.tabs.webshell"), value: "webshell" }] : []),
-		...(props.capabilities?.read
-			? [
-				{ label: t("pages.scenario-simulator.networkTools.tabs.logs"), value: "logs" },
-				{ label: t("pages.scenario-simulator.networkTools.tabs.monitor"), value: "monitor" }
-			]
-			: [])
-	]);
-
-	/**
-	 * 能力位还没到（`null`）时保持「Webshell」这个**稳定缺省**：面板只在能力位加载后才能打开，
-	 * 若把空列表回落成「日志」，一打开就会自动建日志流，用户看到的第一个标签取决于请求时序。
-	 * 没有 `lab:terminal` 时落到第一项（日志），与标签顺序一致。
-	 */
-	watch(tabItems, (items) => {
-		if (!items.some((item) => item.value === tab.value))
-			tab.value = (items[0]?.value as ToolTab | undefined) ?? "webshell";
-	}, { immediate: true });
 
 	const nodeItems = computed(() => props.nodes.map((node) => ({ label: node.label, value: node.id })));
 	const intfItems = computed(() => interfaces.value
@@ -389,7 +356,7 @@
 
 	/**
 	 * 非可打印键 → PTY 字节。回车是 `\r` 而不是 `\n`（PTY 的行规程只认 `\r`），
-	 * 退格是 `0x7f`（DEL），方向键 / Home / End / Delete 走 ANSI CSI。
+	 * 退格是 `0x7f`（DEL），方向键 / Home / End / Delete / Insert 与 F1–F12 走 ANSI CSI。
 	 */
 	const TERMINAL_KEYS: Record<string, string> = {
 		Enter: "\r",
@@ -402,10 +369,54 @@
 		ArrowLeft: "\u001B[D",
 		Home: "\u001B[H",
 		End: "\u001B[F",
+		Insert: "\u001B[2~",
 		Delete: "\u001B[3~",
 		PageUp: "\u001B[5~",
-		PageDown: "\u001B[6~"
+		PageDown: "\u001B[6~",
+		F1: "\u001BOP",
+		F2: "\u001BOQ",
+		F3: "\u001BOR",
+		F4: "\u001BOS",
+		F5: "\u001B[15~",
+		F6: "\u001B[17~",
+		F7: "\u001B[18~",
+		F8: "\u001B[19~",
+		F9: "\u001B[20~",
+		F10: "\u001B[21~",
+		F11: "\u001B[23~",
+		F12: "\u001B[24~"
 	};
+
+	/** 方向键 / 行首尾键的 CSI 字母位（xterm 的 `CSI 1;<mod><letter>`） */
+	const TERMINAL_CURSOR_KEYS: Record<string, string> = {
+		ArrowUp: "A",
+		ArrowDown: "B",
+		ArrowRight: "C",
+		ArrowLeft: "D",
+		Home: "H",
+		End: "F"
+	};
+
+	/**
+	 * 带修饰的光标键：`Shift+↑` / `Ctrl+→` / `Alt+←` 在 readline 里是选词、按词跳、按词移动，
+	 * 与不带修饰的方向键不是同一串字节。修饰位沿用 xterm 的编码（2=Shift、3=Alt、5=Ctrl）。
+	 */
+	function modifiedCursorKeyOf(event: KeyboardEvent): string | undefined {
+		const modifier = event.ctrlKey ? 5 : event.altKey ? 3 : event.shiftKey ? 2 : 0;
+		if (!modifier)
+			return undefined;
+
+		const letter = TERMINAL_CURSOR_KEYS[event.key];
+		if (letter)
+			return `\u001B[1;${modifier}${letter}`;
+
+		const tilde = event.key === "Delete"
+			? "3"
+			: event.key === "PageUp"
+				? "5"
+				: event.key === "PageDown" ? "6" : undefined;
+		return tilde ? `\u001B[${tilde};${modifier}~` : undefined;
+	}
 
 	/** 连打字符的攒帧缓冲：一帧一个字母会把一次输入拆成几十帧，PTY 侧没有必要 */
 	let keyBuffer = "";
@@ -433,32 +444,67 @@
 		keyTimer ??= setTimeout(flushTerminalKeys, 8);
 	}
 
+	/** 控制键（回车 / 方向键 / Ctrl-字母）：先把攒着的字符冲刷掉再发，按键顺序不会乱 */
+	function sendTerminalKey(target: string, sequence: string): void {
+		flushTerminalKeys();
+		sendTerminal(target, sequence);
+	}
+
 	/**
-	 * 逐键上行（NMCPS-ADR-0022 W8）：
+	 * 逐键上行（NMCPS-ADR-0022 W8、ADR-0025）：
 	 * - 可打印字符随打随发，回显交给 PTY（做本地回显会让一次输入出现两份）；
-	 * - `Ctrl+字母` 发 `0x01–0x1A`（`Ctrl-C` 中断、`Ctrl-D` 退出、`Ctrl-L` 清屏），
-	 *   不是发字面量 `^C`；`Ctrl-V` 留给浏览器（粘贴由 textarea 的 `input` 事件送出）；
-	 * - 控制键与回车先把攒着的字符冲刷掉，按键顺序不会乱。
+	 * - `Ctrl+字母` 发 `0x01–0x1A`（`Ctrl-C` 中断、`Ctrl-D` 退出、`Ctrl-L` 清屏、`Ctrl-U` 删行、
+	 *   `Ctrl-Z` 挂起），不是发字面量 `^C`；`Ctrl+Space` 是 NUL（readline 的 set-mark）；
+	 * - `Alt+字母` 发 `ESC + 字母`（readline 的按词操作），`Shift/Ctrl/Alt + 方向键` 走
+	 *   `CSI 1;<mod><letter>`，与不带修饰的方向键不是同一串字节；
+	 * - 粘贴（`Ctrl+V` / `Ctrl+Shift+V`）交给浏览器：文本经 `paste` 事件整段送出，
+	 *   `Ctrl+V` 自身绝不能把 `"v"` 当输入发给 PTY；
+	 * - IME 组字期间（中文输入）不拦 keydown：`event.isComposing` 的键位不是用户最终输入，
+	 *   整段文本由 textarea 的 `input` 事件兜底。
 	 */
 	function onTerminalKeydown(event: KeyboardEvent): void {
 		const target = terminalActive.value;
 		if (!target)
 			return;
 
-		if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1 && event.key.toLowerCase() !== "v") {
+		// 组字中的 keydown（key 为 `Process` / keyCode 229）不是用户输入：放行给输入法
+		if (event.isComposing || event.keyCode === 229)
+			return;
+
+		// `Ctrl+Shift+C/V` 是浏览器的复制 / 粘贴，与终端里的 `Ctrl-C` / `Ctrl-V` 分开
+		if (event.ctrlKey && event.shiftKey && ["c", "v"].includes(event.key.toLowerCase()))
+			return;
+
+		// `Ctrl+V`：交给浏览器的粘贴流程（`paste` 事件整段送出），这里只保证不把 "v" 上行
+		if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "v")
+			return;
+
+		if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
 			const code = event.key.toUpperCase().charCodeAt(0);
 			if (code >= 64 && code <= 95) {
 				event.preventDefault();
-				flushTerminalKeys();
-				sendTerminal(target, String.fromCharCode(code - 64));
+				sendTerminalKey(target, String.fromCharCode(code - 64));
 				return;
 			}
 		}
 
-		if (event.altKey && event.key.length === 1) {
+		// `Ctrl+Space` 是 NUL：readline 的 set-mark，不是空格
+		if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === " ") {
 			event.preventDefault();
-			flushTerminalKeys();
-			sendTerminal(target, `\u001B${event.key}`);
+			sendTerminalKey(target, "\u0000");
+			return;
+		}
+
+		if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1) {
+			event.preventDefault();
+			sendTerminalKey(target, `\u001B${event.key}`);
+			return;
+		}
+
+		const modified = modifiedCursorKeyOf(event);
+		if (modified !== undefined) {
+			event.preventDefault();
+			sendTerminalKey(target, modified);
 			return;
 		}
 
@@ -466,15 +512,29 @@
 		const sequence = event.key === "Tab" && event.shiftKey ? "\u001B[Z" : TERMINAL_KEYS[event.key];
 		if (sequence !== undefined) {
 			event.preventDefault();
-			flushTerminalKeys();
-			sendTerminal(target, sequence);
+			sendTerminalKey(target, sequence);
 			return;
 		}
 
-		if (event.key.length === 1 && !event.metaKey) {
+		// 可打印字符：带 `Ctrl` / `Alt` / `Meta` 的组合一律不上行（上面已经翻成字节的除外）
+		if (event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
 			event.preventDefault();
 			queueTerminalKeys(target, event.key);
 		}
+	}
+
+	/**
+	 * 粘贴：整段一次送出。多行按 `\r` 分行（PTY 逐行执行），不做本地回显 ——
+	 * 粘贴的文本由浏览器放进透明 textarea，这里拦下默认插入，直接走通道。
+	 */
+	function onTerminalPaste(event: ClipboardEvent): void {
+		const target = terminalActive.value;
+		const text = event.clipboardData?.getData("text") ?? "";
+		if (!target || !text)
+			return;
+		event.preventDefault();
+		flushTerminalKeys();
+		sendTerminal(target, text.replace(/\r?\n/g, "\r"));
 	}
 
 	/** IME（中文等）不进 keydown：textarea 收下后整段发出，随即清空 —— 它只是键盘载体 */
@@ -565,13 +625,13 @@
 	});
 
 	/**
-	 * 面板开合 / 标签切换的连线策略：
+	 * 右栏开合 / 标签切换的连线策略（标签状态在页面的 `sideTab` 里）：
 	 * - 日志是「打开就看」的观测面：进日志标签自动建连，离开就断；
-	 * - WebShell 是**显式多会话**：切到日志 / 监控并不断流（那是用户自己开的会话，
-	 *   标签上有 ×），回到标签时把键盘焦点还给终端；面板关闭才全断，不留没人收的 socket；
+	 * - WebShell 是**显式多会话**：切到日志 / 监控 / 网络 / 连通都不断流（那是用户自己开的会话，
+	 *   标签上有 ×），回到标签时把键盘焦点还给终端；右栏收起才全断，不留没人收的 socket；
 	 * - 监控只有一个目标：切走就停（留着会继续采样一个看不见的接口）。
 	 */
-	watch([open, tab], ([isOpen, current]) => {
+	watch([() => props.panelOpen, () => props.tab], ([isOpen, current]) => {
 		if (!isOpen) {
 			disconnectLogs();
 			closeTerminalSessions();
@@ -590,7 +650,7 @@
 			disconnectMonitor();
 	});
 
-	watch(open, (isOpen) => {
+	watch(() => props.panelOpen, (isOpen) => {
 		if (isOpen)
 			void loadInterfaces();
 	}, { immediate: true });

@@ -281,7 +281,13 @@ export function attachSnifferSocket(server, options = {}) {
 
 		openSockets.add(socket);
 		socket.on("close", () => openSockets.delete(socket));
-		connections.push({ path: url.pathname, search: url.search, headers: req.headers });
+		/**
+		 * 这条上游连的入站帧（`input`）：逐键映射只能靠「上游到底收到哪串字节」来证明 ——
+		 * 回显会被面板的 ANSI 清洗吃掉，`Ctrl-L` 的 `0x0c` 与 `ESC[C` 在那里看不清。
+		 * 抓包 / 日志 / 监控没有上行，数组因此恒为空。
+		 */
+		const connection = { path: url.pathname, search: url.search, headers: req.headers, input: [] };
+		connections.push(connection);
 
 		// RFC 6455 §4.2.2：`Sec-WebSocket-Accept = base64(sha1(key + GUID))`
 		const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
@@ -305,11 +311,13 @@ export function attachSnifferSocket(server, options = {}) {
 		/** 假 PTY 的行缓冲：回车才回一行 `echo:<line>`，与真 bash 的「回车才执行」一致 */
 		let line = "";
 		socket.on("data", (chunk) => {
-			if (!spec.echo)
-				return;
 			const parsed = readClientFrames(Buffer.concat([pending, chunk]));
 			pending = parsed.rest;
 			for (const frame of parsed.frames) {
+				if (frame.opcode === 0x1)
+					connection.input.push(frame.text);
+				if (!spec.echo)
+					continue;
 				if (frame.opcode === 0x8) {
 					socket.end();
 					return;

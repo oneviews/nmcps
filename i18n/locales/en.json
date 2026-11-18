@@ -47,6 +47,7 @@
 			"title": "Demo seed accounts",
 			"superAdmin": "Super admin",
 			"tenantAdmin": "Tenant admin",
+			"labOperator": "Lab operator",
 			"hint": "Demo builds pre-fill the seed account for each identity — click to switch; both account and password stay editable."
 		},
 		"username": "Username",
@@ -819,7 +820,14 @@
 			"panel": {
 				"title": "Lab controls",
 				"expand": "Expand the side panel",
-				"collapse": "Collapse the side panel"
+				"collapse": "Collapse the side panel",
+				"tabs": {
+					"webshell": "Webshell",
+					"logs": "Logs",
+					"monitor": "Monitor",
+					"network": "Network",
+					"connectivity": "Reachability"
+				}
 			},
 			"stats": {
 				"network": "Network",
@@ -851,17 +859,9 @@
 				"hosts": "Show hosts",
 				"controllers": "Show controllers",
 				"hostIp": "Show host IP",
-				"networkTools": "Network tools",
 				"reconcile": "Reconcile ledger…"
 			},
 			"networkTools": {
-				"title": "Network tools",
-				"description": "Webshell, upstream logs and per-interface rates — all three channels get a short-lived ticket from the BFF, the browser never talks to the lab service directly.",
-				"tabs": {
-					"webshell": "Webshell",
-					"logs": "Logs",
-					"monitor": "Monitor"
-				},
 				"state": {
 					"idle": "Disconnected",
 					"connecting": "Connecting",

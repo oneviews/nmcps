@@ -19,9 +19,9 @@
 			<div class="mb-4 flex flex-col gap-y-2">
 				<div class="flex items-center justify-between gap-2">
 					<span class="text-xs font-medium text-muted">{{ $t("auth.demo.title") }}</span>
-					<div class="flex gap-1">
+					<div class="flex flex-wrap justify-end gap-1">
 						<UButton
-							v-for="account in DEMO_ACCOUNTS"
+							v-for="account in demoAccounts"
 							:key="account.id"
 							type="button"
 							size="xs"
@@ -98,7 +98,7 @@
 
 <script setup lang="ts">
 	import type { DemoAccount } from "~~/shared/constants/demoAccounts";
-	import { DEFAULT_DEMO_ACCOUNT, DEMO_ACCOUNTS } from "~~/shared/constants/demoAccounts";
+	import { defaultDemoAccountFor, demoAccountsFor } from "~~/shared/constants/demoAccounts";
 
 	// 登录页不带业务外壳（无 header / 侧栏），且不进导航（无 sort）
 	// 命名 / 预填口径：NMCPS-ADR-0013（layers/content/collections/cn/records/adr/adr-0013.md）
@@ -120,14 +120,22 @@
 
 	type Schema = zInfer<typeof schema>;
 
-	/** 演示程序：默认预填种子账号（平台管理员），身份可一键切换，字段仍可手改 */
+	/**
+	 * 演示开关（`NUXT_PUBLIC_DEMO_LAB_OPERATOR`）：本机演示才把实验台操作员 `alice` 放进
+	 * 按钮与预填。真实 IAM 没有它的实验室角色，缺省只给 `admin` / `tenantadmin`。
+	 */
+	const demoLabOperator = useRuntimeConfig().public.demoLabOperator === true;
+	const demoAccounts = computed(() => demoAccountsFor(demoLabOperator));
+	const initialDemoAccount = defaultDemoAccountFor(demoLabOperator);
+
+	/** 演示程序：默认预填种子账号（平台管理员；演示开关打开时预填实验台操作员），身份可一键切换，字段仍可手改 */
 	const state = reactive<Schema>({
-		username: DEFAULT_DEMO_ACCOUNT.username,
-		password: DEFAULT_DEMO_ACCOUNT.password
+		username: initialDemoAccount.username,
+		password: initialDemoAccount.password
 	});
 
 	/** 当前选中的演示身份 —— 只驱动按钮高亮，手动改字段不改变「预填来源」 */
-	const activeDemoId = ref(DEFAULT_DEMO_ACCOUNT.id);
+	const activeDemoId = ref(initialDemoAccount.id);
 
 	const submitting = ref(false);
 	const errorMessage = ref<string>();
