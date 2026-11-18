@@ -29,8 +29,19 @@
 4. `layers/scenario/server/api/lab/ws-ticket.post.ts` 已按 `targetKind` 判形状与台账收窄（`network` 等于本网 id；`node` / `node-intf` 在 `resources.nodes` 已登记时只放行清单内节点）。新增通道若引入新的 `target` 语义，改 `labWsTargetError()` / `labWsTargetParts()`，不要在 handler 里另写一套判断。未登记种类必须继续回 `400 lab_ws_kind_invalid`。
 5. 页面侧在 `layers/scenario/app/composables/` 消费：抓包用 `useLabSnifferStream()`（含历史回填），日志 / 监控用 `useLabWsChannel(kind)`（`lines` / `text` / `status` / `send`），Webshell 用 `useLabTerminalSessions()`（每个节点一条 socket + 一条标签，`open` / `close` / `send` / `clear`），组件里不出现 `new WebSocket`。归一（监控采样、日志行、终端转写）放 `layers/scenario/shared/types/` 的纯函数，便于 `check:lab-*` 直接断言。
 6. 手动验证：断网重连、后端重启、页面切换、权限过期（票 60 秒 / 一次性，重放应得 `401 lab_ws_ticket_invalid`）。
-7. 跑 `pnpm build:server && pnpm check:lab-bff`（⑫ 票与抓包流、⑬ 终端 / 日志 / 监控）与 `pnpm check:ui`（11.7 实时包列表、11.8 Network Tools）。假上游的 WS 只有在 `scripts/lib/bff-harness.mjs` 的 `attachSnifferSocket()` 派发表里登记过才会接受升级 —— 它同时监听四条路径，别另挂第二个 `server.on("upgrade")`（会互相 `destroy`）。
+7. 跑 `pnpm build:server && pnpm check:lab-bff`（⑫ 票与抓包流、⑬ 终端 / 日志 / 监控）与 `pnpm check:ui`（11.7 实时包列表、11.8 右栏五标签与观测三块）。动到终端按键映射再补 `pnpm check:lab-terminal`（真 `bash` + PTY 回放字节序列，POSIX 才跑；渲染边界见 `NMCPS-ADR-0025`，别在页面里另写第二套清洗），以及 `CHECK_REAL_MININET=1 pnpm check:lab-real`（真后端端到端，见下一节）。假上游的 WS 只有在 `scripts/lib/bff-harness.mjs` 的 `attachSnifferSocket()` 派发表里登记过才会接受升级 —— 它同时监听四条路径，别另挂第二个 `server.on("upgrade")`（会互相 `destroy`）。
 
+## 手验真 Mininet（五标签右栏 / 真 PTY 键盘）
+
+`pnpm check:ui` 与 `pnpm check:lab-bff` 的上游是假的（终端只回显），证明不了「按键真被 bash 认了」。真后端手验走一个**显式开门**的脚本：
+
+1. 以 root 起真后端：`pnpm dev:lab-api`（`127.0.0.1:8000`），确认 `curl http://127.0.0.1:8000/api/health` 通；Mininet 需要 root，普通用户跑不了。
+2. 真后端必须是**空实例**（`GET /api/mininet/start` 为 `false`，hosts / switches / routers / nats / controllers 全空）。不是就先 `POST /api/mininet/full_reset` —— 脚本会自己建 `h1`、起停网络，拿正在用的拓扑跑会把别人的实验停掉，所以这道空实例守卫是硬门。
+3. `pnpm build:server`（脚本消费 `.output/server/index.mjs`，不自行构建）。
+4. `CHECK_REAL_MININET=1 pnpm check:lab-real`：脚本用假 IAM + 真 BFF（`NUXT_MININET_INSTANCES` 指向真后端）+ Playwright，断言演示开关预填 `alice`、运行态读真后端、五标签切换、真提示符、算术执行、方向键行内编辑、`Ctrl-L` 后仍可执行、粘贴整段执行、`Ctrl+V` 不留 `v`、切标签不拆 socket、收起右栏全断。
+5. 收尾由脚本自己做（停网络、删掉它建的 `h1`、删临时台账）；跑完再确认 `GET /api/mininet/start` 回到 `false`、`GET /api/mininet/hosts` 回到 `{}`。
+
+不带 `CHECK_REAL_MININET=1` 时脚本只打印跳过说明并以 0 退出 —— 「没跑」不是「通过」，别把它当成真机回归的替代品。
 
 ## 排查 BFF 502 / WS 断连
 

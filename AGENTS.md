@@ -22,6 +22,7 @@ pnpm lab:check
 pnpm contracts:check
 pnpm build:server
 pnpm check:lab-bff
+pnpm check:lab-terminal
 pnpm lint
 pnpm typecheck
 ```

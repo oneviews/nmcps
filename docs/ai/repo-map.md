@@ -41,6 +41,8 @@ Browser/Tauri
 | `pnpm check:lab-flows` | 校验流表编辑纯函数（草稿校验 / 请求体 / 清流请求体 / 行号口径） |
 | `pnpm check:lab-run` | 校验运行控制纯函数（运行态三态 / iperf 校验与请求体 / pingall 与 iperf 文本化） |
 | `pnpm check:lab-ws` | 校验 `/lab-ws/*` 纯函数（四通道登记表 / `target` 形状 / 上游地址 / 票归一 / 监控帧 / PTY 文本清洗） |
+| `pnpm check:lab-terminal` | 校验 Webshell 按键 → PTY 字节的等价性（真 `bash` + 伪终端，需 POSIX；裁决见 `NMCPS-ADR-0025`） |
+| `pnpm check:lab-real` | 真 Mininet 端到端手验（五标签右栏 + 真 PTY 键盘）；默认跳过，`CHECK_REAL_MININET=1` 才跑，需要 root 后端 `:8000` 与 `build:server` |
 | `pnpm contracts:gen` | 重新生成 Mininet OpenAPI 快照 |
 | `pnpm contracts:check` | 校验快照是否过期 |
 | `pnpm lint` | ESLint |
