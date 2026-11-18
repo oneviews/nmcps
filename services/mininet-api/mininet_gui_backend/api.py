@@ -593,6 +593,30 @@ def switch_fail_mode(controller: Optional[str]) -> str:
     return "secure" if controller else "standalone"
 
 
+def release_switch_port(intf) -> None:
+    """删除节点 / 链路前，把交换机侧的 port 从 bridge 上摘掉。
+
+    Mininet 的 `delNode` / `delLink` 只删接口（`ip link del`），不会通知 OVS：bridge 里会留下
+    一条 `ofport: -1`、`error: could not open network device` 的记录。它不影响转发，却会让
+    `ovs-vsctl list-ports` 看起来链路还在（排查时极易误判，2026-11-18 现场就被缺端口和鬼端口
+    各误导过一次），也可能让同名端口（如 `s4-eth3`）下次 `add-port` 失败。
+    """
+    node = getattr(intf, "node", None)
+    name = getattr(intf, "name", None)
+    if not name or getattr(node, "type", None) != "sw":
+        return
+    try:
+        subprocess.run(
+            ["ovs-vsctl", "--if-exists", "del-port", node.name, name],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001 - 清理失败不该阻断删除本身
+        debug("failed to release ovs port", name, exc)
+
+
+
 def add_switch_to_net(switch: Switch, start=True):
     switch_type = (switch.switch_type or "").lower()
     switch.switch_type = switch_type or switch.switch_type
@@ -1139,18 +1163,24 @@ def create_link(payload: Union[Tuple[str, str], LinkCreate]):
             node = app.net.nameToNode[node]
             if node.type in ("host", "nat", "router"):
                 node.configDefault()
-            elif node.type == "sw" and node.controller:
-                # Important, otherwise switch doesnt init the port
+            elif node.type == "sw":
+                # 交换机必须在加链之后重启一次端口初始化：OVSSwitch.start() 是 del-br + add-br，
+                # 只有走这一步，新链路接口才会被 add-port 进 bridge。
+                # 曾经这里写的是 `and node.controller`，于是「无控制器 + 运行中加链路」的交换机
+                # 端口永远进不了 bridge —— 链路在台账里有、h5 的 ARP 也到了交换机，但 bridge
+                # 里没有 s1-eth3，帧无处可去，现场表现就是 ping 100% 丢包（NMCPS-ADR-0024）。
                 controller_node = (
                     node.controller
                     if not isinstance(node.controller, str)
                     else app.net.nameToNode.get(node.controller)
                 )
-                if controller_node:
-                    node.controller = controller_node
-                    node.start([controller_node])
-                else:
-                    node.start([])
+                if not controller_node:
+                    node.controller = None
+                if hasattr(node, "failMode"):
+                    node.failMode = switch_fail_mode(
+                        getattr(controller_node, "name", None)
+                    )
+                node.start([controller_node] if controller_node else [])
         for node_id in (src, dst):
             router = app.routers.get(node_id)
             if router:
@@ -1260,6 +1290,17 @@ def delete_node(node_id: str):
     if node_id not in app.net.nameToNode:
         raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
     node = app.net.nameToNode[node_id]
+    # 先摘交换机侧端口再删节点：Mininet 删接口不会通知 OVS（见 release_switch_port）
+    for intf in node.intfList():
+        link = getattr(intf, "link", None)
+        if link is None:
+            continue
+        release_switch_port(link.intf1)
+        release_switch_port(link.intf2)
+    # 节点没了，挂在它上面的链路也要从台账里消失，否则 export / 画布会带着死链路
+    for key in [k for k in app.links if node_id in k]:
+        app.links.pop(key, None)
+        app.link_attrs.pop(key, None)
     app.net.delNode(node)
     if node.type == "sw":
         del app.switches[node_id]
@@ -1284,7 +1325,10 @@ def delete_link(src_id: str, dst_id: str):
     key = frozenset((src_id, dst_id))
     if key not in app.links:
         raise HTTPException(status_code=404, detail=f"Node not found")
-    app.net.delLink(app.links[key])
+    link = app.links[key]
+    release_switch_port(link.intf1)
+    release_switch_port(link.intf2)
+    app.net.delLink(link)
     del app.links[key]
     app.link_attrs.pop(key, None)
     return {"message": f"Link {key} deleted successfully"}

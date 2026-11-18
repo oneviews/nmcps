@@ -9,6 +9,31 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 终端、抓包、`reset`、`full_reset` 属于高权限操作。
 - 拓扑、节点位置、运行状态都归后端所有，前端不是事实源。
 
+## 本机 `:8000` 必须跑本仓代码（2026-11-18 现场）
+
+- 现场 `:8000` 的 uvicorn 是 11-15 20:39 启动的，cwd 在仓库外的旧副本 `/home/user/project/mininet/mininet-gui-backend`；该副本 `api.py` 里 `switch_fail_mode` / `failMode` **一次都没出现**（ADR-0024 之前的代码），所以交换机仍是 Mininet 默认 `failMode='secure'` + 零控制器。
+- 症状与判据：`POST /api/mininet/pingall` 回 `h1->h5: 1/0, rtt min/avg/max/mdev 0.000/0.000/0.000/0.000 ms`。`1/0` 是上游 `net.pingFull()` 的 **sent/received**（`api.py` 拼串处），即 1 发 0 收、100% 丢包；全是 `0.000` 是因为没有任何回包。对比 `s1-eth1` / `s1-eth3` 的计数器：ping 前后两个口 `rx_bytes` 各 +126（h1 / h5 的 ARP 都到了交换机），而 `tx_bytes` **完全不变** —— 收进来不转发，就是 secure 无控制器的典型形态，不是链路断、也不是页面解析错。
+- 临时救现场（不动拓扑，需要 root）：`sudo ovs-vsctl set bridge s1 fail-mode=standalone`（s2 / s3 同理），立刻恢复连通；但后端进程仍是旧代码，下次起网 / 重建又回到 secure。
+- **2026-11-18 已处置**：三台 bridge 改 `standalone` 后 `ping` 仍不通，`ovs-vsctl list-ports s1` 只有 `s1-eth1` / `s1-eth2` —— 运行中新增的 `h5—s1` 链路，`s1-eth3` 不在 bridge 里。根因是 `create_link()` 只给「有控制器的交换机」重新初始化端口（`and node.controller`），无控制器交换机被跳过。已改为对所有交换机「先重设 `failMode` 再 `node.start(...)`」，`pnpm lab:check` 补三条断言，细节见 `NMCPS-ADR-0024` 第 5 追加节；临时补端口用 `ovs-vsctl add-port s1 s1-eth3`，补完 `ping -c 2 10.0.0.5` 即 2/2。
+- 根治：先「文件 → 导出 JSON」留一份拓扑，再重启后端到本仓代码，然后导入、启动：
+  ```bash
+  # 0) 先停网（页面「运行 → 停止」），别让旧进程带着在途 pingall / iperf 关闭
+  sudo pkill -9 -f 'uvicorn mininet_gui_backend.api:app'
+  sudo mn -c                       # 清掉旧网络残留，否则新进程会卡在 mn_cleanup()
+  ss -ltn | grep ':8000' && echo '端口仍被占用，别继续'
+  cd /home/user/project/nmcps2/services/mininet-api
+  sudo nohup python3 -m uvicorn mininet_gui_backend.api:app --host 0.0.0.0 --port 8000 --log-level info \
+    > /tmp/mininet-api.log 2>&1 &
+  for i in $(seq 1 40); do sleep 1
+    curl -s --noproxy '*' -o /dev/null -w '%{http_code}' \
+      http://127.0.0.1:8000/api/mininet/switches | grep -q 200 && { echo ready; break; }
+  done
+  ```
+- **重启的坑（2026-11-18 实测）**：用 SIGTERM（`pkill` 默认）时，旧进程若正卡在一个同步操作里（例如 `net.pingFull()`），uvicorn 的优雅关闭会一直等 —— 结果是**进程还在、`:8000` 已无监听**；紧接着新进程又在启动阶段的 `mn_cleanup()` 上阻塞，于是「两个进程都在、没人 bind」，页面全线 500 / 502。判据：`curl -o /dev/null -w '%{http_code}' :8000/api/mininet/switches` 恒为 `000`，而 `ps` 里 uvicorn 还在。处置：`sudo pkill -9` + `sudo mn -c`，确认端口空置后再起。
+- 真机复验（2026-11-18，本仓代码 + `standalone`）：导入 4 交换机 / 3 主机 / 6 链路 → `start` → 四台 bridge 全 `standalone`、端口与链路一一对应（`s1: eth1..eth3`、`s2: eth1..eth3`、`s4: eth1..eth2`），`pingall` 6 组全 `1/1`（rtt 0.028–0.377 ms）；再在**运行中**加 `h8—s4`，`s4-eth3` 立刻进 bridge、`fail-mode` 仍 `standalone`、12 组全 `1/1` —— `create_link()` 的修复在真机上成立。
+- 删节点 / 删链路的对称处理（2026-11-18 修）：Mininet 的 `delNode` / `delLink` 只删接口、不通知 OVS，bridge 会留下 `ofport: -1`、`error: could not open network device …` 的鬼端口（`ovs-vsctl list-ports` 看起来链路还在，排查时极易误判），删节点还会把死链路留在 `app.links` 里让 export 输出已不存在的链路。现在 `delete_node` / `delete_link` 先 `release_switch_port()`（`ovs-vsctl --if-exists del-port`）再删，且 `delete_node` 同步清 `app.links` / `app.link_attrs`；`pnpm lab:check` 有对应断言。真机复验：加 `h9—s4` → `s4-eth3` 进 bridge → 删链路 → 端口消失 → 同名端口复用再通（12 组 `1/1`）→ 删节点 → 端口消失、`export` 回到 6 条链路且无 `h9` 引用。
+- 后端重启会丢 `app.net` 与 `app.hosts`（进程内全局拓扑），台账 JSON 仍在但上游为空；这时**不要**点「台账对账」（它按上游事实重写清单，上游空 = 把台账清空），正确顺序是导入拓扑 → 启动。
+
 ## 阶段一约束（已被 NMCPS-ADR-0022 取代）
 
 - 后端只监听 `127.0.0.1` 或受控内网（仍然有效）。
@@ -40,7 +65,7 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 台账对账（`NMCPS-ADR-0023`）是唯一的「只改台账、不转发上游写」端点：`POST /api/lab/networks/{id}/sync`（静态路由 `networks/[id]/sync.post.ts`，**不在** `MININET_ROUTES` 里），双权限 `lab:create` + `lab:delete`、逐字确认 `{ confirm: "<network_id>" }`、先审计后执行、同网络单写锁；读 `/hosts` `/switches` `/routers` `/nats` `/controllers` 与 `/links` 后**整体重写**资源清单，任一读取失败原样回上游状态且不落盘。
 - 无控制器的交换机按 `NMCPS-ADR-0024` 落在 `failMode='standalone'`（传统自学习，开箱即通），关联控制器后改 `secure`（OpenFlow 流表生效）；`pingall` 100% 丢包的根因就是「默认 secure + 零控制器」。导出脚本同源，`pnpm lab:check` 三条静态断言钉住映射、四个 OVS 分支与导出文本。
 - 实时包列表（W5 WebSocket 段）：页面挂载先 `GET /api/lab/sniffer/history` 回填，抓包态变 `true` 时由 `useLabSnifferStream()` 先 `POST /api/lab/ws-ticket` 再连同源 `/lab-ws/sniffer`（`null` / `false` 都不连）；组件不 `new WebSocket`，列表上限 200 条，停止抓包即断流但保留已收到的包。
-- Network Tools 面板（工具栏「网络工具」，`SimulatorNetworkTools` + `useLabWsChannel(kind)` / `useLabTerminalSessions()`）：Webshell 要 `lab:terminal`（节点来自台账，逐键上行走 `/lab-ws/terminal`，每个节点一条会话标签，握手期的按键先排队到上游 `open`）；日志与监控只要 `lab:read`（`/lab-ws/logs` 逐行、`/lab-ws/monitor` 的 `target` 为 `<node>:<intf>`，接口选项只来自 `GET /api/lab/interfaces`）。两个能力位都没有时整块入口不渲染；日志随标签打开自动建流、离开即断，监控只有一个目标、切走即停，终端会话是**显式的多会话**——切标签不断流、标签上的 × 才断那一条，关面板才全断。上游在通道内用 `Error: …` 文本表达失败，页面显示成错误行而不是「暂无数据」。终端是逐键终端：`keydown` 翻译成 PTY 字节（回车 `\r`、退格 `0x7f`、方向键走 CSI、`Ctrl+字母` 发 `0x01–0x1A`），连续字符攒 8ms 一帧，中文等 IME 输入由隐藏 textarea 的 `input` 事件整段送出；回显交给 PTY，面板不做本地回显（否则一次输入两份）。输出先过 `labTerminalTextOf()`：真 PTY 带 ANSI 颜色码与 `\r` 重绘，原样渲染会把提示符显示成 `^[[1;32m`；「中断」发 `0x03`，「清屏」只清浏览器侧转写且不断流。
+- 右栏观测三块（面板五个标签页里的 Webshell / 日志 / 监控，`SimulatorNetworkTools` + `useLabWsChannel(kind)` / `useLabTerminalSessions()`）：Webshell 要 `lab:terminal`（节点来自台账，逐键上行走 `/lab-ws/terminal`，每个节点一条会话标签，握手期的按键先排队到上游 `open`）；日志与监控只要 `lab:read`（`/lab-ws/logs` 逐行、`/lab-ws/monitor` 的 `target` 为 `<node>:<intf>`，接口选项只来自 `GET /api/lab/interfaces`）。两个能力位都没有时这三页都不渲染（标签定义在页面的 `sideTabItems` 里）；日志随标签打开自动建流、离开即断，监控只有一个目标、切走即停，终端会话是**显式的多会话**——切标签不断流、标签上的 × 才断那一条，收起右栏才全断。上游在通道内用 `Error: …` 文本表达失败，页面显示成错误行而不是「暂无数据」。终端是逐键终端：`keydown` 翻译成 PTY 字节（回车 `\r`、退格 `0x7f`、方向键走 CSI、带修饰方向键 `CSI 1;<mod><letter>`、`Ctrl+字母` 发 `0x01–0x1A`、`Ctrl+Space` 发 `0x00`、`Alt+字母` 发 `ESC+字母`、F1–F12 走 xterm 序列），带 `Ctrl` / `Alt` / `Meta` 的可打印键一律不上行，`Ctrl+V` 只走粘贴事件（不能把 `v` 当输入）、IME 组字期间的 `keydown` 放行，连续字符攒 8ms 一帧，中文等 IME 输入由隐藏 textarea 的 `input` 事件整段送出；回显交给 PTY，面板不做本地回显（否则一次输入两份）。输出先过 `labTerminalTextOf()`：真 PTY 带 ANSI 颜色码与 `\r` 重绘，原样渲染会把提示符显示成 `^[[1;32m`；「中断」发 `0x03`，「清屏」只清浏览器侧转写且不断流。
 
 ## 已落地的鉴权（NMCPS-ADR-0021 P1）
 
@@ -53,6 +78,23 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 主网关已剥离客户端 `x-tenant-id`；租户只来自签名会话，不来自请求头 / 查询 / body。
 - 桌面端（`x-nmcps-client: desktop`）当前只在响应体拿 tokens，不落签名会话；在补充桌面会话承载前，`/api/lab/**` 对桌面端返回 401。
 - `/api/sim/**` 仍保持原只读通道，尚未接入租户实例与签名会话；在 P3 写操作开放前必须补齐。
+- **真实 IAM 里没有 `lab_terminal` / `lab_sniffer`（2026-11-17 实测）**：`GET /api/iam/roles?page=1&page_size=200` 只有 9 条（`platform_admin`、三个租户各三条 `tenant_admin` / `tenant_operator` / `tenant_viewer`），所以演示账号 `tenantadmin` 的 `/api/lab/channel` 恒为 `terminal: false`、`admin` 恒为 `403`；`check:ui` / `check:lab-bff` 能全绿是因为 `scripts/lib/bff-harness.mjs` 自造了 `r_lab_terminal` 并绑给 `alice`。想在本机手点 Webshell，得先在 IAM 侧把角色补出来：
+  ```bash
+  # 1) 建角色（用租户令牌建，实测落库 tenant_id = tnt_default；用 admin 建会是平台角色）
+  curl --noproxy '*' -s -b /tmp/tj.txt -X POST -H 'content-type: application/json' \
+    -d '{"name":"实验台终端","code":"lab_terminal","description":"Webshell（NMCPS-ADR-0021 D3）"}' \
+    http://127.0.0.1:3000/api/iam/roles
+  # 2) 绑定（role_id 用上一步返回的 id）
+  curl --noproxy '*' -s -b /tmp/tj.txt -X POST -H 'content-type: application/json' \
+    -d '{"subject_type":"user","subject_id":"u_tenant_admin","role_id":"<id>"}' \
+    http://127.0.0.1:3000/api/iam/subject-roles/AssignRole
+  ```
+  注意命令要带 `--noproxy '*'`：本机 shell 设了 `http_proxy`，不加会把 `127.0.0.1:3000` 送去代理（拿到 One API 的 `Invalid URL (GET /api/...)` 或一张 HTML），看着像 BFF 404。
+- **上游缺陷（未修）：`AssignRole` 不写关系租户**。实测 `POST /iam/subject-roles/AssignRole` 无论 body 带不带 `tenant_id`、带不带 `X-Tenant-Id`，落库的 `sys_subject_role_relation.tenant_id` 恒为 `NULL`（`PUT` / `PATCH /subject-roles/{id}` 都是 404，没有修正入口）；而 `GET /iam/subject-roles?subject_id=<用户>` 按调用者租户过滤，`NULL` 关系对租户用户不可见 —— `resolveLabRoles()` 只按 `subject_id` 取关系，于是 `lab:terminal` 绑了也不生效。BFF 不做绕过（放宽 `role.tenantId === 会话 tid` 等于废掉 UP-RBAC-09），修法只在上游：AssignRole 从 role 推导 `tenant_id`，或补一次数据修正。本机已建的角色 `f1f011d8-d5b0-43b6-9467-2cf8d8d57b67`（`lab_terminal` / `tnt_default`）保留备用，关系已 `RevokeRole` 回滚，`u_tenant_admin` 仍只有 `r_tenant_admin`。**2026-11-18 复测（给 alice 绑定）**：`AssignRole` 回 `200`，平台管理员 `GET /iam/subject-roles?subject_id=a6541d3f-…` 能读到关系 `b7fa1e07-f955-47c6-8168-b26260bfe126`（响应里没有 `tenant_id` 字段 = `NULL`），而同一查询走租户会话（`tenantadmin`）仍返回 `total: 0`；alice 重登后 `/api/lab/channel` 依旧 `terminal: false`。结论未变：缺陷在上游，BFF 不绕过。
+  **2026-11-18 决定性取证（发给上游的工单材料）**：`docs/handoff/iam-assignrole-report-2026-11-18.md`。三条硬证据 —— ① 给干净账号 `u_bj_01` `AssignRole` 传 role 的 uuid 回 `200 success`，紧接着 `GET subject-roles?subject_id=u_bj_01` 仍是 1 行、全量仍是 17 行（写入即失联）；② 同一对 `(subject, role)` 再 `AssignRole` 回 `400 duplicate key value violates unique constraint "uk_sys_srr_global_subject_role"`（行确实在表里）；③ `RevokeRole` 同一对回 `200`（能按 subject+role 删掉），删完全量仍 17 行。关系表名以错误文本为准是 `sys_subject_role_relation`（`fk_sys_srr_role`）。附带两条：约束冲突以 `HTTP 400 + 纯文本 "ERROR: …"` 返回而不是 `{code,message,data}` 信封；`GET /iam/subject-roles` 忽略 `role_id` 参数（带它也返回全量）。
+- **本机手点 Webshell 的旁路（不动 IAM）**：`scripts/lib/bff-harness.mjs` 的 `startUpstream(port)` 同时给出假 IAM 与假 Mininet，`alice / p@ssw0rd` 自带 `r_lab_terminal` / `r_lab_sniffer` / `r_lab_tenant_admin`。用 `NUXT_BFF_UPSTREAM_BASE=http://127.0.0.1:8899` + `NUXT_MININET_INSTANCES='{"t_default":{"baseUrl":"http://127.0.0.1:8899"}}'` 重启 `pnpm dev` 即可；租户键必须是 `t_default`（假 IAM 里 alice 的 `tenantId`），写成真环境的 `tnt_default` 会得到 `configured: false` 与 `503 tenant_runtime_unavailable`，那是键名不匹配而不是权限问题。台账还要把节点登记进 `resources.nodes`（`["h1","h2","sw1"]`），否则 `/api/lab/hosts` 回 `{}`、`ws-ticket` 对 `h1` 回 `404 lab_resource_not_found` —— 出口按台账清单收窄。这条链路是回显仿真（敲 `whoami` 收到 `echo:whoami`，不是真 PTY），验证的是 BFF 转发 + 前端渲染，真 shell 仍需回到 `.env` 指向的本机 Mininet。登录页进 `alice` 的入口是演示开关 `NUXT_PUBLIC_DEMO_LAB_OPERATOR=true`（`runtimeConfig.public.demoLabOperator`，缺省 `false` 时该按钮不渲染、预填回到 `admin`）：**2026-11-18 已在真实 IAM 建号**（`POST /api/iam/users`，部门 `dept_default_ops` → 租户 `tnt_default`，口令 `p@ssw0rd`，id `a6541d3f-7880-4bb9-8917-5338d78e6925`），实测上游与 BFF 登录都 200、`tenantId = tnt_default`，`/api/lab/channel` 给 `read: true`、写能力位仍全 `false`（角色缺失，见上两条）。换上游实例前先确认它有 `alice`，没有就关掉开关；正式部署仍建议关闭（`NMCPS-ADR-0013` 的「实验台操作员随演示开关出现」条）。
+
+  **旁路必须换端口，别污染 3000 的常驻实例**：把 `NUXT_BFF_UPSTREAM_BASE=http://127.0.0.1:8899`（外加 `NODE_USE_ENV_PROXY=1`）塞给默认 `pnpm dev`，假上游一退出，3000 上的登录就整片报 `502 bff_upstream_unreachable`，登录页显示「上游服务暂时不可达」——而 `.env` 里配的真实上游其实是好的（`curl --noproxy '*' http://192.168.1.55:8888/api/v1/health` 仍 200）。排查口径：先看 `/ready` 的 `upstream.reason`，再看该 dev 进程的环境（`tr '\0' '\n' < /proc/<dev pid>/environ | grep NUXT_BFF`），env 里出现 8899 就说明是旁路残留而不是上游故障。要手点 Webshell 就 `PORT=3001 NUXT_BFF_UPSTREAM_BASE=… pnpm dev` 另起一个，验完即停。
 
 ## 已裁决：每租户独立实例（NMCPS-ADR-0021）
 

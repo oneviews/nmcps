@@ -62,6 +62,9 @@ if cors_middleware:
 # controller 恒为 None，所以「没有控制器」是常态而不是例外。
 from types import SimpleNamespace  # noqa: E402
 
+import inspect  # noqa: E402
+import re  # noqa: E402
+
 from mininet_gui_backend import api as lab_api  # noqa: E402
 from mininet_gui_backend.schema import Switch  # noqa: E402
 
@@ -134,6 +137,45 @@ if 'failMode="standalone"' not in exported_off or 'failMode="secure"' not in exp
     raise SystemExit(
         "导出脚本的 addSwitch 没跟着控制器关联写 failMode："
         f"无控制器={exported_off} / 有控制器={exported_on}"
+    )
+
+# NMCPS-ADR-0024 第二条：运行中加链路时，无控制器的交换机也必须重新初始化端口。
+# OVSSwitch.start() 是 del-br + add-br，只有走这一步新链路接口才会 add-port 进 bridge。
+# 老实现写的是 `elif node.type == "sw" and node.controller:`，于是 controller=None 的交换机
+# （经 BFF 新建的常态）在运行中加链路后端口不在 bridge 里 —— 链路台账有、ARP 也到了交换机，
+# 但 bridge 里没有那条 port，帧无处可去，ping 依旧 100% 丢包。
+create_link_src = inspect.getsource(lab_api.create_link)
+if re.search(r'elif node\.type == "sw"\s+and\s+node\.controller', create_link_src):
+    raise SystemExit(
+        "create_link() 仍只给有控制器的交换机初始化端口："
+        "无控制器交换机在运行中加链路后端口进不了 bridge（NMCPS-ADR-0024）"
+    )
+if not re.search(r"node\.start\(\s*\[controller_node\]\s+if\s+controller_node\s+else\s+\[\]\s*\)", create_link_src):
+    raise SystemExit(
+        "create_link() 缺少无控制器交换机的 node.start([]) 分支："
+        "运行中新增链路的端口不会被 add-port 进 bridge"
+    )
+if "node.failMode = switch_fail_mode(" not in create_link_src:
+    raise SystemExit(
+        "create_link() 重启交换机前没按控制器关联重设 failMode："
+        "重启会把 bridge 重建回默认 secure"
+    )
+
+# 删除路径的对称要求：Mininet 的 delNode / delLink 只删接口、不通知 OVS，bridge 里会留下
+# `ofport: -1` 的鬼端口（`ovs-vsctl list-ports` 看起来链路还在），删节点还会把死链路留在
+# app.links 里让 export 输出已不存在的链路。
+delete_node_src = inspect.getsource(lab_api.delete_node)
+delete_link_src = inspect.getsource(lab_api.delete_link)
+for name, src in (("delete_node", delete_node_src), ("delete_link", delete_link_src)):
+    if "release_switch_port(" not in src:
+        raise SystemExit(
+            f"{name}() 删除前没有 release_switch_port()："
+            "交换机侧端口会作为 ofport=-1 的鬼端口留在 bridge 里"
+        )
+if "app.link_attrs.pop(key, None)" not in delete_node_src:
+    raise SystemExit(
+        "delete_node() 没清理 app.links / app.link_attrs："
+        "删节点后 export 仍会输出挂在该节点上的死链路"
     )
 
 print("✅ 无控制器交换机默认 standalone：四个 OVS 分支 + 导出脚本一致（NMCPS-ADR-0024）")
