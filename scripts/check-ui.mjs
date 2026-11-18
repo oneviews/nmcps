@@ -77,7 +77,12 @@ if (!BASE_URL) {
 	upstreamPort = await freePort();
 	upstreamServer = await startUpstream(upstreamPort);
 	const port = await freePort();
-	bffChild = await startBff(port, { NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}` });
+	bffChild = await startBff(port, {
+		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		// 本实例要测「实验台操作员」预填与三枚演示身份按钮：显式打开演示开关
+		// （缺省 false，见 nuxt.config.ts 的 `public.demoLabOperator`）
+		NUXT_PUBLIC_DEMO_LAB_OPERATOR: "true"
+	});
 	BASE_URL = `http://${HOST}:${port}`;
 }
 
@@ -192,7 +197,7 @@ const readCredentials = () => page.evaluate(() => ({
 }));
 
 const prefill = await readCredentials();
-log("登录页默认预填超级管理员种子账号", prefill.account === "admin" && prefill.password === "Admin@123456", `${prefill.account} / ${prefill.password ? "****" : "空"}`);
+log("登录页默认预填实验台操作员种子账号（alice，本地演示）", prefill.account === "alice" && prefill.password === "p@ssw0rd", `${prefill.account} / ${prefill.password ? "****" : "空"}`);
 
 // 3.2 一键切换演示身份：账号 / 口令整体回填（新代无租户编码，NMCPS-ADR-0018 §4.1）
 await page.getByRole("button", { name: "租户管理员" }).click();
@@ -229,6 +234,22 @@ log("上游就绪时登录页不显示上游缺失提示", !upstreamAlertOnReady
 			"上游未配置时登录页给出可执行的修复指引",
 			bareText.includes("BFF 未配置上游地址") && bareText.includes("NUXT_BFF_UPSTREAM_BASE"),
 			bareText.includes("BFF 未配置上游地址") ? "已提示" : "无提示"
+		);
+
+		// 演示开关默认关闭（`NUXT_PUBLIC_DEMO_LAB_OPERATOR` 未设）：真实 IAM 只有两个种子账号，
+		// 预填回到平台管理员，且不渲染真实环境里登不进去的「实验台操作员」按钮
+		const bareDemo = await bare.evaluate(() => ({
+			account: document.querySelector("input[autocomplete='username']")?.value ?? "",
+			buttons: [...document.querySelectorAll("button")].map((node) => (node.textContent ?? "").trim())
+		}));
+		const demoLabels = bareDemo.buttons.filter((label) => ["超级管理员", "租户管理员", "实验台操作员"].includes(label));
+		log(
+			"演示开关关闭时不提供实验台操作员身份：预填平台管理员、按钮只剩两枚",
+			bareDemo.account === "admin"
+			&& demoLabels.includes("超级管理员")
+			&& demoLabels.includes("租户管理员")
+			&& !demoLabels.includes("实验台操作员"),
+			`预填=${bareDemo.account} 按钮=${JSON.stringify(demoLabels)}`
 		);
 
 		const probesAfterFirstLoad = readyProbes;
@@ -5183,6 +5204,13 @@ if (upstreamPort) {
 			await locator.first().click();
 			return true;
 		};
+		/** 右栏是五标签面板：运行读数 / 抓包观察窗在「连通」，观测三块在各自的标签 */
+		const openSideTab = async (label) => {
+			const tab = labPage.locator("[data-testid='mininet-side-tabs'] [role='tab']").filter({ hasText: label });
+			const clicked = await clickIfPresent(tab);
+			await labPage.waitForTimeout(300);
+			return clicked;
+		};
 
 		const itemClicked = await clickIfPresent("[data-testid='mininet-add-kind-host']");
 		await labPage.waitForTimeout(300);
@@ -5581,10 +5609,15 @@ if (upstreamPort) {
 			return { state, ...probe };
 		};
 
+		// 右栏五标签后，运行态徽章与探测 / 测速表单都在「连通」标签里
+		const connectivityOpened = await openSideTab("连通");
 		const runBefore = await runMenuProbe();
+		const runReadout = await labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-run-state']")?.textContent ?? "").trim());
 		log(
 			"11.4 运行控制读 GET /api/lab/start：初始已停止，启动可点而停止 / 重启 / 探测禁用",
-			runBefore.state === "已停止"
+			connectivityOpened && runReadout === "已停止"
+			&& runBefore.state === "已停止"
 			&& runBefore.labels.includes("启动") && runBefore.labels.includes("停止") && runBefore.labels.includes("重启")
 			&& !runBefore.startDisabled && runBefore.stopDisabled && runBefore.restartDisabled,
 			`状态=${runBefore.state} 菜单=${JSON.stringify(runBefore.labels)} 启动禁用=${runBefore.startDisabled} 停止禁用=${runBefore.stopDisabled} 重启禁用=${runBefore.restartDisabled}`
@@ -6080,6 +6113,8 @@ if (upstreamPort) {
 		 * BFF 以票里的 `sub` / `tid` 建上游连接。断言三段 —— 未抓包只回填历史、
 		 * 抓包中实时帧进列表（且上游连接不带 cookie / authorization）、停止后断流但保留已收到的包。
 		 */
+		// 上一步的 reload 把右栏带回缺省「网络」标签：抓包读数与实时包列表都在「连通」标签里
+		await openSideTab("连通");
 		const snifferRows = () => labPage.evaluate(() =>
 			[...document.querySelectorAll("[data-testid='mininet-sniffer-packet']")]
 				.map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim()));
@@ -6140,22 +6175,26 @@ if (upstreamPort) {
 		);
 
 		/*
-		 * 11.8 Network Tools（NMCPS-ADR-0022 D6 的三条剩余通道）
+		 * 11.8 右栏观测三块（NMCPS-ADR-0022 D6 的三条剩余通道）
 		 *
-		 * 抓包之外的三块观测面：Webshell（`lab:terminal`）、日志 / 监控（`lab:read`）。
-		 * 断言三段：入口按能力位渲染、日志随标签自动建流、终端有**上行**（回显真的回来了）、
-		 * 监控把 `node:intf` 拆成上游查询串并把采样渲染出来。
+		 * 右栏是一个五标签面板（Webshell / 日志 / 监控 / 网络 / 连通），工具栏不再有「网络工具」
+		 * 按钮，也不再另开右抽屉。抓包之外的三块观测面：Webshell（`lab:terminal`）、
+		 * 日志 / 监控（`lab:read`）。断言四段：五个标签页都在、旧入口已删除、日志随标签自动建流、
+		 * 终端有**上行**（回显真的回来了）、监控把 `node:intf` 拆成上游查询串并把采样渲染出来；
+		 * 逐键映射另有三条**字节级**用例，直接核对假上游收到的入站帧（`Ctrl-L` → 0x0c、
+		 * 方向键 → CSI、`Ctrl+V` 不上行 `v` 且粘贴整段一次送出）。
 		 */
-		const toolsOpened = await clickIfPresent("[data-testid='mininet-network-tools']");
-		await labPage.waitForTimeout(400);
-		const tabLabels = toolsOpened
-			? await labPage.evaluate(() => [...document.querySelectorAll("[data-testid='mininet-network-tools-tabs'] [role='tab']")]
-				.map((node) => (node.textContent ?? "").trim()))
-			: [];
+		const sideTabs = await labPage.evaluate(() => ({
+			labels: [...document.querySelectorAll("[data-testid='mininet-side-tabs'] [role='tab']")]
+				.map((node) => (node.textContent ?? "").trim()),
+			legacyEntry: !!document.querySelector("[data-testid='mininet-network-tools']"),
+			legacyPanel: !!document.querySelector("[data-testid='mininet-network-tools-tabs']")
+		}));
 		log(
-			"11.8 「网络工具」入口按能力位渲染，面板含 Webshell / 日志 / 监控三个标签页",
-			toolsOpened && ["Webshell", "日志", "监控"].every((label) => tabLabels.includes(label)),
-			`tabs=${JSON.stringify(tabLabels)}`
+			"11.8 右栏五个标签页（Webshell / 日志 / 监控 / 网络 / 连通），工具栏「网络工具」入口与右抽屉已删除",
+			["Webshell", "日志", "监控", "网络", "连通"].every((label) => sideTabs.labels.includes(label))
+			&& !sideTabs.legacyEntry && !sideTabs.legacyPanel,
+			`tabs=${JSON.stringify(sideTabs.labels)} 旧入口=${sideTabs.legacyEntry} 旧面板=${sideTabs.legacyPanel}`
 		);
 
 		const waitForText = async (testid, predicate, timeout = 10000) => {
@@ -6172,7 +6211,7 @@ if (upstreamPort) {
 
 		// ── 日志：进标签即建流，两行原文进面板 ──
 		const logSocketsBefore = upstreamServer.mininetSocketLog.length;
-		await labPage.getByRole("tab", { name: "日志" }).click();
+		await openSideTab("日志");
 		const logsText = await waitForText("mininet-logs-output", (text) => text.includes("mininet starting") && text.includes("link up"));
 		const logsUpstream = upstreamServer.mininetSocketLog.at(-1);
 		log(
@@ -6187,7 +6226,7 @@ if (upstreamPort) {
 		);
 
 		// ── Webshell：连接 → 问候帧 → 逐键敲一行 → 回车执行（上行链路） ──
-		await labPage.getByRole("tab", { name: "Webshell" }).click();
+		await openSideTab("Webshell");
 		await labPage.waitForTimeout(200);
 		const terminalSocketsBefore = upstreamServer.mininetSocketLog.length;
 		await clickIfPresent("[data-testid='mininet-terminal-connect']");
@@ -6228,6 +6267,92 @@ if (upstreamPort) {
 			"11.8 回车发 `\\r`：整行经 BFF 转给上游，`echo:ls` 回显进面板",
 			echoText.includes("echo:ls"),
 			`输出尾部=${JSON.stringify(echoText.slice(-24))}`
+		);
+
+		// ── 逐键映射的**字节证据**：面板会把控制序列洗掉（`ESC[C` 洗成空），
+		//    所以这三条直接看假上游收到的入站帧（`connection.input`）──
+		const terminalInput = () => terminalUpstream?.input ?? [];
+		const waitForTerminalInput = async (predicate, timeout = 5000) => {
+			const deadline = Date.now() + timeout;
+			while (Date.now() < deadline) {
+				if (predicate(terminalInput()))
+					return true;
+				await labPage.waitForTimeout(100);
+			}
+			return predicate(terminalInput());
+		};
+
+		// `Ctrl+字母` 发 `0x01–0x1A`：`Ctrl-L`（readline 清屏）必须是 0x0c，不是字面量 "l"
+		await labPage.locator("[data-testid='mininet-terminal-output']").click();
+		const ctrlBefore = terminalInput().length;
+		await labPage.keyboard.press("Control+l");
+		await waitForTerminalInput((frames) => frames.length > ctrlBefore);
+		log(
+			"11.8 Ctrl-L 发 0x0c（控制字节）而不是字面量 `l`",
+			terminalInput().at(-1) === "\u000C",
+			`最后帧=${JSON.stringify(terminalInput().at(-1) ?? "")} 帧数=${terminalInput().length}`
+		);
+
+		// 方向键走 CSI：→ 是 `ESC[C`、← 是 `ESC[D`（不是把键名当文本上行）
+		const arrowBefore = terminalInput().length;
+		await labPage.keyboard.press("ArrowRight");
+		await waitForTerminalInput((frames) => frames.length > arrowBefore);
+		const rightFrame = terminalInput().at(-1);
+		await labPage.keyboard.press("ArrowLeft");
+		await waitForTerminalInput((frames) => frames.length > arrowBefore + 1);
+		log(
+			"11.8 方向键发 CSI 序列：→ 是 `\\x1b[C`、← 是 `\\x1b[D`",
+			rightFrame === "\u001B[C" && terminalInput().at(-1) === "\u001B[D",
+			`→=${JSON.stringify(rightFrame)} ←=${JSON.stringify(terminalInput().at(-1))}`
+		);
+
+		// `Shift+Tab` 是反向补全（`ESC[Z`），不是 `\t` —— 发成 `\t` 会在 readline 里补全而不是回退
+		const shiftTabBefore = terminalInput().length;
+		await labPage.keyboard.press("Shift+Tab");
+		await waitForTerminalInput((frames) => frames.length > shiftTabBefore);
+		log(
+			"11.8 `Shift+Tab` 发 `\\x1b[Z`（反向补全），不是 `\\t`",
+			terminalInput().at(-1) === "\u001B[Z",
+			`最后帧=${JSON.stringify(terminalInput().at(-1) ?? "")}`
+		);
+
+		// 带修饰的光标键是 `CSI 1;<mod><letter>`：`Shift+→` 是 `ESC[1;2C`（readline 按词跳）
+		const shiftArrowBefore = terminalInput().length;
+		await labPage.keyboard.press("Shift+ArrowRight");
+		await waitForTerminalInput((frames) => frames.length > shiftArrowBefore);
+		log(
+			"11.8 `Shift+→` 发 `\\x1b[1;2C`（带修饰的 CSI，不是裸 `\\x1b[C`）",
+			terminalInput().at(-1) === "\u001B[1;2C",
+			`最后帧=${JSON.stringify(terminalInput().at(-1) ?? "")}`
+		);
+
+		// `Alt+字母` 发 `ESC + 字母`（readline 的按词操作），不是可打印的字母本身
+		const altBefore = terminalInput().length;
+		await labPage.keyboard.press("Alt+b");
+		await waitForTerminalInput((frames) => frames.length > altBefore);
+		log(
+			"11.8 `Alt+b` 发 `\\x1b b`（ESC 前缀），不是裸 `b`",
+			terminalInput().at(-1) === "\u001Bb",
+			`最后帧=${JSON.stringify(terminalInput().at(-1) ?? "")}`
+		);
+
+		// `Ctrl+V` 只走浏览器粘贴：自身绝不能把 "v" 上行；粘贴文本整段一次送出，换行转成 `\r`
+		const pasteBefore = terminalInput().length;
+		await labPage.keyboard.press("Control+v");
+		await labPage.waitForTimeout(300);
+		const afterCtrlV = terminalInput().length;
+		await labPage.evaluate(() => {
+			const element = document.querySelector("[data-testid='mininet-terminal-input']");
+			const data = new DataTransfer();
+			data.setData("text/plain", "p1\np2");
+			element?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+		});
+		await waitForTerminalInput((frames) => frames.length > afterCtrlV);
+		const pastedFrame = terminalInput().at(-1);
+		log(
+			"11.8 粘贴整段一次送出：Ctrl+V 自身不上行 `v`，换行转成 `\\r`",
+			afterCtrlV === pasteBefore && pastedFrame === "p1\rp2",
+			`Ctrl+V 新增帧=${afterCtrlV - pasteBefore} 粘贴帧=${JSON.stringify(pastedFrame ?? "")}`
 		);
 
 		// ── 多会话（1.0 的「每节点一条终端」）：第二个节点开新标签、独立一条上游连 ──
@@ -6296,7 +6421,7 @@ if (upstreamPort) {
 			`输出=${JSON.stringify(clearedText.slice(0, 16))} 状态=${clearedState}`
 		);
 		// ── 监控：`node:intf` 拆成上游查询串，采样渲染成一行读数 ──
-		await labPage.getByRole("tab", { name: "监控" }).click();
+		await openSideTab("监控");
 		await labPage.waitForTimeout(300);
 		const monitorSocketsBefore = upstreamServer.mininetSocketLog.length;
 		await clickIfPresent("[data-testid='mininet-monitor-start']");

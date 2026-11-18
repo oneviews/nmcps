@@ -4,20 +4,24 @@
 		"source": "CI run 42319789443 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-07 回填）"
 	},
 	"governance": {
-		"sha256": "e3685d7a3ff9349e5f759334ea1539516a0aa06af35ea080df0a3a4bcab8d7f4",
-		"source": "CI run 42319789443 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-07 回填）"
+		"sha256": "7d254554f5c306cd9e2590a0510e6f25f314f2cdf0212acd36c4115b2207302f",
+		"source": "本地 `pnpm check:governance` 真实输出尾部（2026-11-17 重采）"
 	},
 	"i18n": {
-		"sha256": "f8321781e3303cce2283eea6d8d82affc58cb98b5667f0c9bc9f8e0d70abe6ff",
-		"source": "CI run 42319789443 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-07 回填）"
+		"sha256": "9be0ee1543270321b1417e2203951968042182f6ca61be447cb770b7f61254b4",
+		"source": "本地 `pnpm check:i18n` 真实输出尾部（2026-11-17 重采）"
+	},
+	"lab-terminal": {
+		"sha256": "b1d4b3b5a5d36c20995a98c41512a5947bb45ba239e03c41cd5398ba1b31c4a2",
+		"source": "本地 `pnpm check:lab-terminal` 真实输出尾部（2026-11-17 重采）"
 	},
 	"lint": {
-		"sha256": "76030f803ae370b4b5e8ce9a9286173949b7ead43cf7cd861b7a7afdd0ef2751",
-		"source": "CI run 42319789443 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-07 回填）"
+		"sha256": "e36eaf6b9f91f3803b37152420efa40bb93bc2b47870242b9c10d2a27fc933d7",
+		"source": "本地 `pnpm lint` 真实输出尾部（2026-11-17 重采）"
 	},
 	"typecheck": {
-		"sha256": "92fbd9c08e405eb004fe688c84b4b2a02bbd64062c1a0552930026618022f7d8",
-		"source": "CI run 42319789443 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-07 回填）"
+		"sha256": "0bb72fceb4acdcc52120fec23b05c86c9f8f7dd6d33463d147aa589ed7879a24",
+		"source": "本地 `pnpm typecheck` 真实输出尾部（2026-11-17 重采）"
 	},
 	"ui": {
 		"sha256": "994b2ba0962c74f9ac09a8af478d7ceede0e2722d58ef1427bb3ccf111cfefb3",

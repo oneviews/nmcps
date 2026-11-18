@@ -6,7 +6,7 @@
 #   sh scripts/ci-expectations.sh <key>      # 打印该步骤的扩展正则（一行）
 #   sh scripts/ci-expectations.sh --list     # 列出全部 key<TAB>正则（按表内顺序）
 #
-# 为什么单独一个文件：正则原先内联在 `ci.yml` 六个步骤里，改小结措辞时要同步改六处，
+# 为什么单独一个文件：正则原先内联在 `ci.yml` 的各个步骤里，改小结措辞时要同步改每一处，
 # 漏一处就退化成「摘要抽不到结论」。现在 `ci.yml` 只写 key：
 #   sh scripts/ci-summary.sh "<标题>" <日志> --expect "$(sh scripts/ci-expectations.sh <key>)" || status=1
 # `pnpm check:ci-summary` 会反向断言：ci.yml 的每处调用都带 `--expect`、key 来自本表、
@@ -17,11 +17,12 @@
 #   typecheck   → `$ vue-tsc -b --pretty`（同上）
 #   i18n        → `✅ 文案自查 10/10 通过`
 #   governance  → `结果：N 通过 / 0 失败 / 0 告警`（check:doc-system 的小结；N 随文档增减变化，不写死）
-#   bff         → `128/128 项通过`
-#   ui          → `272/272 项通过`
+#   bff         → `130/130 项通过`
+#   ui          → `287/287 项通过`
+#   lab-terminal → `6/6 项通过（真实 bash + PTY）`
 set -eu
 
-KEYS='lint typecheck i18n governance bff ui'
+KEYS='lint typecheck i18n governance bff ui lab-terminal'
 
 # 表本体：case 分支即数据，新增步骤 = 加一个 key + 在 ci.yml 加一个调用点
 lookup() {
@@ -43,6 +44,11 @@ lookup() {
 			;;
 		ui)
 			printf '%s\n' '[0-9]+/[0-9]+ 项通过'
+			;;
+		lab-terminal)
+			# 与 bff / ui 同为「N/N 项通过」，但额外要求真 PTY 的括号说明：脚本被改成
+			# 只吐计数、或非 POSIX 静默跳过（没有小结行）都要在这里显形。
+			printf '%s\n' '[0-9]+/[0-9]+ 项通过（真实 bash \+ PTY）'
 			;;
 		*)
 			return 1

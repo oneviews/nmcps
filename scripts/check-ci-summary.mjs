@@ -66,9 +66,9 @@
 //      一旦会 git commit / git push，就会改动被核对的对象。
 //
 // 重采样（两条路，都不需要手抄日志）：
-//   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance 四步，把真实输出尾部写回
+//   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance / lab-terminal 五步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
-//   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部六个 key，
+//   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部七个 key，
 //                        包含本地跑不了的 bff / ui；步骤名与 job 名取自这次的 `gh run view`。
 // 两条路都会在写回后立刻把正则回放一遍，措辞漂移当场就报；任一不过退出码 1。
 // `--seal --reason "…"` 是应急入口（只重封清单、不碰样本）：它能给任意字节盖章，所以正常流程里
@@ -154,7 +154,14 @@ const CI_ARTIFACTS = [
 		keep: /结果：|自测|项通过/
 	},
 	{ key: "bff", artifact: "check-logs-runtime", file: "check-bff.log", step: "Gateway contract checks", tail: 8 },
-	{ key: "ui", artifact: "check-logs-runtime", file: "check-ui.log", step: "Page UI checks", tail: 8 }
+	{ key: "ui", artifact: "check-logs-runtime", file: "check-ui.log", step: "Page UI checks", tail: 8 },
+	{
+		key: "lab-terminal",
+		artifact: "check-logs-runtime",
+		file: "lab-terminal.log",
+		step: "Lab terminal PTY checks",
+		tail: 8
+	}
 ];
 
 /** 读当前清单（文件缺失 / JSON 坏掉都当空清单：断言层会把「清单为空」判红） */
@@ -187,7 +194,7 @@ function manifestDiff(before, after) {
 	return out;
 }
 
-/** 盘上六份样本的清单快照（还没落盘） */
+/** 盘上七份样本的清单快照（还没落盘） */
 function snapshotManifest() {
 	const rows = {};
 	for (const key of fixtureKeysOnDisk())
@@ -211,7 +218,7 @@ function seal(rows = snapshotManifest()) {
 // `--seal --reason "…"`：只重封清单、不跑任何命令 —— 应急入口，样本正常不该由人来写。
 // 没给理由就拒绝封存（盘上清单保持原样、⑯ 继续红），给了就把理由整理成现成的 commit message。
 if (process.argv.includes("--seal")) {
-	console.log("⚠️  --seal 是应急入口：正常重采请用 --write-fixtures（本地四步）或 --from-ci [run-id]（全部六份）。");
+	console.log("⚠️  --seal 是应急入口：正常重采请用 --write-fixtures（本地五步）或 --from-ci [run-id]（全部七份）。");
 	console.log("    它能给任何字节盖章，也就能把篡改合法化，所以这次封存必须留下理由（--reason），");
 	console.log("    理由是写给人看的：它被排成 commit message 草稿，不进清单结构（清单仍只有 6 条 key）。");
 	const argv = process.argv.slice(2);
@@ -253,7 +260,9 @@ if (process.argv.includes("--write-fixtures")) {
 		{ key: "lint", cmd: "pnpm lint", tail: 6, keepBanner: true },
 		{ key: "typecheck", cmd: "pnpm typecheck", tail: 6, keepBanner: true },
 		{ key: "i18n", cmd: "pnpm check:i18n", tail: 8 },
-		{ key: "governance", cmd: "pnpm check:governance", tail: 12, keep: /结果：|自测|项通过/ }
+		{ key: "governance", cmd: "pnpm check:governance", tail: 12, keep: /结果：|自测|项通过/ },
+		// 需要 POSIX 的 `pty` 与 bash：非 POSIX 平台会跳过（缺小结行 → 这一步在本地就该红）
+		{ key: "lab-terminal", cmd: "pnpm check:lab-terminal", tail: 8 }
 	];
 	// 先跑完、再统一落盘：check:governance 会跑本脚本读样本，跑到一半改样本会让它假红
 	const collected = [];

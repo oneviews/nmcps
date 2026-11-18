@@ -1,0 +1,11 @@
+# key: lab-terminal
+# source: 本地 `pnpm check:lab-terminal` 真实输出尾部（2026-11-17 重采）
+# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+   尾部：root@h1:~# echo after-interrupt | after-interrupt | root@h1:~# exit | exit
+✅ Tab \t 触发 bash 补全（`ech` → `echo `，随后整行照常执行）
+   尾部：root@h1:~# echo tab-ok | tab-ok | root@h1:~# exit | exit
+✅ 方向键 CSI \x1b[D 移动光标后再输入，字符插在中间
+   尾部：root@h1:~# echo abcXbc | aXbc | root@h1:~# exit | exit
+✅ Ctrl-L 0x0c（通用 Ctrl+字母映射）清屏后命令仍能执行
+   尾部：root@h1:~# echo after-clear | after-clear | root@h1:~# exit | exit
+6/6 项通过（真实 bash + PTY）

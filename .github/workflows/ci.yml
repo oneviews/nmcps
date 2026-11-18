@@ -118,6 +118,17 @@ jobs:
       - name: Prepare log directory
         run: mkdir -p ci-logs
 
+      # 终端按键 → PTY 字节的等价性：把 Webshell 实际发出的序列喂给真 bash + 伪终端。
+      # 不需要构建产物，也不碰 Mininet（ubuntu-latest 自带 python3 与 bash）；
+      # 非 POSIX 平台脚本会自报跳过，此时这一步必然缺小结行 → 由 --expect 判红。
+      - name: Lab terminal PTY checks
+        run: |
+          set +e
+          pnpm check:lab-terminal 2>&1 | tee ci-logs/lab-terminal.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "lab terminal PTY" ci-logs/lab-terminal.log --expect "$(sh scripts/ci-expectations.sh lab-terminal)" || status=1
+          exit $status
+
       - name: Build BFF
         run: pnpm build:server 2>&1 | tee ci-logs/build-server.log
 
@@ -176,7 +187,7 @@ jobs:
           if-no-files-found: ignore
 
       # 产物同时是回归样本的来源：`node scripts/check-ci-summary.mjs --from-ci <run-id>`
-      # 回填 scripts/fixtures/ci-logs/*.log 时，bff / ui 两份就是从这里取的。
+      # 回填 scripts/fixtures/ci-logs/*.log 时，bff / ui / lab-terminal 三份就是从这里取的。
       - name: Upload runtime check logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -186,4 +197,5 @@ jobs:
             ci-logs/build-server.log
             ci-logs/check-bff.log
             ci-logs/check-ui.log
+            ci-logs/lab-terminal.log
           if-no-files-found: ignore

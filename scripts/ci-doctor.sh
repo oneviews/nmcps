@@ -7,7 +7,7 @@
 #   sh scripts/ci-doctor.sh status [run-id]
 #   sh scripts/ci-doctor.sh logs [run-id]      # 全量日志 → ci-logs/runs/<id>/full.log，并统计 ✅/❌
 #   sh scripts/ci-doctor.sh artifacts [run-id] # 产物 → ci-logs/downloads/<id>/
-#   sh scripts/ci-doctor.sh fixtures [run-id]  # 产物回填成 scripts/fixtures/ci-logs/ 六份样本
+#   sh scripts/ci-doctor.sh fixtures [run-id]  # 产物回填成 scripts/fixtures/ci-logs/ 七份样本
 #   sh scripts/ci-doctor.sh drill [key]        # 真红演练：注入漂移 → 推临时提交 → 核对 ::error 注解 → 自动回滚
 #       也支持 `drill --keys lint,governance` / `drill --keys all` 一次演练多份样本
 #   sh scripts/ci-doctor.sh nightly [run-id]   # 核对每周一的定时演练：schedule 运行是否绿、PAT 到期体检报了什么、
@@ -36,7 +36,7 @@ usage() {
   status     最近运行的结论、每个 job 的结论与失败步骤（默认子命令）
   logs       拉全量日志到 ci-logs/runs/<id>/，统计 ✅/❌ 与「N/N 项通过」小结
   artifacts  下载全部产物到 ci-logs/downloads/<id>/，列出文件与大小
-  fixtures   把产物回填成 scripts/fixtures/ci-logs/ 的六份样本（会改仓库里的样本与 sha256 清单；
+  fixtures   把产物回填成 scripts/fixtures/ci-logs/ 的七份样本（会改仓库里的样本与 sha256 清单；
              只取结论为 success 的步骤，等价于 node scripts/check-ci-summary.mjs --from-ci）
   drill      真红演练：往样本注入漂移，推一次临时提交，等 CI 打出 ::error 注解并与本地现场
              生成的期望逐字核对，然后自动回滚、把回滚那次运行跑到绿
@@ -182,7 +182,7 @@ cmd_fixtures() {
 #   ① `schedule` 触发的那次运行绿没绿（`workflow_dispatch` 的手工演练不算数）；
 #   ② 运行里「到期体检」那一步报了什么（PAT 还剩几天 / 根本没有到期时间）；
 #   ③ 演练 + 回滚这一对提交之后，`origin/main` 的树是否回到演练之前（净变更为零）；
-#   ④ 六份样本上有没有残留 `# drill: 注入漂移`、有没有挂着未关的失败 issue。
+#   ④ 七份样本上有没有残留 `# drill: 注入漂移`、有没有挂着未关的失败 issue。
 # 没有 schedule 运行时不假装绿：退出码 1 + ⏳ 说明「还没到第一次定时触发」，
 # 因为「没数据」和「通过」是两件事（与 `--expect` 同一条原则）。
 NIGHTLY_WORKFLOW=drill-nightly.yml
@@ -289,7 +289,7 @@ cmd_nightly() {
 	if [ -n "$hit" ]; then
 		nightly_bad "$ref_short 上有残留漂移：$hit"
 	else
-		echo "  ✅ 六份样本没有残留 marker"
+		echo "  ✅ 七份样本没有残留 marker"
 	fi
 
 	# 净变更为零的硬证据：回滚提交的树 == 演练提交的父提交的树
