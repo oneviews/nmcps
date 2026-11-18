@@ -126,7 +126,42 @@ GET  /iam/subject-roles?subject_id=<alice>          # 用 alice 自己的 token�
 GET  /api/lab/channel                               # capabilities.terminal = true
 ```
 
-## 7. 附件
+## 7. 修复验证（2026-11-18，上游修复后复测）
+
+三条验收全部通过，证据如下（同样用 `tenantadmin` 的 token 打 `http://192.168.1.55:8888/api/v1`）：
+
+**① 写入后同租户管理员立刻可读**
+
+```
+GET /iam/subject-roles?subject_id=a6541d3f-7880-4bb9-8917-5338d78e6925
+→ 200 {"data":{"list":[{"id":"b7fa1e07-f955-47c6-8168-b26260bfe126",
+                        "tenant_id":"tnt_default",
+                        "subject_type":"user",
+                        "subject_id":"a6541d3f-…",
+                        "role_id":"f1f011d8-…",
+                        "created_at":"2026-11-18T10:43:26.121525+08:00"}],
+        "total":1}}
+```
+
+行内 `tenant_id` 由 `NULL` 变成 `tnt_default`，且旧数据已回填：
+
+```
+GET /iam/subject-roles?page=1&page_size=200
+→ total = 20，`tenant_id` 为空的行 = 0
+```
+
+**② 主体自己的上下文也能读到**：alice 的 BFF 会话解析出 `lab_terminal`，`GET /api/lab/channel` 回
+`{"read":true,"create":false,"operate":false,"delete":false,"terminal":true,"sniffer":false}`。
+
+**③ 能力位随之上浮到页面**：右栏标签由 `["日志","监控","网络"]` 变成
+`["Webshell","日志","监控","网络"]`；点「Webshell」→ 连接 `h1` 得到真实提示符，
+敲 `id` 回车返回 `uid=0(root) gid=0(root) groups=0(root)`。
+「连通」仍然不出现 —— `lab_sniffer` 尚未创建，`lab:terminal` 也不推导 `lab:operate`。
+
+顺带确认两条「顺带发现」不影响主链路：本次没有触发约束冲突（旧行已随修复回填，不是靠
+`RevokeRole` + 重分配绕过的），`GET /iam/subject-roles` 仍忽略 `role_id`（本次未用到该参数）。
+
+## 8. 附件
 
 - 实测原始输出：`/tmp/iam-probe.txt`、`/tmp/iam-probe2.txt` … `/tmp/iam-probe6.txt`（本机临时目录，非仓库内容）
 - BFF 侧消费规则（**不需要改**，仅供后端确认对齐）：本仓 `server/utils/bff/iamRoles.ts` + `shared/constants/labPermissions.ts`

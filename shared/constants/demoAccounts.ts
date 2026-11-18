@@ -49,11 +49,11 @@ const TENANT_ADMIN_ACCOUNT: DemoAccount = {
  *
  * 账号 `alice` / 口令 `p@ssw0rd`：**2026-11-18 已在真实 IAM 建号**（`POST /api/iam/users`，
  * 部门 `dept_default_ops` → 租户 `tnt_default`，id `a6541d3f-7880-4bb9-8917-5338d78e6925`），
- * 因此它现在能真登录、拿到 `lab:read`；但 `lab:create` / `lab:operate` / `lab:delete` /
- * `lab:terminal` / `lab:sniffer` 仍为 false —— `lab_terminal` 角色在真实 IAM 里已建、
- * `lab_sniffer` 没有，且 `AssignRole` 落库的关系 `tenant_id` 恒为 `NULL`（租户上下文读不到，
- * 取证见 `docs/handoff/iam-assignrole-report-2026-11-18.md`），所以写能力位仍只能
- * 在假上游旁路（`scripts/lib/bff-harness.mjs` 自造 `r_lab_terminal`）里验证。
+ * 因此它现在能真登录、拿到 `lab:read` + `lab:terminal`（`lab_terminal` 关系已由上游修复后的
+ * `AssignRole` 写对租户，2026-11-18 复测通过：真连 `h1` 拿到 `root@h1:…$`）；`lab:create` /
+ * `lab:operate` / `lab:delete` / `lab:sniffer` 仍为 false —— `lab_sniffer` 角色在真实 IAM 里
+ * 还没建，所以「连通」对这条账号依旧不出现。写能力位仍只能在假上游旁路
+ * （`scripts/lib/bff-harness.mjs` 自造 `r_lab_terminal`）里验证。
  *
  * 约束：这条账号是真实种子数据之外的手工建号，换上游实例（`NUXT_BFF_UPSTREAM_BASE`）时
  * 未必存在，所以它仍只在演示开关 `NUXT_PUBLIC_DEMO_LAB_OPERATOR=true` 时出现
