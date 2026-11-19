@@ -5185,14 +5185,72 @@ if (upstreamPort) {
 				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 		});
 		await labPage.waitForTimeout(300);
-		const editProbe = await labPage.evaluate(() => ({
-			palette: !!document.querySelector("[data-testid='mininet-node-palette']"),
-			removeNode: !!document.querySelector("[data-testid='mininet-remove-node']")
-		}));
+		const editProbe = await labPage.evaluate(() => {
+			const palette = document.querySelector("[data-testid='mininet-node-palette']");
+			const canvas = document.querySelector("[data-testid='topology-canvas']");
+			const generate = document.querySelector("[data-testid='mininet-generate-topology']");
+			const paletteBox = palette?.getBoundingClientRect();
+			const canvasBox = canvas?.getBoundingClientRect();
+			const generateBox = generate?.getBoundingClientRect();
+			return {
+				palette: !!palette,
+				removeNode: !!document.querySelector("[data-testid='mininet-remove-node']"),
+				// 设备栏在画布**外面**（W10）：整列靠左、右边缘不越过画布左边缘
+				outsideCanvas: !!(paletteBox && canvasBox && paletteBox.right <= canvasBox.left + 1),
+				// 并且撑满容器高度（与画布列同高，差 ≤ 2px）
+				fullHeight: !!(paletteBox && canvasBox && Math.abs(paletteBox.height - canvasBox.height) <= 2),
+				// 运行控制与「生成拓扑」都在栏顶（上半部）
+				generateOnTop: !!(generate && palette && palette.contains(generate)
+					&& paletteBox && generateBox && generateBox.top < paletteBox.top + paletteBox.height / 2)
+			};
+		});
 		log(
-			"11.4 会话有写能力位时渲染右侧节点面板与删除节点入口",
-			editProbe.palette && editProbe.removeNode,
-			`palette=${editProbe.palette} remove=${editProbe.removeNode}`
+			"11.4 会话有写能力位时渲染画布**外面**左侧的满高设备栏（运行控制与生成拓扑在栏顶）",
+			editProbe.palette && editProbe.outsideCanvas && editProbe.fullHeight
+			&& editProbe.generateOnTop && editProbe.removeNode,
+			`palette=${editProbe.palette} outside=${editProbe.outsideCanvas}`
+			+ ` fullHeight=${editProbe.fullHeight} generateTop=${editProbe.generateOnTop}`
+			+ ` remove=${editProbe.removeNode}`
+		);
+
+		/*
+		 * 11.4a 设备栏去卡片化（W11）：整列透明 —— 不铺底色、不描边、不投影，看上去就是
+		 * 画布左侧的一条图标列。列一透明按钮就只剩图标，所以每个按钮必须有 tooltip：
+		 * 这里用「生成拓扑」（永不 disabled，悬停一定有反应）取证，文案取自 `generate.hint`。
+		 */
+		const railTone = await labPage.evaluate(() => {
+			const rail = document.querySelector("[data-testid='mininet-node-palette']");
+			if (!rail)
+				return null;
+			const style = getComputedStyle(rail);
+			return {
+				bg: style.backgroundColor,
+				border: style.borderTopWidth,
+				shadow: style.boxShadow
+			};
+		});
+		const generateTooltip = await (async () => {
+			const trigger = labPage.locator("[data-testid='mininet-generate-topology']").first();
+			if (await trigger.count() === 0)
+				return "";
+			await trigger.hover();
+			await labPage.waitForTimeout(1200);
+			const text = await labPage.evaluate(() => [...document.querySelectorAll("[role='tooltip']")]
+				.map((node) => (node.textContent ?? "").trim())
+				.filter(Boolean)
+				.join(" "));
+			await labPage.mouse.move(0, 0);
+			await labPage.waitForTimeout(200);
+			return text;
+		})();
+		const railTransparent = !!railTone
+			&& (railTone.bg === "rgba(0, 0, 0, 0)" || railTone.bg === "transparent")
+			&& railTone.border === "0px"
+			&& railTone.shadow === "none";
+		log(
+			"11.4a 设备栏透明（无底色 / 无描边 / 无投影），图标按钮的说明挂在 tooltip 上",
+			railTransparent && generateTooltip.includes("按预置形状"),
+			`底色=${railTone?.bg} 描边=${railTone?.border} 投影=${railTone?.shadow} 提示=${generateTooltip || "无"}`
 		);
 
 		// 新增主机：右侧节点面板 → 表单 → 提交。默认名 `h3`，默认 IP 与坐标由页面给，这里只填名称。
@@ -5568,45 +5626,40 @@ if (upstreamPort) {
 		// 所以「已停止」只有真的读到 `false` 才出现；按钮可用性跟着它走，
 		// 否则「没启动却点了探测」会以 400 的形式被当成「功能坏了」。
 		//
-		// 启动 / 停止 / 重启在工具栏「运行」菜单里（复刻 1.0 版式的菜单栏，NMCPS-ADR-0022 W2 修订），
-		// 所以每次都先打开菜单；Reka 的菜单项是 `role="menuitem"`，不可用态是 `data-disabled`。
-		const openRunMenu = async () => {
-			const opened = await clickIfPresent("[data-testid='mininet-run-menu']");
-			if (opened)
-				await labPage.waitForTimeout(250);
-			return opened;
-		};
-		const runMenuPick = async (label) => {
-			const opened = await openRunMenu();
-			if (!opened)
-				return false;
-			const picked = await clickIfPresent(labPage.getByRole("menuitem", { name: label, exact: true }));
+		// 启动 / 停止 / 重启 / 重建自 W10 起常驻画布**左侧设备栏顶部**（原工具栏「运行」菜单已
+		// 删除，一条动作只有一个入口），所以自检直接点 `mininet-run-*` 按钮；可用性读原生
+		// `disabled`（UButton 渲染成 `<button>`），不再去查 Reka 菜单项的 `data-disabled`。
+		const runButtonState = async (testId) => labPage.evaluate((id) => {
+			const node = document.querySelector(`[data-testid='${id}']`);
+			if (!node)
+				return { present: false, disabled: true };
+			return {
+				present: true,
+				disabled: node.disabled === true || node.getAttribute("aria-disabled") === "true"
+			};
+		}, testId);
+		const runPick = async (testId) => {
+			const picked = await clickIfPresent(`[data-testid='${testId}']`);
 			await labPage.waitForTimeout(250);
 			return picked;
 		};
 		const runMenuProbe = async () => {
-			const opened = await openRunMenu();
-			const probe = opened
-				? await labPage.evaluate(() => {
-					const menuItems = [...document.querySelectorAll("[role='menuitem']")];
-					const itemOf = (text) => menuItems.find((node) => (node.textContent ?? "").trim() === text);
-					const unavailable = (node) => !node
-						|| node.hasAttribute("data-disabled")
-						|| node.getAttribute("aria-disabled") === "true";
-					return {
-						labels: menuItems.map((node) => (node.textContent ?? "").trim()),
-						startDisabled: unavailable(itemOf("启动")),
-						stopDisabled: unavailable(itemOf("停止")),
-						restartDisabled: unavailable(itemOf("重启"))
-					};
-				})
-				: { labels: [], startDisabled: true, stopDisabled: true, restartDisabled: true };
-			if (opened)
-				await labPage.keyboard.press("Escape");
-			await labPage.waitForTimeout(150);
+			const [start, stop, restart, reset] = await Promise.all([
+				runButtonState("mininet-run-start"),
+				runButtonState("mininet-run-stop"),
+				runButtonState("mininet-run-restart"),
+				runButtonState("mininet-reset-network")
+			]);
 			const state = await labPage.evaluate(() =>
 				(document.querySelector("[data-testid='mininet-run-state']")?.textContent ?? "").trim());
-			return { state, ...probe };
+			return {
+				state,
+				present: { start: start.present, stop: stop.present, restart: restart.present, reset: reset.present },
+				startDisabled: !start.present || start.disabled,
+				stopDisabled: !stop.present || stop.disabled,
+				restartDisabled: !restart.present || restart.disabled,
+				resetDisabled: !reset.present || reset.disabled
+			};
 		};
 
 		// 右栏五标签后，运行态徽章与探测 / 测速表单都在「连通」标签里
@@ -5618,12 +5671,15 @@ if (upstreamPort) {
 			"11.4 运行控制读 GET /api/lab/start：初始已停止，启动可点而停止 / 重启 / 探测禁用",
 			connectivityOpened && runReadout === "已停止"
 			&& runBefore.state === "已停止"
-			&& runBefore.labels.includes("启动") && runBefore.labels.includes("停止") && runBefore.labels.includes("重启")
-			&& !runBefore.startDisabled && runBefore.stopDisabled && runBefore.restartDisabled,
-			`状态=${runBefore.state} 菜单=${JSON.stringify(runBefore.labels)} 启动禁用=${runBefore.startDisabled} 停止禁用=${runBefore.stopDisabled} 重启禁用=${runBefore.restartDisabled}`
+			&& runBefore.present.start && runBefore.present.stop && runBefore.present.restart
+			&& runBefore.present.reset
+			&& !runBefore.startDisabled && runBefore.stopDisabled && runBefore.restartDisabled
+			// 重建与运行态无关（`full_reset` 对停着的网同样有效），只受 `runBusy` 约束
+			&& !runBefore.resetDisabled,
+			`状态=${runBefore.state} 按钮=${JSON.stringify(runBefore.present)} 启动禁用=${runBefore.startDisabled} 停止禁用=${runBefore.stopDisabled} 重启禁用=${runBefore.restartDisabled} 重建禁用=${runBefore.resetDisabled}`
 		);
 
-		const startClicked = await runMenuPick("启动");
+		const startClicked = await runPick("mininet-run-start");
 		await labPage.waitForTimeout(1500);
 		const startWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/start");
 		const runRunning = await runMenuProbe();
@@ -5698,7 +5754,7 @@ if (upstreamPort) {
 			`请求=${iperfWrite ? JSON.stringify(iperfWrite.body) : "无"} 输出=${JSON.stringify(iperfText.slice(0, 100))}`
 		);
 
-		const stopOpened = await runMenuPick("停止");
+		const stopOpened = await runPick("mininet-run-stop");
 		await labPage.waitForTimeout(400);
 		const stopModalText = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
 		const stopConfirmed = stopOpened && await clickIfPresent("[data-testid='mininet-run-stop-confirm']");
@@ -5713,9 +5769,10 @@ if (upstreamPort) {
 			`弹窗=${stopOpened} 确认=${stopConfirmed} 请求=${stopWrite ? stopWrite.path : "无"} 状态=${runStopped.state} 启动禁用=${runStopped.startDisabled}`
 		);
 
-		// ── 11.4 菜单栏（复刻 1.0 版式的「视图 / 运行」，NMCPS-ADR-0022 W2 修订）──
+		// ── 11.4 菜单栏（复刻 1.0 版式的「视图」，NMCPS-ADR-0022 W2 修订 / W10）──
 		// 「视图」是四个 checkbox 项（Reka 的 `role="menuitemcheckbox"`），点完菜单不收起；
-		// 「运行」的三项已经在上面钉过启停，这里补「重启 = 停止 + 启动」。
+		// 「运行」菜单在 W10 已被设备栏顶部的常驻按钮取代，启停 / 重启在上面钉过，
+		// 这里补「重启 = 停止 + 启动」（按钮同样是设备栏顶部那一个入口）。
 		const openViewMenu = async () => {
 			const opened = await clickIfPresent("[data-testid='mininet-view-menu']");
 			if (opened)
@@ -5751,7 +5808,7 @@ if (upstreamPort) {
 
 		const viewLabels = await viewMenuLabels();
 		log(
-			"11.4 工具栏最左是复刻的「视图 / 运行」菜单：「视图」四项显示开关齐全",
+			"11.4 工具栏最左是复刻的「视图」菜单：「视图」四项显示开关齐全",
 			viewLabels.includes("显示名称") && viewLabels.includes("显示主机")
 			&& viewLabels.includes("显示控制器") && viewLabels.includes("显示主机 IP"),
 			`菜单项=${JSON.stringify(viewLabels)}`
@@ -5789,9 +5846,9 @@ if (upstreamPort) {
 			start: mininetWriteCount("POST", "/api/mininet/start"),
 			stop: mininetWriteCount("POST", "/api/mininet/stop")
 		};
-		const restartStarted = await runMenuPick("启动");
+		const restartStarted = await runPick("mininet-run-start");
 		await labPage.waitForTimeout(1200);
-		const restartPicked = await runMenuPick("重启");
+		const restartPicked = await runPick("mininet-run-restart");
 		await labPage.waitForTimeout(400);
 		const restartModalText = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
 		const restartConfirmed = restartPicked && await clickIfPresent("[data-testid='mininet-run-stop-confirm']");
@@ -5833,12 +5890,15 @@ if (upstreamPort) {
 
 		const fileItems = await fileMenuLabels();
 		log(
-			"11.5 工具栏最左的「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本 / 台账对账四项齐全",
-			fileItems.length === 4
+			"11.5 工具栏最左的「文件」菜单：导入 / 导出 JSON / 导出脚本 / 导出 PNG / 地址规划 / 台账对账 / 设置七项齐全",
+			fileItems.length === 7
 			&& fileItems.some((label) => label.includes("导入拓扑"))
 			&& fileItems.some((label) => label.includes("导出 JSON"))
 			&& fileItems.some((label) => label.includes("导出 Python 脚本"))
-			&& fileItems.some((label) => label.includes("台账对账")),
+			&& fileItems.some((label) => label.includes("导出拓扑 PNG"))
+			&& fileItems.some((label) => label.includes("导出地址规划"))
+			&& fileItems.some((label) => label.includes("台账对账"))
+			&& fileItems.some((label) => label.includes("设置")),
 			`菜单项=${JSON.stringify(fileItems)}`
 		);
 
@@ -5987,7 +6047,7 @@ if (upstreamPort) {
 		 * 破坏性重建（W5）：`POST /api/lab/full_reset` 要逐字输入网络 ID。
 		 * 断言拆成三步 —— 弹窗开着、输错不给点、输对才发请求且请求体带 confirm。
 		 */
-		const resetPicked = await runMenuPick("重建网络（清空拓扑）");
+		const resetPicked = await runPick("mininet-reset-network");
 		await labPage.waitForTimeout(400);
 		const stateBeforeReset = structuredClone(upstreamServer.mininetState);
 		const resetModalProbe = await labPage.evaluate(() => ({
@@ -6016,6 +6076,72 @@ if (upstreamPort) {
 			&& canvasAfterReset.nodes === 0
 			&& bodyAfterReset.includes("该网络还没有主机"),
 			`弹窗=${resetModalProbe.input} 输错仍禁用=${wrongStillDisabled} confirm=${resetWrite?.body?.confirm} nodes=${canvasAfterReset.nodes}`
+		);
+
+		/*
+		 * 11.6a 空拓扑（0 节点）也要能拖拽新增（W11 缺陷修复）。
+		 *
+		 * `full_reset` 之后这一屏正是「从零建网」的第一屏：台账里有网络、上游一台设备都没有。
+		 * 画布以前写成 `v-if="visibleNodes.length"`，没节点时被一句占位文案换掉，而 `drop`
+		 * 只挂在画布那张 `svg` 上 —— 于是拖拽新增在空网里静默失败（拖源、提示都对，落点不存在）。
+		 * 这里合成一次完整拖放，只断言「画布还在 + 表单带着落点打开」，随后取消：不写节点，
+		 * 下面还要恢复的共用假上游状态不受影响。
+		 */
+		const emptyDragPoint = await labPage.evaluate(() => {
+			const chip = document.querySelector("[data-testid='mininet-add-kind-host']");
+			const svg = document.querySelector("[data-testid='topology-canvas']");
+			if (!chip || !svg)
+				return null;
+			const rect = svg.getBoundingClientRect();
+			const clientX = Math.round(rect.left + rect.width * 0.5);
+			const clientY = Math.round(rect.top + rect.height * 0.5);
+			const dataTransfer = new DataTransfer();
+			chip.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer, clientX, clientY }));
+			svg.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer, clientX, clientY }));
+			return { clientX, clientY };
+		});
+		await labPage.waitForTimeout(250);
+		const emptyDropHint = await labPage.evaluate(() => {
+			const hint = document.querySelector("[data-testid='topology-drop-hint']");
+			return hint ? (hint.textContent ?? "").trim() : "";
+		});
+		const emptyDropped = await labPage.evaluate((point) => {
+			const svg = document.querySelector("[data-testid='topology-canvas']");
+			if (!svg || !point)
+				return false;
+			svg.dispatchEvent(new DragEvent("drop", {
+				bubbles: true,
+				cancelable: true,
+				dataTransfer: new DataTransfer(),
+				clientX: point.clientX,
+				clientY: point.clientY
+			}));
+			return true;
+		}, emptyDragPoint);
+		await labPage.waitForTimeout(400);
+		const emptyDropForm = await labPage.evaluate(() => {
+			const origin = document.querySelector("[data-testid='lab-node-origin']");
+			return {
+				canvas: !!document.querySelector("[data-testid='topology-canvas']"),
+				open: !!document.querySelector("[data-testid='lab-node-name']"),
+				origin: origin ? (origin.textContent ?? "").trim() : ""
+			};
+		});
+		const emptyFormCancelled = emptyDropForm.open
+			&& await clickIfPresent(labPage.locator("[role='dialog'] button").filter({ hasText: "取消" }));
+		// 弹窗收场有过渡动画：等节点名字段真的消失，别用固定 sleep 赌动画时长
+		const emptyFormClosed = await labPage
+			.waitForFunction(() => !document.querySelector("[data-testid='lab-node-name']"), null, { timeout: 5000 })
+			.then(() => true)
+			.catch(() => false);
+		log(
+			"11.6a 空拓扑（0 节点）仍能拖拽新增：画布常驻、投放提示照出、表单带落点打开",
+			!!emptyDragPoint && emptyDropHint.includes("主机") && emptyDropped
+			&& emptyDropForm.canvas && emptyDropForm.open
+			&& (emptyDropForm.origin.match(/-?\d+/g) ?? []).length >= 2
+			&& emptyFormCancelled && emptyFormClosed,
+			`画布=${emptyDropForm.canvas} 提示=${emptyDropHint || "无"} 表单=${emptyDropForm.open}`
+			+ ` 落点=${emptyDropForm.origin || "无"} 取消=${emptyFormCancelled}`
 		);
 
 		/*
@@ -6053,9 +6179,23 @@ if (upstreamPort) {
 
 		const menuBeforeReconcile = await fileMenuEntries();
 		const reconcileEntry = menuBeforeReconcile.find((entry) => entry.label.includes("台账对账"));
+		// 「文件」菜单的完整形状（W4 三项 + W9 三项 + ADR-0023 的对账）：项数写过一次就跟着菜单走，
+		// 别再拿旧的四项去比 —— W9 补了三项之后这条断言曾经长期为红。
+		const fileMenuLabelList = menuBeforeReconcile.map((entry) => entry.label);
+		const fileMenuExpected = [
+			"导入拓扑（JSON）…",
+			"导出 JSON",
+			"导出 Python 脚本",
+			"导出拓扑 PNG",
+			"导出地址规划（JSON）",
+			"台账对账…",
+			"设置…"
+		];
 		log(
 			"11.6b 双权限（create + delete）时「文件」菜单多出「台账对账」，且可点",
-			menuBeforeReconcile.length === 4 && !!reconcileEntry && !reconcileEntry.disabled,
+			fileMenuExpected.every((label) => fileMenuLabelList.includes(label))
+			&& fileMenuLabelList.length === fileMenuExpected.length
+			&& !!reconcileEntry && !reconcileEntry.disabled,
 			`菜单项=${JSON.stringify(menuBeforeReconcile)}`
 		);
 
@@ -6144,7 +6284,7 @@ if (upstreamPort) {
 		);
 
 		// 抓包要求网络在跑（上游 `sniffer_start` 对未启动回 400）；full_reset 已经把网停掉了
-		await runMenuPick("启动");
+		await runPick("mininet-run-start");
 		await labPage.waitForTimeout(1200);
 		const socketsBeforeStreaming = upstreamServer.mininetSocketLog.length;
 		await pickToolItem("开始抓包");
@@ -6520,6 +6660,9 @@ if (upstreamPort) {
 		const manifestContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const manifestPage = await manifestContext.newPage();
 		await loginToLab(manifestPage, manifestBase);
+		// 台账 → 五类节点 → 画布是三次串行读取，`loginToLab` 的固定等待在机器忙时会不够；
+		// 先等画布真的落下一个节点再取证，别把「还在读」记成「节点没画出来」。
+		await manifestPage.waitForSelector("[data-testid='topology-node']", { timeout: 20000 }).catch(() => {});
 
 		const manifestProbe = await manifestPage.evaluate(() => ({
 			nodes: Array.from(document.querySelectorAll("[data-testid='topology-node']"))
