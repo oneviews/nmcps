@@ -21,7 +21,7 @@ authority: normative
 scope:
   - arch.ui
 status: baseline
-version: 0.2.34
+version: 0.2.35
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -229,6 +229,9 @@ Stop at the first hit; the answer now decides **which area**, not which level:
 
 The right area has a fixed order (left → right, never reordered): **record actions (dangerous leftmost) → submit actions → primary CTA**. The title no longer occupies a toolbar slot.
 
+- **Action availability reads a three-state value, never a guess**: any action whose availability depends on state (start / stop / restart / probe / throughput / capture start-stop / deleting a running object…) must read the upstream state in **three states**: `true` and `false` each enable their own actions, while `null` (unreadable / not loaded yet) **disables every related action** and renders the reading as "unknown". Treating `null` as `false` makes "start" fire at a network that is already running, turning the upstream 400 into a fake failure; treating it as `true` is worse — "stop" would hit somebody else's network. The reading itself is shown as it is: "unknown" is its own copy, never an alias of "stopped".
+- **The cost of that rule stays visible in the UI**: during the roughly one second after a page loads, before the run state arrives, the tool menu items are disabled (`null`) instead of assuming "not running" and enabling them — what the user sees is "cannot press yet", not "pressed and got an error". So when investigating "why is this button dead", check whether the reading badge says "unknown" before suspecting capability flags.
+
 ### 4.3 Injection mechanism
 
 - `Teleport` replaces module-level shared state: it has no global state, removes itself on unmount, is SSR-safe and cannot leak across `<KeepAlive>` pages; a page no longer needs an extra SFC just to pass a `Component`.
@@ -325,6 +328,7 @@ The single source of truth for the selected record is the URL query `?id=<record
 | A second sort implementation for the default selection | the default selection is not the first row | reuse the list's own `sortKey` |
 | `UModal` carrying a record's edit form | two entry points for one record and two dirty guards | an inline form in the detail pane (modals only for one-off forms with no record) |
 | A second toolbar built inside a pane (a pane header holding another row of actions) | two stacked rows on a narrow screen eat 98px of a 600px viewport; action ownership drifts per page | inject everything through `Teleport` into the content toolbar, split left/right |
+| Treating an "unknown reading (`null`)" as "stopped / off" | actions fire against the real state, and the upstream 4xx gets reported as the user's failure; "start failed" while the network was running all along | three-state readings: on `null` every related action is disabled and the reading says "unknown" (§4.2) |
 
 ---
 
@@ -406,6 +410,8 @@ The single source of truth for the selected record is the URL query `?id=<record
 | 2026-11-09 | 0.2.32 | **"Only a node with children can be collapsed" also holds on the same `tier` (`NMCPS-DESIGN-001` §6.15 / A52)**: a user reported that after collapsing a distribution switch the fat APs stayed on the canvas connected to nothing — the root cause was that "who is the child" only honoured a strictly smaller `tier`, while the 18 production fat APs share tier 3 with the access switches. This layer therefore records a general rule: **"parent / child" is not the same as "smaller tier number"** — between same-tier devices, if one side still has an uplink (a strictly higher device next to it) and the other does not, the uplinked one is the parent; when both or neither have one, no hierarchy may be invented (otherwise collapsing one access switch would take its same-tier peer with it). Any future "collapse sub-items" on a list / tree page in this layer follows the same rule. `check:ui` 223 → 224. |
 | 2026-11-09 | 0.2.33 | **Canvas controls join the toolbar's left zone, assertion count synced (`NMCPS-DESIGN-001` §6.8 / §6.15.3, A48 rewritten)**: the topology page's view controls — the 2D layout dropdown, radial rotation, show names, reset view and zoom — now **all sit in `#app-toolbar-left`** on the refresh line; before this they were pinned to the canvas' top-right corner, where they covered the topmost nodes and links. §4.1 gains the reason this row belongs on the left: what they change is **how this graph is presented** (geometry plus viewport), still collection scope, while the right zone keeps record-level actions and reading badges. The `check:ui` count follows two rounds of `NMCPS-DESIGN-001` tightening, from 224 down to 219 (node-level "stop / restart" retired, A9 collapsed from 6 cases into one negative assertion). |
 | 2026-11-09 | 0.2.34 | **The left area's internal order and "no second reset" become general rules (§4.1; `NMCPS-DESIGN-001` §6.15.4 / A48)**: six points were raised about the topology toolbar and two of them are rules of this layer rather than domain detail — ① **left-area order = settings / presentation first, the data action (refresh) last with a visible label**: the left area reads "adjust, then fetch" and the most frequent action sits next to the right-area readings; an icon plus a tooltip hides "pressing this refetches" behind a hover. ② **never offer a second reset for the same thing**: the three-in-one "reset view" already covers offsets, rotation and viewport, so a matching `carbon:reset` beside it only leaves users unsure which one to press — the `disabled` state answers whether anything is left to reset. The `check:ui` count is unchanged (**219**; A44 / A48 rewritten, none added). |
+| 2026-11-19 | 0.2.35 | **"Unknown reading" stops being an alias of "not running" (§4.2 / §6)**: the lab's run state and capture state are both three-state readings (`true` / `false` / `null`), but only the implementation layer said so — the wording layer never did, so "the tools menu was dead for a second after load" was once investigated as a permission problem. §4.2 now records the general rule: on `null` every related action is disabled and the reading renders as "unknown"; it may neither fall back to `false` (that fires a second start at a running network) nor to `true` (stop would hit another network). §6 gains a matching anti-pattern row and states that the one-second disabled window is the **visible cost of the rule**, not a defect. Evidence: the real-IAM section of `check:lab-real` asserts that the probe button is not rendered when only `sniffer` is granted, and the existing `check:ui` 11.4 disabled-state assertions are unchanged. |
+
 
 
 

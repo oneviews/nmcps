@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.54.0
+version: 0.55.2
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-17"
+updatedAt: "2026-11-19"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -248,3 +248,7 @@ tags:
 | 2026-11-18 | 0.53.0 | **上游 `AssignRole` 修复后闭环（`NMCPS-ADR-0013` 的演示账号首次拿到真实终端位）**。复测三条验收全过：① 重新分配的 `lab_terminal` 关系行带 `tenant_id = "tnt_default"`、`tenantadmin` 读回 `total: 1`，全量关系 17 → 20 行且空租户行 0 条（旧数据已回填）；② alice 的 `GET /api/lab/channel` 由 `read` 一项变成 `read + terminal`，`create` / `operate` / `delete` / `sniffer` 仍 `false`；③ 页面右栏由 日志 / 监控 / 网络 变成 日志 / 监控 / 网络 / Webshell，真连 `h1` 得到 `root@h1:…$`、`id` 回 `uid=0(root)`，「连通」仍不出现（`lab_sniffer` 未建，`lab:terminal` 不推导 `lab:operate`）。工单报告（`docs/handoff/iam-assignrole-report-2026-11-18.md`）加 §7「修复验证」并保留原始缺陷取证；`docs/ai/lab-boundary.md` 的同一条从「未修」改为「已修复 + 复测证据」。 |
 
 | 2026-11-18 | 0.54.0 | **`lab_sniffer` 建出来并绑给 alice：右栏 5 个标签、抓包启停实测通过**。`POST /iam/roles` 建 `lab_sniffer`（`bcadd871-d4f2-40f5-9ac6-1c4ad28e096f`，`tnt_default`）后 `AssignRole` 给 `alice`，`GET /iam/subject-roles?subject_id=a6541d3f-…` 回 `total: 2`、两行租户都是 `tnt_default`；`/api/lab/channel` 由 `read + terminal` 变 `read + terminal + sniffer`（`create` / `operate` / `delete` 仍 `false`）。页面右栏 4 → 5 个标签（多「连通」，里面只有抓包读数、**没有**探测按钮），「工具 → 开始抓包」把上游 `/sniffer/state` 推到 `active: true`、实时流变「实时」，「停止抓包」回到 `false`。`docs/ai/lab-boundary.md` 的同一条补了角色 id 与这套复测，ADR-0013 与手头工单报告（§7 ④）同步。 |
+| 2026-11-19 | 0.55.0 | **三态读数立成口径 + 演示账号档位表 + 旧「文件」菜单与「生成拓扑」复刻**。① `NMCPS-ARCH-006` → 0.2.35：§4.2 新增「动作可用性只看三态读数」（`true` / `false` 各放开对应动作，`null` 一律禁用并把读数显示成「未知」，不许回落成任一侧），§六 反模式清单加一行「把未知当成已停止」——「页面刚加载约 1 秒内工具菜单点不动」从此是规则的可见代价，不是权限问题。② `NMCPS-ADR-0013` 追加「演示账号 ↔ 实验台能力档位」表：`admin` / `tenantadmin` 记设计意图（`create` + `operate` + `delete`，无 `terminal` / `sniffer`），`alice` 记实测（`terminal` + `sniffer`，`create` / `operate` / `delete` 全 false，右栏 5 标签、探测按钮不渲染）。③ `NMCPS-ADR-0022` 追加 W9：旧「文件」菜单 8 项逐项核对后补「导出拓扑 PNG」「导出地址规划（JSON）」「设置…」，其余按「一个动作一个入口」指回破坏性重建 / 导入 / 导出 JSON / 工具菜单；同时复刻 1.0 侧栏的「生成拓扑」（`labGenerate.ts` 纯函数出 Single / Linear / Tree 计划 + 右栏「实验操作」入口，串行写入、不回滚、上限 32 节点），导出 PNG 走 SVG 内联样式（不引截图库），地址规划不再排 PDF（不引 jsPDF）。④ `check-lab-real.mjs` 增 `CHECK_REAL_IAM=1` 段：登录真 IAM 的 alice，断言 channel 能力位三元组、`pingall` 403、抓包启停一轮。i18n 1529 键；`check:ui` 的新用例列入 ADR-0022 §十 遗留风险第 6 条。 |
+| 2026-11-19 | 0.55.1 | **实验台设备选取栏移到画布左侧、图标放大、「生成拓扑」上移到栏顶**：需求方要求「生成拓扑放到拓扑图区右侧的设备选取栏顶部，同时把设备选取栏移到拓扑图左侧、图标变大」。`SimulatorNodePaletteRail` 由 `absolute right-2` 改 `left-2`（与 1.0 `Side.vue` 的左侧栏同方位），折叠箭头方向随之反向；类型图标按钮 40px → 48px、图标 24px，拖源宽度 `w-14` → `w-16`。面板新增 `#top` 具名插槽，页面把「生成拓扑」放进去（仅 `lab:create`，图标按钮 + `aria-label` / `title`），右栏「网络」标签的「实验操作」组整体删除 —— 一个动作仍只有一个入口，i18n `panel.actions` 随之移除（1529 → 1528 键）。`NMCPS-ADR-0022` 的 W7 / W9 段落与 `.clinerules/11-lab-ui.md` 两处位置描述同步订正。 |
+| 2026-11-19 | 0.55.2 | **实验台设备栏移到画布外并撑满高度，运行控制搬到栏顶**：需求方要求「设备选取栏放到拓扑图外边、占据整个容器高度靠上摆放，并把 toolbar『运行』菜单的功能放到设备栏顶部」。`SimulatorNodePaletteRail` 去掉全部定位类（`absolute left-2 top-1/2` 一并删除），画布区改成 flex 行：设备栏是第一个子项（`w-[72px] shrink-0 self-stretch`，与画布同高、内容从顶部开始、类型列表在列内滚动），画布本体是第二个子项。栏顶 `#top` 常驻运行控制（`mininet-run-start` / `-stop` / `-restart` 与 `mininet-reset-network`，禁用条件与运行态同源）和「生成拓扑」，工具栏「运行」菜单整组删除、`menu.run` 文案随之下线（1528 → 1527 键）；整列只在 `create \|\| operate` 时渲染，只有 `operate` 的会话类型列表为空。`check:ui` 11.4 改为断言「设备栏在画布**外面**、与画布同高、生成拓扑在栏顶」，运行控制用例直接点栏顶按钮并读原生 `disabled`。`NMCPS-ADR-0022` 补 W10 段（CN / EN），`.clinerules/11-lab-ui.md` 三处描述同步订正。 |
+
