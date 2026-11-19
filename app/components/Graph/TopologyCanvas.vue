@@ -555,8 +555,12 @@
 	/**
 	 * 视口复位（「恢复默认配置」的第三部分；位移 / 旋转角在页面层清）。
 	 * 缩放按钮也一并暴露：控件由页面渲染，但状态仍归 `useGraphInteraction()` 独家所有。
+	 *
+	 * `svgElement` 只服务「导出拓扑 PNG」(NMCPS-ADR-0022 §六)：导出要把整棵渲染树
+	 * 序列化，页面拿不到根 `<svg>` 就只能去 DOM 里猜选择器。暴露的是元素本身，
+	 * 不暴露任何交互状态。
 	 */
-	defineExpose({ resetViewport: reset, zoomIn, zoomOut });
+	defineExpose({ resetViewport: reset, zoomIn, zoomOut, svgElement: svg });
 
 	/**
 	 * 链路的强调档位（§6.15 要求 2 / §6.15.2）：
