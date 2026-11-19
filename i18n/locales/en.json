@@ -815,7 +815,8 @@
 				"title": "Node palette",
 				"expand": "Expand the node palette",
 				"collapse": "Collapse the node palette",
-				"hint": "Click to add at the default spot, or drag an icon onto the canvas"
+				"hint": "Click to add at the default spot, or drag an icon onto the canvas",
+				"kindHint": "{kind}: {hint}"
 			},
 			"panel": {
 				"title": "Lab controls",
@@ -847,11 +848,12 @@
 			"menu": {
 				"file": "File",
 				"view": "View",
-				"run": "Run",
 				"tools": "Tools",
 				"importJson": "Import topology (JSON)…",
 				"exportJson": "Export JSON",
 				"exportScript": "Export Python script",
+				"exportPng": "Export topology PNG",
+				"exportAddressing": "Export addressing plan (JSON)",
 				"sniffStart": "Start capture",
 				"sniffStop": "Stop capture",
 				"sniffDownload": "Download capture (pcap)",
@@ -859,7 +861,8 @@
 				"hosts": "Show hosts",
 				"controllers": "Show controllers",
 				"hostIp": "Show host IP",
-				"reconcile": "Reconcile ledger…"
+				"reconcile": "Reconcile ledger…",
+				"settings": "Settings…"
 			},
 			"networkTools": {
 				"state": {
@@ -907,7 +910,54 @@
 				}
 			},
 			"export": {
-				"failed": "Export failed"
+				"failed": "Export failed",
+				"pngFailed": "PNG export failed",
+				"pngUnavailable": "There is no topology on the canvas to export yet"
+			},
+			"generate": {
+				"open": "Generate topology…",
+				"title": "Generate topology",
+				"hint": "Create switches and hosts from a preset shape (the old Single / Linear / Tree forms); nodes are written one at a time and a failure mid-way is not rolled back.",
+				"shape": "Topology type",
+				"shapes": {
+					"single": "Single (one switch + N hosts)",
+					"linear": "Linear (chained switches)",
+					"tree": "Tree (layered tree)"
+				},
+				"hosts": "Hosts",
+				"switches": "Switches",
+				"hostsPerSwitch": "Hosts per switch",
+				"layers": "Layers",
+				"fanout": "Fanout",
+				"controller": "Attach controller",
+				"noController": "None",
+				"summary": "Creates {count} nodes and their links",
+				"submit": "Generate",
+				"cancel": "Cancel",
+				"failed": "Generation failed",
+				"done": "Created {nodes} nodes and {links} links",
+				"partial": "Generation stopped: created {nodes} nodes and {links} links; upstream said “{message}”",
+				"errors": {
+					"countInvalid": "Counts must be positive whole numbers",
+					"tooLarge": "One run may create at most 32 nodes — lower the counts"
+				}
+			},
+			"settings": {
+				"title": "Lab settings",
+				"hint": "These defaults only affect later create actions on this page; language, theme and the display toggles live in the global layout and the View menu.",
+				"switchType": "Default switch type",
+				"openflow": "Default OpenFlow version",
+				"openflowHint": "“Follow default” omits the version when a switch is created, so upstream decides.",
+				"openflowAuto": "Follow default",
+				"linkTitle": "Default link attributes",
+				"linkHint": "Empty means unset; when filled, new links are created as TCLink with these attributes (upstream needs tc permissions).",
+				"bw": "Bandwidth (Mbit)",
+				"delay": "Delay (ms)",
+				"jitter": "Jitter (ms)",
+				"loss": "Loss (%)",
+				"unset": "Unset",
+				"cancel": "Cancel",
+				"save": "Save"
 			},
 			"network": {
 				"title": "Network",
@@ -1060,7 +1110,10 @@
 					"sameEndpoint": "Client and server must be different hosts",
 					"secondsInvalid": "Seconds must be an integer between 1 and 3600"
 				},
-				"reset": "Rebuild network (wipe topology)"
+				"reset": "Rebuild network (wipe topology)",
+				"stopHint": "Stop: terminates every node process and rebuilds the topology without starting it; nodes and links are kept, and starting again restores the run.",
+				"restartHint": "Restart: stops first and then starts again; running pings, captures and terminals all lose their sessions.",
+				"resetHint": "Rebuild: type the network ID to wipe every node and link."
 			},
 			"sniffer": {
 				"title": "Packet capture",

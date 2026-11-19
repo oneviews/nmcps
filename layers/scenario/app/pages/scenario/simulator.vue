@@ -3,16 +3,17 @@
 		<Teleport to="#app-toolbar-left">
 			<div class="flex items-center gap-1">
 				<!--
-					菜单栏（复刻 1.0 版式的「文件 / 视图 / 运行」三组，NMCPS-ADR-0022 W4）：
+					菜单栏（复刻 1.0 版式的「文件 / 视图」，NMCPS-ADR-0022 W4 / W10）：
 					`NetworkGraph.vue` 的顶栏从左到右就是「标题 + 文件 / 视图 / 运行 / 工具 / 帮助」，
 					2.0 把工具栏左区交回给页面，菜单栏因此落在刷新 / 新增**之前**。
 
 					「文件」= 导入拓扑 / 导出 JSON / 导出脚本，三项都有端点（W4 的
 					`POST /api/lab/import_json` 与 `GET /api/lab/export/{json|script}`），不是占位的灰项；
-					「工具 / 帮助」还要 W5（抓包下载）与文档锚点，等它们落地时再补。
+					「工具」要 W5 的抓包端点（`lab:sniffer` 才渲染），「帮助」等文档锚点落地再补。
 
-					一个动作一个入口：显示类开关从工具栏独立开关收进「视图」，启动 / 停止 / 重启
-					从右栏卡片收进「运行」；右栏只留运行态读数与探测结果（NMCPS-ARCH-006 §4）。
+					一个动作一个入口：显示类开关从工具栏独立开关收进「视图」；启动 / 停止 / 重启 /
+					重建从 W10 起常驻在**左侧设备栏顶部**（原来在「运行」菜单里，菜单已随之删除）；
+					右栏只留运行态读数与探测结果（NMCPS-ARCH-006 §4）。
 				-->
 				<UDropdownMenu :items="fileMenuItems" :content="{ align: 'start' }">
 					<UButton
@@ -48,17 +49,6 @@
 						trailing-icon="carbon:chevron-down"
 					/>
 				</UDropdownMenu>
-				<UDropdownMenu :items="runMenuItems" :content="{ align: 'start' }">
-					<UButton
-						data-testid="mininet-run-menu"
-						size="xs"
-						color="neutral"
-						variant="ghost"
-						icon="carbon:play"
-						:label="$t('pages.scenario-simulator.menu.run')"
-						trailing-icon="carbon:chevron-down"
-					/>
-				</UDropdownMenu>
 				<!--
 					「工具」菜单（NMCPS-ADR-0022 W5）：抓包启停 + pcap 下载。
 
@@ -89,7 +79,7 @@
 					@click="load()"
 				/>
 				<!--
-					节点面板不在工具栏（NMCPS-ADR-0022 W7）：五个类型改成拓扑图右侧的纵向图标列
+					节点面板不在工具栏（NMCPS-ADR-0022 W7）：五个类型是画布**外面**左侧的纵向图标列
 					（`SimulatorNodePaletteRail`）—— 图标常驻，点一下用默认落点、拖到画布上用
 					放手位置。1.0 把这张面板放在侧栏里，2.0 若塞回工具栏的 `UPopover`，就要
 					「先点开菜单再拖出来」，而菜单一收起拖源就没了。
@@ -152,45 +142,164 @@
 		</div>
 
 		<div v-else class="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
-			<div class="relative min-h-[420px] flex-1 overflow-hidden rounded-lg border border-(--ui-border)">
-				<GraphTopologyCanvas
-					v-if="visibleNodes.length"
-					:nodes="visibleNodes"
-					:links="visibleLinks"
-					:width="canvasWidth"
-					:height="canvasHeight"
-					:selected-id="selectedId"
-					:selected-link-key="selectedLinkKey"
-					:link-title="linkTitle"
-					:show-labels="showLabels"
-					:draggable="canOperate"
-					:drop-enabled="canCreate && dragKind !== null"
-					:drop-hint="dropHint"
-					:label="$t('pages.scenario-simulator.canvasLabel')"
-					@select="selectNode"
-					@select-link="selectLink"
-					@offset-change="onNodeMoved"
-					@canvas-drop="onCanvasDrop"
-				/>
-				<div v-else class="flex h-full min-h-96 items-center justify-center">
-					<p class="text-sm text-(--ui-text-muted)">
-						{{ $t("pages.scenario-simulator.empty.topology") }}
-					</p>
-				</div>
+			<!--
+				画布区：设备栏是**画布外面**的独立一列（W10），右侧才是画布本体 —— 两列同高
+				（flex 默认 `items-stretch`），设备栏内容从顶部开始，不再 `absolute` 叠在画布上。
+			-->
+			<div class="flex min-h-[420px] min-w-0 flex-1 gap-2">
 				<!--
-					节点面板（复刻 1.0 `Side.vue` 的 palette，NMCPS-ADR-0022 W7）：贴着拓扑图右侧
-					纵向排列五个类型图标。点一下 = 用默认落点打开表单；拖到画布上 = 用放手位置。
-					两条路都进同一张 `NodeFormModal`（校验与请求体只有一份）。
+					设备栏（复刻 1.0 `Side.vue` 的 palette，NMCPS-ADR-0022 W7 / W9 / W10）：
+					画布左侧纵向排列五个类型图标（1.0 的侧栏也在左）。点一下 = 用默认落点打开表单；
+					拖到画布上 = 用放手位置。两条路都进同一张 `NodeFormModal`（校验与请求体只有一份）。
+
+					栏顶 `#top` 插槽放运行控制与「生成拓扑」：1.0 的 `Side.vue` 里建网动作就排在
+					palette 之上，现在它们固定在列顶、不随下面类型列表滚动。运行按钮认 `create` /
+					`operate`，整列因此在两者任一为真时出现；没有 `create` 时类型列表为空。
 				-->
 				<SimulatorNodePaletteRail
-					v-if="canCreate"
-					:kinds="LAB_NODE_KINDS"
+					v-if="showPaletteRail"
+					:kinds="canCreate ? LAB_NODE_KINDS : []"
 					:icons="NODE_KIND_ICONS"
 					:hint="$t('pages.scenario-simulator.palette.hint')"
 					@pick="pickKind"
 					@dragstart="onPaletteDragStart"
 					@dragend="onPaletteDragEnd"
-				/>
+				>
+					<template #top>
+						<!--
+							运行控制（原工具栏「运行」菜单，W10 移到栏顶常驻）：禁用条件与运行态同源，
+							读不到运行态（`null`）时全部不给点 —— 不把「未知」当成「没启动」。
+							重启只在运行中可点（第一步就是 `POST /stop`）。
+							整列透明之后按钮只剩图标，说明改挂 `UTooltip`：所以这一组**只有一种变体**
+							（`ghost` + `neutral`，尺寸只在「生成拓扑」上放大到与下面的类型图标对齐），
+							破坏性也不靠颜色区分 —— 后果写在提示与确认弹窗里。
+							提示的触发器是外面那层 `<span>`：按钮带原生 `disabled` 时自己收不到
+							指针事件，挂在自己身上的提示会在「最需要解释为什么点不动」时失灵。
+						-->
+						<UTooltip v-if="canCreate" :text="$t('pages.scenario-simulator.run.startHint')">
+							<span class="inline-flex">
+								<UButton
+									data-testid="mininet-run-start"
+									size="sm"
+									color="neutral"
+									variant="ghost"
+									class="size-9 justify-center"
+									:ui="{ leadingIcon: 'size-5' }"
+									icon="carbon:play"
+									:loading="runAction === 'start'"
+									:disabled="runState !== false || runBusy"
+									:aria-label="$t('pages.scenario-simulator.run.start')"
+									@click="startNetwork"
+								/>
+							</span>
+						</UTooltip>
+						<UTooltip v-if="canOperate" :text="$t('pages.scenario-simulator.run.stopHint')">
+							<span class="inline-flex">
+								<UButton
+									data-testid="mininet-run-stop"
+									size="sm"
+									color="neutral"
+									variant="ghost"
+									class="size-9 justify-center"
+									:ui="{ leadingIcon: 'size-5' }"
+									icon="carbon:stop"
+									:loading="runAction === 'stop'"
+									:disabled="runState !== true || runBusy"
+									:aria-label="$t('pages.scenario-simulator.run.stop')"
+									@click="askStopNetwork"
+								/>
+							</span>
+						</UTooltip>
+						<UTooltip v-if="canCreate && canOperate" :text="$t('pages.scenario-simulator.run.restartHint')">
+							<span class="inline-flex">
+								<UButton
+									data-testid="mininet-run-restart"
+									size="sm"
+									color="neutral"
+									variant="ghost"
+									class="size-9 justify-center"
+									:ui="{ leadingIcon: 'size-5' }"
+									icon="carbon:restart"
+									:loading="runAction === 'restart'"
+									:disabled="runState !== true || runBusy"
+									:aria-label="$t('pages.scenario-simulator.run.restart')"
+									@click="askRestartNetwork"
+								/>
+							</span>
+						</UTooltip>
+						<UTooltip v-if="canCreate && canDelete" :text="$t('pages.scenario-simulator.run.resetHint')">
+							<span class="inline-flex">
+								<UButton
+									data-testid="mininet-reset-network"
+									size="sm"
+									color="neutral"
+									variant="ghost"
+									class="size-9 justify-center"
+									:ui="{ leadingIcon: 'size-5' }"
+									icon="carbon:reset"
+									:loading="runAction === 'reset'"
+									:disabled="runBusy"
+									:aria-label="$t('pages.scenario-simulator.run.reset')"
+									@click="askResetNetwork"
+								/>
+							</span>
+						</UTooltip>
+						<!-- 列内唯一一条分割线：运行控制 ↔ 「生成拓扑」 -->
+						<span v-if="canCreate" class="my-0.5 h-px w-8 bg-(--ui-border)" aria-hidden="true" />
+						<UTooltip v-if="canCreate" :text="$t('pages.scenario-simulator.generate.hint')">
+							<span class="inline-flex">
+								<UButton
+									data-testid="mininet-generate-topology"
+									size="md"
+									color="neutral"
+									variant="ghost"
+									class="size-12 justify-center"
+									:ui="{ leadingIcon: 'size-6' }"
+									icon="carbon:chemistry"
+									:aria-label="$t('pages.scenario-simulator.generate.open')"
+									@click="openGenerate"
+								/>
+							</span>
+						</UTooltip>
+					</template>
+				</SimulatorNodePaletteRail>
+				<!--
+					画布常驻（W11）：即使台账里一个节点都没有也要把 `TopologyCanvas` 挂上 ——
+					「拖一个类型到画布上新增节点」是**从零建网**的第一步，而 `drop` 只画在这张
+					svg 上。以前没节点时用一句占位文案把画布换掉，于是空网里拖拽毫无反应：
+					拖源、提示都对，落点却不存在。现在空态改成叠在画布上的提示层
+					（`pointer-events-none`），拖放照常命中下面的 svg。
+				-->
+				<div class="relative min-h-[420px] flex-1 overflow-hidden rounded-lg border border-(--ui-border)">
+					<GraphTopologyCanvas
+						ref="canvasRef"
+						class="h-full"
+						:nodes="visibleNodes"
+						:links="visibleLinks"
+						:width="canvasWidth"
+						:height="canvasHeight"
+						:selected-id="selectedId"
+						:selected-link-key="selectedLinkKey"
+						:link-title="linkTitle"
+						:show-labels="showLabels"
+						:draggable="canOperate"
+						:drop-enabled="canCreate && dragKind !== null"
+						:drop-hint="dropHint"
+						:label="$t('pages.scenario-simulator.canvasLabel')"
+						@select="selectNode"
+						@select-link="selectLink"
+						@offset-change="onNodeMoved"
+						@canvas-drop="onCanvasDrop"
+					/>
+					<div
+						v-if="!visibleNodes.length"
+						class="pointer-events-none absolute inset-0 flex items-center justify-center"
+					>
+						<p class="text-sm text-(--ui-text-muted)">
+							{{ $t("pages.scenario-simulator.empty.topology") }}
+						</p>
+					</div>
+				</div>
 			</div>
 
 			<!--
@@ -723,6 +832,24 @@
 			新增 / 删除的确认层（NMCPS-ADR-0022 W2）：表单与确认都是 `UModal` 原生组件，
 			请求由页面发（页面是唯一写入方），组件只负责校验与文案。
 		-->
+		<!--
+			生成拓扑（复刻旧 `Side.vue`「生成拓扑」+ `TopologyForm.vue`）：表单只收参数，
+			节点与链路由页面按 `labGeneratePlan()` 的计划串行写入，写完重读台账。
+		-->
+		<SimulatorGenerateTopologyModal
+			v-if="canCreate"
+			v-model:open="generateOpen"
+			:controllers="controllerIds"
+			:submitting="generateBusy"
+			:error="generateError"
+			@submit="generateTopology"
+		/>
+		<!-- 设置（复刻旧「文件 → 设置」里仍属本页的默认值，见 `labPreferences.ts`） -->
+		<SimulatorSettingsModal
+			v-model:open="settingsOpen"
+			:preferences="preferences"
+			@save="savePreferences"
+		/>
 		<SimulatorNodeFormModal
 			v-if="createKind"
 			v-model:open="createOpen"
@@ -785,7 +912,9 @@
 	import type { LabNetworkSummary, LabNetworkSyncResult } from "~~/shared/types/lab";
 	import type { TopologyGraphLink, TopologyGraphNode } from "~~/shared/types/topology";
 	import type { LabFlowDraftError } from "#layers/scenario/shared/types/labFlows";
+	import type { LabGenerateDraft } from "#layers/scenario/shared/types/labGenerate";
 	import type { LabNodeKind, LabNodeOrigin, LabRemoveTarget } from "#layers/scenario/shared/types/labNodes";
+	import type { LabPreferences } from "#layers/scenario/shared/types/labPreferences";
 	import type {
 		LabIperfDraftError,
 		LabIperfResult
@@ -793,6 +922,7 @@
 	import type { LabSideTab } from "#layers/scenario/shared/types/labSideTabs";
 	import type { MininetChannelCapabilities, MininetChannelInfo } from "#layers/scenario/shared/types/mininet";
 	import { topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
+	import { topologyPngBlobOf, topologyPngFilename } from "~~/app/utils/graph/topologyPngExport";
 	import {
 		LAB_FLOW_PRIORITY_MAX,
 		labFlowClearError,
@@ -803,12 +933,20 @@
 		labFlowPayloadOf,
 		labFlowRowsOf
 	} from "#layers/scenario/shared/types/labFlows";
+	import { labGenerateLinkPayloadOf, labGeneratePlan } from "#layers/scenario/shared/types/labGenerate";
 	import { parseLabImport } from "#layers/scenario/shared/types/labImport";
 	import {
 		LAB_NODE_COLLECTIONS,
 		LAB_NODE_KINDS,
 		LAB_OPENFLOW_VERSIONS
 	} from "#layers/scenario/shared/types/labNodes";
+	import {
+		LAB_PREFERENCES_KEY,
+		labPreferencesFrom,
+		labPreferencesLinkOptions,
+		labPreferencesOf,
+		labPreferencesOpenflow
+	} from "#layers/scenario/shared/types/labPreferences";
 	import {
 		LAB_IPERF_L4_TYPES,
 		LAB_IPERF_SECONDS_MAX,
@@ -886,6 +1024,13 @@
 	const canDelete = computed(() => capabilities.value?.delete === true);
 	/** 抓包是独立授权位：`lab:read` / `lab:operate` 都不能推导出它（NMCPS-ADR-0021 D3） */
 	const canSniff = computed(() => capabilities.value?.sniffer === true);
+
+	/**
+	 * 左侧设备栏（NMCPS-ADR-0022 W10）：类型图标要 `create`，栏顶的运行按钮要 `create` /
+	 * `operate`（启动归 `create`，停止 / 重启归 `operate`）。两者都没有时整列不出现 ——
+	 * 只读会话不该多出一根空栏。
+	 */
+	const showPaletteRail = computed(() => canCreate.value || canOperate.value);
 
 	/**
 	 * 右栏标签页（NMCPS-ADR-0022 D6 / W7）：标签定义只有这一份 —— 观测三块按能力位裁剪
@@ -1051,9 +1196,42 @@
 	const reconcileBusy = ref(false);
 	const reconcileError = ref<string>();
 
+	/**
+	 * 画布实例：导出 PNG 需要根 `<svg>`（`TopologyCanvas` 以 `svgElement` 暴露）。
+	 * 只取元素本身，不碰它的交互状态。
+	 */
+	const canvasRef = ref<{ svgElement?: SVGSVGElement | null } | null>(null);
+
+	/**
+	 * 生成拓扑（复刻旧 `Side.vue`「生成拓扑」+ `TopologyForm.vue`）。
+	 *
+	 * 表单只收参数；节点与链路按 `labGeneratePlan()` **串行**写入 —— 上游是单个
+	 * `app.net`，BFF 对同一网络只允许一个在途写操作（NMCPS-ADR-0022 D5），
+	 * 并发会拿 409 并把「生成到一半」的拓扑留在后端。
+	 */
+	const generateOpen = ref(false);
+	const generateBusy = ref(false);
+	const generateError = ref<string>();
+
+	/**
+	 * 实验台偏好（「文件 → 设置」）：默认交换机类型 / 默认 OpenFlow / 默认链路属性。
+	 * 落 `localStorage`（键见 `LAB_PREFERENCES_KEY`），刷新后仍生效；读不到就用缺省值。
+	 */
+	const settingsOpen = ref(false);
+	const preferences = ref<LabPreferences>(labPreferencesOf());
+
 	const network = computed(() => networks.value[0] ?? null);
 	const positioned = computed(() => nodes.value.map((item) => item.positioned));
 	const nodeIds = computed(() => nodes.value.map((item) => item.positioned.id));
+
+	/** 控制器 id：「生成拓扑」的关联选项只列台账里真实存在的控制器（上游对未知 id 回 400） */
+	const controllerIds = computed(() => nodes.value
+		.filter((item) => item.kind === "controller")
+		.map((item) => item.positioned.id));
+
+	/** 生成计划的起始序号：现有同类节点数 + 1（计划生成器还会再让开重名） */
+	const hostSequence = computed(() => nodes.value.filter((item) => item.kind === "host").length + 1);
+	const switchSequence = computed(() => nodes.value.filter((item) => item.kind === "switch").length + 1);
 
 	/** 被显隐开关关掉的类型：只在这一层过滤，台账与布局计划都不动 */
 	const hiddenKinds = computed(() => {
@@ -1172,6 +1350,25 @@
 			label: t("pages.scenario-simulator.menu.exportScript"),
 			icon: "carbon:code",
 			onSelect: () => void exportTopology("script")
+		},
+		{
+			/*
+				导出 PNG（复刻旧「文件 → 导出 PNG」）：纯前端，从画布 SVG 渲染，
+				不访问上游、不需要写能力位 —— 只读用户也能把「他看到的图」带走。
+			*/
+			label: t("pages.scenario-simulator.menu.exportPng"),
+			icon: "carbon:image",
+			onSelect: () => void exportTopologyPng()
+		},
+		{
+			/*
+				导出地址规划（复刻旧「文件 → 导出地址规划」）：读 `GET /api/lab/addressing_plan`
+				（`lab:read`）。旧版排成 PDF，2.0 不引入 PDF 依赖，改成同名 JSON 下载 ——
+				内容仍是「每台节点的接口 / MAC / IPv4 / IPv6」。
+			*/
+			label: t("pages.scenario-simulator.menu.exportAddressing"),
+			icon: "carbon:table",
+			onSelect: () => void exportAddressingPlan()
 		}
 	], [
 		{
@@ -1180,6 +1377,14 @@
 			icon: "carbon:data-check",
 			disabled: !canReconcile.value || reconcileBusy.value,
 			onSelect: () => askReconcile()
+		},
+		{
+			// 设置（复刻旧「文件 → 设置」里仍属本页的两项默认值）
+			label: t("pages.scenario-simulator.menu.settings"),
+			icon: "carbon:settings",
+			onSelect: () => {
+				settingsOpen.value = true;
+			}
 		}
 	]]);
 
@@ -1403,42 +1608,10 @@
 	]]);
 
 	/**
-	 * 「运行」菜单：启动 / 停止 / 重启。
-	 *
-	 * 禁用条件与运行态同源：读不到运行态（`null`）时三个都不给点 —— 不把「未知」
-	 * 当成「没启动」（同 W3 的按钮口径）。重启只在**运行中**可点：它的第一步就是停止，
-	 * 对一套已经停着的网调 `POST /stop` 只会拿到上游的 400。
+	 * 运行控制（启动 / 停止 / 重启 / 重建）自 W10 起常驻左侧设备栏顶部，模板里一条动作只有
+	 * 一个入口：禁用条件与运行态同源（读不到 `null` 时全不给点），重建要 `create` + `delete`
+	 * 双能力位且弹窗逐字输入网络 ID（BFF 侧同一值是硬闸门）。
 	 */
-	const runMenuItems = computed<DropdownMenuItem[][]>(() => [[
-		{
-			label: t("pages.scenario-simulator.run.start"),
-			icon: "carbon:play",
-			disabled: !canCreate.value || runState.value !== false || runBusy.value,
-			onSelect: () => {
-				void startNetwork();
-			}
-		},
-		{
-			label: t("pages.scenario-simulator.run.stop"),
-			icon: "carbon:stop",
-			disabled: !canOperate.value || runState.value !== true || runBusy.value,
-			onSelect: () => askStopNetwork()
-		},
-		{
-			label: t("pages.scenario-simulator.run.restart"),
-			icon: "carbon:restart",
-			disabled: !canCreate.value || !canOperate.value || runState.value !== true || runBusy.value,
-			onSelect: () => askRestartNetwork()
-		}
-	], [
-		{
-			// 破坏性重建（W5）：清空全部节点 / 链路 / 流表，双权限 + 二次确认
-			label: t("pages.scenario-simulator.run.reset"),
-			icon: "carbon:reset",
-			disabled: !canCreate.value || !canDelete.value || runBusy.value,
-			onSelect: () => askResetNetwork()
-		}
-	]]);
 
 	/** 抓包态徽章：三态各有文案，未知不是「未抓包」 */
 	const snifferStateLabel = computed(() => (snifferActive.value === null
@@ -1803,6 +1976,14 @@
 		data.effectAllowed = "copy";
 		data.setData(DRAG_KIND_MIME, kind);
 		data.setData("text/plain", kind);
+		/*
+		 * 拖影只带图标（W11）：默认快照是整个按钮 —— 悬停底色、按钮的圆角方块一起被复制，
+		 * 拖动过程中手上就是一个灰方块。把画出来的那枚图标当拖影，指针落在图标中心；
+		 * 取不到（异常渲染）时保持浏览器默认。
+		 */
+		const icon = (event.currentTarget as HTMLElement | null)?.querySelector(".iconify, svg");
+		if (icon)
+			data.setDragImage(icon as Element, 12, 12);
 	}
 
 	/** 拖拽结束（含用户中途放弃）：`drop` 之后也会补一次，重复置空无害 */
@@ -1859,7 +2040,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.post(LAB_NODE_COLLECTIONS[kind], payload);
+			await api.post(LAB_NODE_COLLECTIONS[kind], nodePayloadWithPreferences(kind, payload));
 			toast.add({ title: t("pages.scenario-simulator.edit.created", { id: String(payload.name ?? payload.id) }), color: "success" });
 			createOpen.value = false;
 			createKind.value = null;
@@ -1869,6 +2050,160 @@
 			actionError.value = messageOf(caught);
 		} finally {
 			acting.value = false;
+		}
+	}
+
+	/**
+	 * 把「设置」里的默认值并进节点请求体：交换机带上 `of_version`（`"auto"` → `null`，
+	 * 上游按默认处理）。`switch_type` 仍以表单里的选择为准 —— 表单是「这一次」的决定，
+	 * 设置只是默认值。其他类型原样返回。
+	 */
+	function nodePayloadWithPreferences(kind: NodeKind, payload: Record<string, unknown>): Record<string, unknown> {
+		if (kind !== "switch")
+			return payload;
+		return { ...payload, of_version: labPreferencesOpenflow(preferences.value) };
+	}
+
+	/* ── 生成拓扑（复刻旧 `Side.vue`「生成拓扑」+ `TopologyForm.vue`，NMCPS-ADR-0022 §六）──
+	 * 表单只收参数（形状 / 数量 / 控制器），计划由 `labGeneratePlan()` 纯函数给出；
+	 * 这里负责**串行**发请求（上游单网络只允许一个在途写操作，D5）并重读台账。
+	 * 不做回滚：上游没有事务，已建的节点就是既成事实 —— 把「建到哪一步」原话告诉用户，
+	 * 再让画布回到台账事实，比偷偷删掉一半更可预期。
+	 */
+
+	function openGenerate(): void {
+		generateError.value = undefined;
+		generateOpen.value = true;
+	}
+
+	async function generateTopology(draft: LabGenerateDraft): Promise<void> {
+		if (!canCreate.value || generateBusy.value)
+			return;
+
+		generateBusy.value = true;
+		generateError.value = undefined;
+
+		const linkOptions = labPreferencesLinkOptions(preferences.value);
+		const plan = labGeneratePlan(draft, {
+			existingIds: nodeIds.value,
+			hostSequence: hostSequence.value,
+			switchSequence: switchSequence.value,
+			switchType: preferences.value.switchType,
+			ofVersion: labPreferencesOpenflow(preferences.value),
+			linkOptions
+		});
+
+		let createdNodes = 0;
+		let createdLinks = 0;
+
+		try {
+			for (const node of plan.nodes) {
+				await api.post(LAB_NODE_COLLECTIONS[node.kind], node.payload);
+				createdNodes++;
+			}
+			for (const link of plan.links) {
+				await api.post("/api/lab/links", labGenerateLinkPayloadOf(link, linkOptions));
+				createdLinks++;
+			}
+
+			generateOpen.value = false;
+			toast.add({
+				title: t("pages.scenario-simulator.generate.done", { nodes: createdNodes, links: createdLinks }),
+				color: "success"
+			});
+			await load();
+		} catch (caught) {
+			generateError.value = t("pages.scenario-simulator.generate.partial", {
+				nodes: createdNodes,
+				links: createdLinks,
+				message: messageOf(caught)
+			});
+			await load();
+		} finally {
+			generateBusy.value = false;
+		}
+	}
+
+	/* ── 实验台偏好（「文件 → 设置」）──────────────────────────────────────── */
+
+	/**
+	 * 保存偏好：内存 + `localStorage` 双写。
+	 *
+	 * 存储写失败（隐私模式 / 配额满）只影响「刷新后还记得」，不影响本次生效 ——
+	 * 所以这里吞掉异常，不把用户的操作判成失败。
+	 */
+	function savePreferences(next: LabPreferences): void {
+		preferences.value = labPreferencesFrom(next);
+		if (!import.meta.client)
+			return;
+		try {
+			localStorage.setItem(LAB_PREFERENCES_KEY, JSON.stringify(preferences.value));
+		} catch {
+			// 存储不可用：本次仍按新偏好执行，只是下次打开回到缺省值
+		}
+	}
+
+	if (import.meta.client) {
+		try {
+			preferences.value = labPreferencesFrom(localStorage.getItem(LAB_PREFERENCES_KEY));
+		} catch {
+			// 读取失败（隐私模式）：保持缺省偏好
+		}
+	}
+
+	/* ── 导出（复刻旧「文件」菜单的 PNG / 地址规划）──────────────────────── */
+
+	/** 导出文件名的统一时间戳（`20261119T031500Z`），连续导出不会互相覆盖 */
+	function exportStamp(now: Date = new Date()): string {
+		return now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+	}
+
+	/**
+	 * 导出拓扑 PNG（纯前端）：画布 SVG → 内联样式 → `<canvas>` → PNG。
+	 *
+	 * 不复用 BFF 的导出通道 —— 这条路径渲染的是**用户当前看到的图**（含视图开关的
+	 * 过滤结果），与「上游导出的拓扑 JSON」是两件事。
+	 */
+	async function exportTopologyPng(): Promise<void> {
+		const svg = canvasRef.value?.svgElement;
+		if (!svg) {
+			toast.add({
+				title: t("pages.scenario-simulator.export.pngUnavailable"),
+				color: "error"
+			});
+			return;
+		}
+
+		try {
+			saveBlob(await topologyPngBlobOf(svg), topologyPngFilename());
+		} catch (caught) {
+			toast.add({
+				title: t("pages.scenario-simulator.export.pngFailed"),
+				description: messageOf(caught),
+				color: "error"
+			});
+		}
+	}
+
+	/**
+	 * 导出地址规划（`GET /api/lab/addressing_plan`，`lab:read`）。
+	 *
+	 * 旧版用 jsPDF + autoTable 排成 PDF；2.0 不引入新的前端依赖，落成同名 JSON，
+	 * 字段仍是上游返回的原文（节点 / 接口 / MAC / IPv4 / IPv6），不在这里裁剪。
+	 */
+	async function exportAddressingPlan(): Promise<void> {
+		try {
+			const plan = await api.get<unknown>("/api/lab/addressing_plan");
+			saveBlob(
+				new Blob([`${JSON.stringify(plan, null, 2)}\n`], { type: "application/json" }),
+				`lab-addressing-${exportStamp()}.json`
+			);
+		} catch (caught) {
+			toast.add({
+				title: t("pages.scenario-simulator.export.failed"),
+				description: messageOf(caught),
+				color: "error"
+			});
 		}
 	}
 
@@ -1924,7 +2259,10 @@
 		actionError.value = undefined;
 
 		try {
-			await api.post("/api/lab/links", { src: source, dst: target });
+			await api.post("/api/lab/links", labGenerateLinkPayloadOf(
+				{ src: source, dst: target },
+				labPreferencesLinkOptions(preferences.value)
+			));
 			toast.add({ title: t("pages.scenario-simulator.edit.linked", { source, target }), color: "success" });
 			linkTarget.value = undefined;
 			await load();
