@@ -12,7 +12,8 @@
 //   ⑤ 工程约定：typecheck / lint / Rust 校验命令、UI 组件选型（Nuxt UI v4 原生组件）
 //      与工具栏常驻筛选控件预算仍在规则里
 //   ⑥ CI 自查用例：`check:ui` / `check:bff` 的被测实例必须自带上游配置（否则用例误报）
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 
@@ -62,7 +63,17 @@ for (const name of files) {
 	const text = read(name);
 	texts.set(name, text);
 
-	const h1 = text.split("\n").filter((line) => line.startsWith("# "));
+	// 只数正文标题：``` 围栏里的 `# 探活` 是 shell 注释，不是 H1 —— 把代码块算进去，
+	// 任何带注释的 bash 示例都会让这份规则文件「4 个 H1」，于是没人敢写示例。
+	let inFence = false;
+	const prose = text.split("\n").filter((line) => {
+		if (line.startsWith("```")) {
+			inFence = !inFence;
+			return false;
+		}
+		return !inFence;
+	});
+	const h1 = prose.filter((line) => line.startsWith("# "));
 	const bytes = readFileSync(join(RULES_DIR, name));
 	const hasBom = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
 
@@ -131,6 +142,50 @@ log(
 	"编码约定记录了 UI / 集成自查步骤必须给被测实例配上游（否则用例误报）",
 	bulletLines(coding, ["NUXT_BFF_UPSTREAM_BASE"]).length === 1 && coding.includes("check:ui") && coding.includes("check:bff")
 );
+
+// ── ⑦ 本地 sudo 凭据：口令只活在 git-ignored 文件里 ──
+// 规则文件（`09-local-sudo.md`）写「怎么用」，口令存 `.clinerules/.sudo.local`（未跟踪、chmod 600），
+// 提交的 askpass helper 只负责把它回显给 sudo。这一组把四件**可检查的事实**变成门禁：
+// helper 可执行、忽略规则还在、口令文件没被跟踪，以及口令原文没有出现在任何被跟踪文件里。
+// CI 上没有口令文件（`existsSync` 为假）：内容比对跳过、但仍断言忽略规则与 helper 本身 ——
+// 「没有口令」不等于「约定成立」，两者分开断言。
+const askpassPath = join(RULES_DIR, "sudo-askpass.sh");
+const secretPath = join(RULES_DIR, ".sudo.local");
+const gitRun = (args) => spawnSync("git", args, { encoding: "utf8" });
+
+log(
+	"sudo askpass helper 已提交且可执行（口令不进命令行）",
+	existsSync(askpassPath) && Boolean(statSync(askpassPath).mode & 0o111)
+	&& readFileSync(askpassPath, "utf8").includes("NMCPS_SUDO_PASS_FILE")
+);
+
+const ignoreCheck = gitRun(["check-ignore", "-q", secretPath]);
+const trackedCheck = gitRun(["ls-files", "--error-unmatch", secretPath]);
+log(
+	"口令文件 .clinerules/.sudo.local 被 git 忽略且未被跟踪",
+	ignoreCheck.status === 0 && trackedCheck.status !== 0,
+	`忽略=${ignoreCheck.status === 0} 已跟踪=${trackedCheck.status === 0}`
+);
+
+const sudoRules = texts.get("09-local-sudo.md") ?? "";
+log(
+	"sudo 规则只写用法、口令指向 git-ignored 文件与 askpass helper",
+	bulletLines(sudoRules, ["sudo-askpass.sh"]).length === 1 && sudoRules.includes(".sudo.local") && sudoRules.includes("git-ignored")
+);
+
+if (existsSync(secretPath)) {
+	const secret = readFileSync(secretPath, "utf8").trim();
+	const mode = statSync(secretPath).mode & 0o777;
+	// `git grep -F` 只搜被跟踪文件：口令一旦漏进任何提交过的文件，这里立刻命中
+	const leak = secret ? gitRun(["grep", "-I", "-F", "-l", "-e", secret, "--", "."]) : { status: 1, stdout: "" };
+	log(
+		"本地口令文件权限 600，且口令原文不出现在任何被跟踪文件里",
+		mode === 0o600 && secret.length > 0 && leak.status !== 0,
+		`权限=${mode.toString(8)} 命中=${leak.status === 0 ? (leak.stdout ?? "").trim().split("\n").slice(0, 3).join(",") : "无"}`
+	);
+} else {
+	console.log("⏭  本机无 .clinerules/.sudo.local：跳过「口令原文未进被跟踪文件」的内容比对（结构断言仍已执行）");
+}
 
 const passed = results.filter((item) => item.ok).length;
 console.log(`\n${passed}/${results.length} 项通过`);

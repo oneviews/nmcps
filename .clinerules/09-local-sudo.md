@@ -1,3 +1,11 @@
+---
+paths:
+  - "scripts/**"
+  - "layers/scenario/scripts/**"
+  - "services/mininet-api/**"
+  - "docs/ai/**"
+  - ".clinerules/**"
+---
 # 本地 sudo 凭据与用法
 
 本机登录用户 `user` 有 sudo 权限。**密码不入库**：写在 `.clinerules/.sudo.local`（git-ignored，`chmod 600`）。
@@ -49,9 +57,11 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
   所以别在交互式终端里跑需要密码的 `sudo -S`，一次喂错就卡住（`-A` 没有这个问题）。
 - 起长驻进程（重启后端）要 `sudo -A nohup … > /tmp/xxx.log 2>&1 &`，然后**用 `curl` 的 HTTP 码验证**
   （`000` = 没人 bind，见 `docs/ai/lab-boundary.md` 的「两个进程都在、没人 bind」），不要等提示符。
-- 整跑 `check:lab-real`（root 下才会真断言 tc）：`sudo` 会重置环境变量，所以 `CHECK_REAL_MININET` / `REAL_MININET_BASE` /
-  `PATH`（nvm 的 `node` 不在 sudo 的 `secure_path` 里）都要跟在 `sudo -A env …` 之后传；浏览器的
-  `PLAYWRIGHT_BROWSERS_PATH` 不用管，脚本自己回落到 `$SUDO_USER` 的缓存（2026-11-20 实测 root 下 18/18 全绿）：
+- 整跑 `check:lab-real`（root 下才会真断言 tc）直接用包装脚本 `pnpm check:lab-real:root`
+  （`layers/scenario/scripts/check-lab-real-root.mjs`）：它自己把 `PATH`（nvm 的 `node` 不在 sudo 的
+  `secure_path` 里）、`CHECK_REAL_MININET=1`、`REAL_MININET_BASE` 跟在 `sudo -A env …` 之后传，
+  并检查 askpass helper 存在可执行 —— 手写这条命令最容易漏变量（漏 `PATH` = `sudo: node: command not found`，
+  漏门禁变量 = 打 `⏭` 却被读成「已验」）。要手工复现等价命令（2026-11-20 实测 root 下 18/18 全绿）：
   ```bash
   NODE_BIN=$(dirname "$(command -v node)")
   SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A env \
@@ -59,7 +69,11 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
     CHECK_REAL_MININET=1 REAL_MININET_BASE=http://192.168.1.90:8000 \
     node layers/scenario/scripts/check-lab-real.mjs
   ```
+  浏览器的 `PLAYWRIGHT_BROWSERS_PATH` 不用管，脚本自己回落到 `$SUDO_USER` 的缓存。
   中途失败会把 `h1` / `h2` 与那条带 `bw` 的链路留在真后端上（脚本在起网之后才崩的话）—— 下次跑前先
   `POST /api/mininet/full_reset` 清空，别让「非空实例」守卫替你报错。
+- 提权统一走 `sudo -A` + `$PWD/.clinerules/sudo-askpass.sh`（或 `pnpm check:lab-real:root`，两者同一路径）：
+  新增脚本别再自造提权方式，也别把口令搬到别的文件 —— `pnpm check:rules` 断言 helper 可执行、
+  `.sudo.local` 被忽略且未被跟踪、口令原文不出现在任何被跟踪文件里。
 - 密码换了就只改 `.clinerules/.sudo.local`；本文件若发现引用了不存在的文件，先问用户要口令，
   不要凭猜测尝试或改用别的提权方式。
