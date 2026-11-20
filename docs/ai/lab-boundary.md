@@ -9,6 +9,16 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 终端、抓包、`reset`、`full_reset` 属于高权限操作。
 - 拓扑、节点位置、运行状态都归后端所有，前端不是事实源。
 
+## 特权命令怎么跑（2026-11-20）
+
+- 本机 `sudo -n` **不可用**（`interactive authentication is required`），口令存在 git-ignored 的 `.clinerules/.sudo.local`，
+  一律 `sudo -S -p '' <command> < .clinerules/.sudo.local`。完整写法与禁令（不要 `echo "$PASS" | sudo`、不要以 root 跑 Playwright）见
+  `.clinerules/09-local-sudo.md`。
+- 主机的接口在**它自己的 netns** 里：根 netns 里 `tc qdisc show dev h1-eth0` 什么都不打印，要先 `GET /api/mininet/interfaces`
+  拿 pid，再 `sudo -S -p '' nsenter -t <pid> -n tc class show dev h1-eth0 < .clinerules/.sudo.local`。
+- TCLink 用的是 **`htb`**（不是 `tbf`）：`bw=10` 落成 `class htb 5:1 root prio 0 rate 10Mbit ceil 10Mbit`（2026-11-20 实测），
+  所以「带宽有没有生效」要看那行 `rate`，不是看 qdisc 类型名。
+
 ## 本机 `:8000` 必须跑本仓代码（2026-11-18 现场）
 
 - 现场 `:8000` 的 uvicorn 是 11-15 20:39 启动的，cwd 在仓库外的旧副本 `/home/user/project/mininet/mininet-gui-backend`；该副本 `api.py` 里 `switch_fail_mode` / `failMode` **一次都没出现**（ADR-0024 之前的代码），所以交换机仍是 Mininet 默认 `failMode='secure'` + 零控制器。

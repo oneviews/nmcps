@@ -26,6 +26,9 @@ ci-logs/
 !scripts/fixtures/ci-logs/
 !scripts/fixtures/ci-logs/*.log
 
+# 本机 sudo 口令（用法见 .clinerules/09-local-sudo.md，绝不入库）
+.clinerules/.sudo.local
+
 # Binary installers (build artifacts — served from public/downloads/ but not committed)
 *.deb
 *.rpm
