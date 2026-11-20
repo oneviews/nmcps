@@ -7,9 +7,9 @@
 //   演示开关预填 alice → 运行态读真后端 → 栏顶「停止 / 启动 / 重启」真打 Mininet（h1 的 pid 换人）→
 //   五标签切换 → 真提示符 → 算术执行 →
 //   方向键行内编辑 → `Ctrl-L` 清屏后仍可用 → 粘贴整段执行 → `Ctrl+V` 不留 `v` →
-//   切标签不拆 socket → 收起右栏全断。
+//   切标签不拆 socket → 收起右栏全断 → 双击链路改带宽（W13）并回读上游属性。
 //
-// 门禁：默认**不跑**（脚本会建 h1、起停一个真网络），必须显式开门：
+// 门禁：默认**不跑**（脚本会建 h1 / h2 与一条链路、起停一个真网络），必须显式开门：
 //   CHECK_REAL_MININET=1 pnpm check:lab-real
 //   CHECK_REAL_IAM=1 另加一节真 IAM 能力位验收：登录真实 IAM 的 alice，断言
 //   `/api/lab/channel` = `terminal + sniffer` 且 `create/operate/delete` 全 false，
@@ -19,8 +19,9 @@
 // 覆盖：有些机器 127.0.0.1:8000 被 nginx 的默认 SSL server 占着，只有走网卡地址才能拿到后端。
 // 前置：`pnpm build:server`（消费 `.output/server/index.mjs`）+ 一个**空**的真后端
 // （`GET /api/mininet/start` 为 false 且 hosts / switches / routers / nats / controllers 全空）。
-// 结束时脚本自己收尾：停网络、删掉它建的 `h1`、删临时台账；不碰别人正在跑的拓扑 ——
-// 所以空实例守卫是硬门，别为了「跑通」把它去掉。
+// 结束时脚本自己收尾：停网络、删掉它建的 `h1` / `h2`（连带那条自建链路）、删临时台账；
+// 不碰别人正在跑的拓扑 —— 所以空实例守卫是硬门，别为了「跑通」把它去掉。
+import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import process from "node:process";
 import { chromium } from "playwright";
@@ -33,6 +34,13 @@ import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, s
 const REAL_BASE = process.env.REAL_MININET_BASE ?? "http://127.0.0.1:8000";
 /** 本脚本自建自删的节点 / 租户 / 台账：租户名必须与假 IAM 给 alice 的租户一致 */
 const NODE_ID = "h1";
+/**
+ * 第二台主机：W13 的链路编辑要真打 `PUT /links`，而 `intf.config(bw=…)` 只有 TCLink 才会去动 tc。
+ * 两台主机直连一条带 `bw` 的链路就够（上游限制「每台主机只能有一条链路」，所以不挂交换机）。
+ */
+const NODE_ID_2 = "h2";
+/** 起网前给这条链路设的初始带宽（Mbit）：W13 会把它改成 10，回读要能看出变化 */
+const SEED_BW = 5;
 const TENANT = "t_default";
 const LEDGER_FILE = `/tmp/check-lab-real-ledger-${process.pid}.json`;
 
@@ -94,7 +102,7 @@ const occupied = [
 	Object.keys(controllers.json ?? {}).length ? `controllers=${Object.keys(controllers.json).join(",")}` : ""
 ].filter(Boolean);
 if (occupied.length) {
-	console.log(`❌ 真后端不是空实例（${occupied.join(" / ")}）：脚本会 start/stop 网络并删掉自己建的 ${NODE_ID}，`);
+	console.log(`❌ 真后端不是空实例（${occupied.join(" / ")}）：脚本会 start/stop 网络并删掉自己建的 ${NODE_ID} / ${NODE_ID_2}，`);
 	console.log("   拿正在用的拓扑跑会把别人的实验停掉。先 `curl -X POST http://127.0.0.1:8000/api/mininet/full_reset`。");
 	process.exit(1);
 }
@@ -114,10 +122,38 @@ if (!created.ok) {
 	console.log(`❌ 建 ${NODE_ID} 失败（${created.status}）：${created.text.slice(0, 120)}`);
 	process.exit(1);
 }
+
+/*
+ * 第二台主机 + 一条**带 `bw` 的**链路（W13 的前置）：上游 `PUT /links` 只有在链路对象
+ * 有 `intf1` / `intf2` 且参数非空时才去 `intf.config(**opts)` —— 不带 options 建的普通
+ * 链路改了属性只落台账、碰不到 tc，那就证明不了「真机上也生效」。所以起网前就用
+ * `{ options: { bw } }` 建（上游据此用 TCLink 建链，需要 tc 权限）。
+ */
+const peer = await call("POST", "/api/mininet/hosts", {
+	id: NODE_ID_2,
+	type: "host",
+	name: NODE_ID_2,
+	label: NODE_ID_2,
+	x: 320,
+	y: 100,
+	ip: "10.0.0.2/24",
+	mac: "00:00:00:00:00:02"
+});
+const seededLink = peer.ok
+	? await call("POST", "/api/mininet/links", { src: NODE_ID, dst: NODE_ID_2, options: { bw: SEED_BW } })
+	: { ok: false, status: peer.status, text: peer.text };
+if (!seededLink.ok) {
+	console.log(`❌ 建 ${NODE_ID_2} / ${NODE_ID}-${NODE_ID_2} 链路失败（${seededLink.status}）：${seededLink.text.slice(0, 160)}`);
+	await call("DELETE", `/api/mininet/delete_node/${NODE_ID}`).catch(() => undefined);
+	await call("DELETE", `/api/mininet/delete_node/${NODE_ID_2}`).catch(() => undefined);
+	process.exit(1);
+}
+
 const startedNetwork = await call("POST", "/api/mininet/start");
 if (!startedNetwork.ok) {
 	console.log(`❌ 启动真网络失败（${startedNetwork.status}）：${startedNetwork.text.slice(0, 160)}`);
-	await call("DELETE", `/api/mininet/delete_node/${NODE_ID}`);
+	await call("DELETE", `/api/mininet/delete_node/${NODE_ID}`).catch(() => undefined);
+	await call("DELETE", `/api/mininet/delete_node/${NODE_ID_2}`).catch(() => undefined);
 	process.exit(1);
 }
 networkStarted = true;
@@ -142,7 +178,7 @@ const bff = await startBff(port, {
 		created_by: "u_alice",
 		created_at: "2026-11-18T00:00:00.000Z",
 		updated_at: "2026-11-18T00:00:00.000Z",
-		resources: { nodes: [NODE_ID] }
+		resources: { nodes: [NODE_ID, NODE_ID_2] }
 	}]),
 	// 演示开关打开：登录页预填实验台操作员，一步进实验台
 	NUXT_PUBLIC_DEMO_LAB_OPERATOR: "true"
@@ -409,6 +445,76 @@ try {
 	const sessions = await page.locator("[data-testid^='mininet-terminal-session-close-']").count();
 	const stateAfter = (await page.locator("[data-testid='mininet-terminal-state']").textContent() ?? "").trim();
 	log("收起右栏即断流：展开后没有会话标签、状态回到未连接", collapsed === 1 && sessionsWhileCollapsed === 0 && sessions === 0 && stateAfter.includes("未连接"), `收起态=${collapsed} 会话=${sessions} 状态=${stateAfter}`);
+
+	/*
+	 * W13 真机：双击链路 → 改带宽 → `PUT /links`。`check:ui` 11.13 用假上游只证明了请求体形状
+	 * （`{ src, dst, options }` 且只带填过的属性），这里补另一半 —— 同一批请求打到**真**后端：
+	 * 属性落进 `app.link_attrs`（`GET /links` 回读）、`intf.config(bw=…)` 在真链路上被执行
+	 * （链路是带 `bw` 建的 TCLink，回读里有真接口名）、页面 `load()` 后输入框也是新值。
+	 *
+	 * tc 那一层要 CAP_NET_ADMIN 才看得见（`tc qdisc show`），所以只在脚本以 root 运行时断言
+	 * `tbf` 限速；普通用户跑就显式跳过并说明 —— 别把它悄悄算成通过。
+	 */
+	const linkHit = () => page.locator("[data-testid='topology-link-hit'][aria-label*='h1 ↔ h2']");
+	const linkOnCanvas = await linkHit().count() > 0;
+	await linkHit().first().dblclick({ force: true, timeout: 10000 }).catch(() => {});
+	await page.waitForSelector("[data-testid='lab-link-detail-bw']", { timeout: 15000 }).catch(() => {});
+	await page.waitForTimeout(600);
+	const linkDetailText = await page.evaluate(() => (document.querySelector("[data-testid='lab-link-detail-body']")?.textContent ?? "").replace(/\s+/g, " ").trim());
+	const seededBwShown = await page.locator("[data-testid='lab-link-detail-bw']").inputValue().catch(() => "");
+	await page.locator("[data-testid='lab-link-detail-bw']").fill("10", { timeout: 5000 }).catch(() => {});
+	await page.locator("[data-testid='lab-link-detail-submit']").click({ timeout: 5000 }).catch(() => {});
+	await page.waitForTimeout(2000);
+	const linkAfterWrite = await call("GET", "/api/mininet/links");
+	const writtenLink = (linkAfterWrite.json ?? []).find((edge) => [edge.from, edge.to].sort().join("|") === [NODE_ID, NODE_ID_2].sort().join("|"));
+	const linkStats = await call("GET", `/api/mininet/links/stats/${NODE_ID}/${NODE_ID_2}`);
+	const detailClosed = await page.locator("[data-testid='lab-link-detail-bw']").count();
+	log(
+		"W13 双击链路改带宽：`PUT /links` 真打后端，属性回读一致且弹窗收起",
+		linkOnCanvas && linkDetailText.includes(NODE_ID) && linkDetailText.includes(NODE_ID_2)
+		&& seededBwShown === String(SEED_BW)
+		&& writtenLink?.options?.bw === 10 && linkStats.json?.options?.bw === 10
+		&& typeof writtenLink?.intfs?.from === "string" && typeof writtenLink?.intfs?.to === "string"
+		&& detailClosed === 0,
+		`画布=${linkOnCanvas} 弹窗=${linkDetailText.slice(0, 40)} 初始带宽=${seededBwShown || "无"}`
+		+ ` 回读 bw=${writtenLink?.options?.bw} stats bw=${linkStats.json?.options?.bw}`
+		+ ` 接口=${writtenLink?.intfs?.from ?? "无"}→${writtenLink?.intfs?.to ?? "无"}`
+	);
+
+	if (process.getuid?.() === 0 && writtenLink?.intfs?.from) {
+		/*
+		 * 两个真机事实（2026-11-20 实测）：
+		 * ① 接口不在根 netns —— Mininet 把每台主机的接口放进它自己的 netns，根 netns 里
+		 *    `tc qdisc show dev h1-eth0` 什么都不打印，必须先 `nsenter -t <h1 pid> -n`；
+		 * ② TCLink 默认用 `htb`（不是 tbf），`bw` 落到 `class htb 5:1 root … rate <bw>Mbit`。
+		 * 所以断言看的是 h1 netns 里那行 class 的 rate，而不是 qdisc 的类型名。
+		 */
+		const interfaces = await call("GET", "/api/mininet/interfaces");
+		const hostNode = (interfaces.json?.nodes ?? []).find((entry) => entry.id === NODE_ID);
+		let hostClass = "";
+		try {
+			hostClass = execFileSync("nsenter", ["-t", String(hostNode?.pid), "-n", "tc", "class", "show", "dev", writtenLink.intfs.from], { encoding: "utf8" });
+		} catch (error) {
+			hostClass = `ERR ${error.message}`;
+		}
+		log(
+			"W13 带宽真落到接口（root：h1 netns 里 htb 类的 rate 已是 10Mbit）",
+			hostNode?.pid !== undefined && /htb/.test(hostClass) && /rate\s+10Mbit/.test(hostClass),
+			`${writtenLink.intfs.from}@pid ${hostNode?.pid ?? "无"}：${hostClass.split("\n")[0]?.slice(0, 80) ?? "无输出"}`
+		);
+	} else {
+		console.log("⏭  跳过 tc 断言：脚本不是以 root 运行（接口在主机自己的 netns 里，`nsenter` 要 root）——`PUT /links` 的属性回读已证明写入链路，tc 那一层不算已验证；以 root 手验用 `nsenter -t <h1 pid> -n tc class show dev h1-eth0`");
+	}
+
+	// 保存后页面 `load()` 重读 `GET /links`：再双击一次，输入框里应是新值（不是本地乐观更新）
+	await linkHit().first().dblclick({ force: true, timeout: 10000 }).catch(() => {});
+	await page.waitForSelector("[data-testid='lab-link-detail-bw']", { timeout: 15000 }).catch(() => {});
+	await page.waitForTimeout(400);
+	const bwAfterReload = await page.locator("[data-testid='lab-link-detail-bw']").inputValue().catch(() => "");
+	await page.keyboard.press("Escape");
+	await page.waitForTimeout(300);
+	log("W13 保存后重读台账：再次双击链路，带宽输入框已是 10（页面读的是上游事实）", bwAfterReload === "10", `输入框=${bwAfterReload || "无"}`);
+
 	// ── 真 IAM 能力位（CHECK_REAL_IAM=1）：本机真 IAM 的 alice ──────────────
 	// 假上游的 alice 带全部实验位，证明不了「角色只给 terminal + sniffer、不给 operate」。
 	// 这一段另起一个 BFF 指向**真实 IAM**，登录 alice 后断言能力位三元组，再跑一轮抓包启停：
@@ -431,7 +537,7 @@ try {
 				created_by: "u_alice",
 				created_at: "2026-11-18T00:00:00.000Z",
 				updated_at: "2026-11-18T00:00:00.000Z",
-				resources: { nodes: [NODE_ID] }
+				resources: { nodes: [NODE_ID, NODE_ID_2] }
 			}])
 		});
 		const iamBase = `http://${HOST}:${iamPort}`;
@@ -499,10 +605,11 @@ try {
 	await browser.close();
 	await stopBff(bff);
 	await closeUpstream(upstream);
-	// 收尾真后端：停网络（同时终止 PTY）→ 删掉自建的节点 → 删临时台账
+	// 收尾真后端：停网络（同时终止 PTY）→ 删掉自建的节点（链路随节点一起从台账消失）→ 删临时台账
 	if (networkStarted)
 		await call("POST", "/api/mininet/stop").catch(() => undefined);
 	await call("DELETE", `/api/mininet/delete_node/${NODE_ID}`).catch(() => undefined);
+	await call("DELETE", `/api/mininet/delete_node/${NODE_ID_2}`).catch(() => undefined);
 	rmSync(LEDGER_FILE, { force: true });
 	const passed = results.filter(Boolean).length;
 	console.log(`\n${passed}/${results.length} 项通过（真实 Mininet + 真 bash + PTY）`);
