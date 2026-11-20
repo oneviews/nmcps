@@ -12,10 +12,12 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 ## 特权命令怎么跑（2026-11-20）
 
 - 本机 `sudo -n` **不可用**（`interactive authentication is required`），口令存在 git-ignored 的 `.clinerules/.sudo.local`，
-  一律 `sudo -S -p '' <command> < .clinerules/.sudo.local`。完整写法与禁令（不要 `echo "$PASS" | sudo`、不要以 root 跑 Playwright）见
-  `.clinerules/09-local-sudo.md`。
+  用 `SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A <command>`（助手只回显口令文件，口令不进命令行）。
+  完整写法与禁令（不要 `echo "$PASS" | sudo`）见 `.clinerules/09-local-sudo.md`。
+- 整跑 `check:lab-real` 用同一套写法，但 `sudo` 会重置环境变量，`PATH`（nvm 的 `node`）/ `CHECK_REAL_MININET` /
+  `REAL_MININET_BASE` 都要跟在 `sudo -A env …` 之后：root 下 tc 那一层不再跳过，2026-11-20 实测 18/18 全绿。
 - 主机的接口在**它自己的 netns** 里：根 netns 里 `tc qdisc show dev h1-eth0` 什么都不打印，要先 `GET /api/mininet/interfaces`
-  拿 pid，再 `sudo -S -p '' nsenter -t <pid> -n tc class show dev h1-eth0 < .clinerules/.sudo.local`。
+  拿 pid，再 `SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A nsenter -t <pid> -n tc class show dev h1-eth0`。
 - TCLink 用的是 **`htb`**（不是 `tbf`）：`bw=10` 落成 `class htb 5:1 root prio 0 rate 10Mbit ceil 10Mbit`（2026-11-20 实测），
   所以「带宽有没有生效」要看那行 `rate`，不是看 qdisc 类型名。
 
