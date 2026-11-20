@@ -19,12 +19,13 @@
 // 覆盖：有些机器 127.0.0.1:8000 被 nginx 的默认 SSL server 占着，只有走网卡地址才能拿到后端。
 // 前置：`pnpm build:server`（消费 `.output/server/index.mjs`）+ 一个**空**的真后端
 // （`GET /api/mininet/start` 为 false 且 hosts / switches / routers / nats / controllers 全空）。
+// root 整跑（tc 那一层不再跳过，共 18 项）：`sudo -A env PATH=… CHECK_REAL_MININET=1 … node <本文件>`，
+// 完整命令见 `.clinerules/09-local-sudo.md`；`sudo` 会重置环境变量，所以那几个变量得跟在 `env` 之后。
 // 结束时脚本自己收尾：停网络、删掉它建的 `h1` / `h2`（连带那条自建链路）、删临时台账；
 // 不碰别人正在跑的拓扑 —— 所以空实例守卫是硬门，别为了「跑通」把它去掉。
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import process from "node:process";
-import { chromium } from "playwright";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "../../../scripts/lib/bff-harness.mjs";
 
 /**
@@ -185,6 +186,30 @@ const bff = await startBff(port, {
 });
 const BASE = `http://${HOST}:${port}`;
 
+/*
+ * 以 root 整跑（`sudo -A … node layers/scenario/scripts/check-lab-real.mjs`）时，Playwright 会去
+ * `/root/.cache/ms-playwright` 找浏览器，而机器上的浏览器通常装在调用者（`SUDO_USER`）的缓存里 ——
+ * 这里只做回落，显式设了 `PLAYWRIGHT_BROWSERS_PATH` 就照办。Chromium 的 sandbox 不用管：
+ * Playwright 缺省就带 `--no-sandbox`（`chromiumSandbox: false`），2026-11-20 实测 root 下直接可用。
+ *
+ * ⚠ 所以 `playwright` 必须**动态** import：它的浏览器目录在模块初始化时就固定了，
+ * 静态 import 会被 hoist 到本段之前，改了环境变量也不生效（实测报错仍是 `/root/.cache/...`）。
+ */
+if (process.getuid?.() === 0 && !process.env.PLAYWRIGHT_BROWSERS_PATH) {
+	const browsers = ["/root/.cache/ms-playwright", process.env.SUDO_USER ? `/home/${process.env.SUDO_USER}/.cache/ms-playwright` : ""]
+		.filter(Boolean)
+		.find((dir) => {
+			try {
+				return existsSync(dir) && readdirSync(dir).some((entry) => entry.startsWith("chromium"));
+			} catch {
+				return false;
+			}
+		});
+	if (browsers)
+		process.env.PLAYWRIGHT_BROWSERS_PATH = browsers;
+}
+
+const { chromium } = await import("playwright");
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 960 } })).newPage();
 page.on("pageerror", (error) => console.log(`pageerror: ${error.message}`));
