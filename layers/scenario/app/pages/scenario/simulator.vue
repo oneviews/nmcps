@@ -270,36 +270,47 @@
 					拖源、提示都对，落点却不存在。现在空态改成叠在画布上的提示层
 					（`pointer-events-none`），拖放照常命中下面的 svg。
 				-->
-				<div class="relative min-h-[420px] flex-1 overflow-hidden rounded-lg border border-(--ui-border)">
-					<GraphTopologyCanvas
-						ref="canvasRef"
-						class="h-full"
-						:nodes="visibleNodes"
-						:links="visibleLinks"
-						:width="canvasWidth"
-						:height="canvasHeight"
-						:selected-id="selectedId"
-						:selected-link-key="selectedLinkKey"
-						:link-title="linkTitle"
-						:show-labels="showLabels"
-						:draggable="canOperate"
-						:drop-enabled="canCreate && dragKind !== null"
-						:drop-hint="dropHint"
-						:label="$t('pages.scenario-simulator.canvasLabel')"
-						@select="selectNode"
-						@select-link="selectLink"
-						@offset-change="onNodeMoved"
-						@canvas-drop="onCanvasDrop"
-					/>
-					<div
-						v-if="!visibleNodes.length"
-						class="pointer-events-none absolute inset-0 flex items-center justify-center"
-					>
-						<p class="text-sm text-(--ui-text-muted)">
-							{{ $t("pages.scenario-simulator.empty.topology") }}
-						</p>
+				<!--
+					右键菜单（NMCPS-ADR-0022 W12）：只有节点右键会弹两项；空白右键由画布
+					`preventDefault()`，外层 `UContextMenu` 因此不开（Reka 在 nextTick 后才看
+					`defaultPrevented`）。节点那一支不阻止，菜单才会在指针处打开。
+				-->
+				<UContextMenu :items="nodeMenuItems" :modal="false">
+					<div class="relative min-h-[420px] flex-1 overflow-hidden rounded-lg border border-(--ui-border)">
+						<GraphTopologyCanvas
+							ref="canvasRef"
+							class="h-full"
+							:nodes="visibleNodes"
+							:links="visibleLinks"
+							:width="canvasWidth"
+							:height="canvasHeight"
+							:selected-id="selectedId"
+							:selected-link-key="selectedLinkKey"
+							:link-title="linkTitle"
+							:show-labels="showLabels"
+							:draggable="canOperate"
+							:drop-enabled="canCreate && dragKind !== null"
+							:drop-hint="dropHint"
+							:context-menu="true"
+							:activate-on-double-click="true"
+							:label="$t('pages.scenario-simulator.canvasLabel')"
+							@select="selectNode"
+							@select-link="selectLink"
+							@offset-change="onNodeMoved"
+							@canvas-drop="onCanvasDrop"
+							@context-menu="onCanvasContextMenu"
+							@activate="onCanvasActivate"
+						/>
+						<div
+							v-if="!visibleNodes.length"
+							class="pointer-events-none absolute inset-0 flex items-center justify-center"
+						>
+							<p class="text-sm text-(--ui-text-muted)">
+								{{ $t("pages.scenario-simulator.empty.topology") }}
+							</p>
+						</div>
 					</div>
-				</div>
+				</UContextMenu>
 			</div>
 
 			<!--
@@ -817,6 +828,7 @@
 							-->
 							<SimulatorNetworkTools
 								v-show="isToolTab"
+								ref="networkToolsRef"
 								:tab="sideTab"
 								:panel-open="panelOpen"
 								:nodes="networkToolNodes"
@@ -901,6 +913,23 @@
 			:submitting="reconcileBusy"
 			:error="reconcileError"
 			@confirm="reconcileNetwork"
+		/>
+		<!-- 节点 / 链路详情（NMCPS-ADR-0022 W13）：双击打开，编辑要 `lab:operate` -->
+		<SimulatorNodeDetailModal
+			v-model:open="nodeDetailOpen"
+			:node="nodeDetailNode"
+			:operate="canOperate"
+			:submitting="detailSubmitting"
+			:error="detailError"
+			@submit="saveNodeDetail"
+		/>
+		<SimulatorLinkDetailModal
+			v-model:open="linkDetailOpen"
+			:link="linkDetailLink"
+			:operate="canOperate"
+			:submitting="detailSubmitting"
+			:error="detailError"
+			@submit="saveLinkDetail"
 		/>
 	</div>
 </template>
@@ -1024,6 +1053,8 @@
 	const canDelete = computed(() => capabilities.value?.delete === true);
 	/** 抓包是独立授权位：`lab:read` / `lab:operate` 都不能推导出它（NMCPS-ADR-0021 D3） */
 	const canSniff = computed(() => capabilities.value?.sniffer === true);
+	/** 终端同样独立授权位（右键菜单的「打开 Webshell」按它裁剪，W12） */
+	const canTerminal = computed(() => capabilities.value?.terminal === true);
 
 	/**
 	 * 左侧设备栏（NMCPS-ADR-0022 W10）：类型图标要 `create`，栏顶的运行按钮要 `create` /
@@ -1042,7 +1073,7 @@
 	 */
 	const sideTab = ref<LabSideTab>("network");
 	const sideTabItems = computed(() => [
-		...(capabilities.value?.terminal === true
+		...(canTerminal.value
 			? [{ label: t("pages.scenario-simulator.panel.tabs.webshell"), value: "webshell" as const }]
 			: []),
 		...(capabilities.value?.read === true
@@ -1269,6 +1300,63 @@
 		const index = graphLinks.value.findIndex((link, position) => topologyLinkKey(link, position) === selectedLinkKey.value);
 		return index >= 0 ? graphLinks.value[index] ?? null : null;
 	});
+
+	/* ── 右键菜单 + 双击详情（NMCPS-ADR-0022 W12 / W13）──────────────────────────
+	 * 菜单只对节点弹两项（打开 Webshell / 查看节点详情），空白右键由画布挡掉；
+	 * 双击交给两个详情弹窗：事实读台账，编辑按 `lab:operate` 才渲染，请求体在 `labDetails.ts`。
+	 */
+
+	/** 右键命中的节点 id（`null` = 空白 / 链路，菜单不弹） */
+	const nodeMenuId = ref<string | null>(null);
+	/** `GET /links` 的 `options`：链路详情的事实来源，`from|to` 两个方向都登记 */
+	const labLinkOptions = ref<Record<string, Record<string, unknown>>>({});
+	const networkToolsRef = ref<{ openTerminalFor?: (nodeId: string) => Promise<void> } | null>(null);
+
+	const nodeMenuItems = computed<DropdownMenuItem[][]>(() => {
+		const id = nodeMenuId.value;
+		if (!id)
+			return [];
+		const items: DropdownMenuItem[] = [];
+		if (canTerminal.value) {
+			items.push({
+				label: t("pages.scenario-simulator.contextMenu.webshell"),
+				icon: "carbon:terminal",
+				onSelect: () => openWebshellForNode(id)
+			});
+		}
+		items.push({
+			label: t("pages.scenario-simulator.contextMenu.details"),
+			icon: "carbon:data-view",
+			onSelect: () => openNodeDetail(id)
+		});
+		return [items];
+	});
+
+	const nodeDetailId = ref<string | null>(null);
+	const nodeDetailOpen = ref(false);
+	const nodeDetailNode = computed(() => {
+		const node = nodes.value.find((item) => item.positioned.id === nodeDetailId.value);
+		return node
+			? { id: node.positioned.id, kind: node.kind as string, label: node.positioned.label, raw: { ...node.raw } }
+			: null;
+	});
+
+	const linkDetailKey = ref<string | null>(null);
+	const linkDetailOpen = ref(false);
+	const linkDetailLink = computed(() => {
+		const index = graphLinks.value.findIndex((link, position) => topologyLinkKey(link, position) === linkDetailKey.value);
+		const link = index >= 0 ? graphLinks.value[index] : undefined;
+		if (!link)
+			return null;
+		return {
+			source: link.source,
+			target: link.target,
+			options: labLinkOptions.value[`${link.source}|${link.target}`] ?? {}
+		};
+	});
+
+	const detailSubmitting = ref(false);
+	const detailError = ref<string>();
 
 	/**
 	 * 流表按行渲染：上游回的是 `ovs-ofctl` 原文，页面不解析（解析归后端）。
@@ -1907,6 +1995,9 @@
 			if (!rawNodes.length && failures.length)
 				throw failures[0];
 
+			// 链路属性（W13）：链路详情的事实来源，读不到就是空表（不编默认值）
+			labLinkOptions.value = linkOutcome.status === "fulfilled" ? linkOptionsOf(linkOutcome.value) : {};
+
 			buildGraph(
 				rawNodes,
 				linkOutcome.status === "fulfilled" ? rawLinksOf(linkOutcome.value) : []
@@ -1936,6 +2027,104 @@
 		selectedId.value = null;
 		linkTarget.value = undefined;
 		clearFlows();
+	}
+
+	/* ── 右键菜单与双击详情（NMCPS-ADR-0022 W12 / W13）──────────────────────── */
+
+	/** 画布上报的右键命中：节点 id 或 `null`（空白 / 链路） */
+	function onCanvasContextMenu(target: { id: string | null }): void {
+		nodeMenuId.value = target.id;
+	}
+
+	/** 双击节点 / 链路：直接开详情，连右栏的选中态一起切过去 */
+	function onCanvasActivate(target: { kind: "node", id: string } | { kind: "link", key: string }): void {
+		if (target.kind === "node") {
+			openNodeDetail(target.id);
+			return;
+		}
+		openLinkDetail(target.key);
+	}
+
+	function openNodeDetail(id: string): void {
+		selectNode(id);
+		detailError.value = undefined;
+		nodeDetailId.value = id;
+		nodeDetailOpen.value = true;
+	}
+
+	function openLinkDetail(key: string): void {
+		selectLink(key);
+		detailError.value = undefined;
+		linkDetailKey.value = key;
+		linkDetailOpen.value = true;
+	}
+
+	/**
+	 * 右键「打开 Webshell」：切到右栏的 Webshell 标签，再让观测组件开一条会话。
+	 * 不在这里直接建 socket —— 终端只有一份实现（`useLabTerminalSessions()`）。
+	 */
+	function openWebshellForNode(id: string): void {
+		if (!canTerminal.value)
+			return;
+		panelOpen.value = true;
+		sideTab.value = "webshell";
+		void nextTick(() => networkToolsRef.value?.openTerminalFor?.(id));
+	}
+
+	/** 主机 / 路由器保存：成功后关弹窗并重读台账（不本地改一份「应该长什么样」） */
+	async function saveNodeDetail(kind: "host" | "router", payload: Record<string, unknown>): Promise<void> {
+		const id = nodeDetailId.value;
+		if (!id || !canOperate.value)
+			return;
+		detailSubmitting.value = true;
+		detailError.value = undefined;
+		try {
+			const collection = kind === "host" ? "hosts" : "routers";
+			await api.patch<unknown>(`/api/lab/${collection}/${encodeURIComponent(id)}`, payload);
+			nodeDetailOpen.value = false;
+			toast.add({ title: t("pages.scenario-simulator.nodeDetail.saved"), color: "success" });
+			await load();
+		} catch (caught) {
+			detailError.value = messageOf(caught);
+		} finally {
+			detailSubmitting.value = false;
+		}
+	}
+
+	/** 链路保存：`PUT /links` 只带填过的属性（全空时组件根本不发） */
+	async function saveLinkDetail(payload: { src: string, dst: string, options: Record<string, unknown> }): Promise<void> {
+		if (!canOperate.value)
+			return;
+		detailSubmitting.value = true;
+		detailError.value = undefined;
+		try {
+			await api.put<unknown>("/api/lab/links", payload);
+			linkDetailOpen.value = false;
+			toast.add({ title: t("pages.scenario-simulator.linkDetail.saved"), color: "success" });
+			await load();
+		} catch (caught) {
+			detailError.value = messageOf(caught);
+		} finally {
+			detailSubmitting.value = false;
+		}
+	}
+
+	/** `GET /links` 的 `options` 收成 `from|to` 索引（两个方向都登记，链路方向由台账决定） */
+	function linkOptionsOf(payload: unknown): Record<string, Record<string, unknown>> {
+		const map: Record<string, Record<string, unknown>> = {};
+		if (!Array.isArray(payload))
+			return map;
+		for (const item of payload) {
+			const record = asRecord(item);
+			const from = typeof record?.from === "string" ? record.from : undefined;
+			const to = typeof record?.to === "string" ? record.to : undefined;
+			if (!from || !to)
+				continue;
+			const options = asRecord(record?.options) ?? {};
+			map[`${from}|${to}`] = options;
+			map[`${to}|${from}`] ??= options;
+		}
+		return map;
 	}
 
 	function linkTitle(link: TopologyGraphLink): string {

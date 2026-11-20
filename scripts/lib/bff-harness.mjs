@@ -576,6 +576,14 @@ export async function startUpstream(port) {
 	};
 
 	/**
+	 * 链路属性（ADR-0022 W13）：`PUT /links` 的落表，`from|to` 两个方向都登记
+	 * （上游 `app.link_attrs` 按 `frozenset` 存，方向无关；这里两个方向同值即可）。
+	 * 故意**不放进 `mininetState.links`**：那条数组的形状是 `{ from, to }`，
+	 * 详情弹窗读的是 `GET /links` 的 `options`，两处混在一起会污染「链路清单」断言。
+	 */
+	const mininetLinkAttrs = {};
+
+	/**
 	 * 账号口令是**可变**的：改密真的落库、重登真的校验（默认口令 `p@ssw0rd`）。
 	 *
 	 * 新代没有 `mfaRequired` / `mustResetPassword`（NMCPS-ADR-0018 缺口 G2/G8），
@@ -2220,6 +2228,8 @@ export async function startUpstream(port) {
 					mininetState.links = [];
 					mininetRun.started = false;
 					mininetSniffer.active = false;
+					for (const key of Object.keys(mininetLinkAttrs))
+						delete mininetLinkAttrs[key];
 					return send(200, { status: "ok" });
 				}
 
@@ -2309,7 +2319,49 @@ export async function startUpstream(port) {
 						!((link.from === segments[1] && link.to === segments[2]) || (link.from === segments[2] && link.to === segments[1])));
 					if (mininetState.links.length === before)
 						return send(404, { detail: "Node not found" });
+					delete mininetLinkAttrs[`${segments[1]}|${segments[2]}`];
+					delete mininetLinkAttrs[`${segments[2]}|${segments[1]}`];
 					return send(200, { message: "deleted successfully" });
+				}
+
+				// 详情弹窗的写（ADR-0022 W13）：PATCH 主机 / 路由器、PUT 链路属性
+				if (req.method === "PATCH" && collection === "hosts" && segments.length === 2) {
+					const node = mininetState.hosts[segments[1]];
+					if (!node)
+						return send(404, { detail: `Node ${segments[1]} not found` });
+					if (typeof body?.ip === "string" && body.ip.trim())
+						node.ip = body.ip.trim();
+					return send(200, { status: "ok", host: node });
+				}
+
+				if (req.method === "PATCH" && collection === "routers" && segments.length === 2) {
+					const node = mininetState.routers[segments[1]];
+					if (!node)
+						return send(404, { detail: `Router ${segments[1]} not found` });
+					if (typeof body?.ip === "string" && body.ip.trim())
+						node.ip = body.ip.trim();
+					if (Array.isArray(body?.routes))
+						node.routes = [...body.routes];
+					if (body?.interface_ips && typeof body.interface_ips === "object")
+						node.interface_ips = { ...body.interface_ips };
+					if (typeof body?.proxy_arp === "boolean")
+						node.proxy_arp = body.proxy_arp;
+					if (typeof body?.ip_forward === "boolean")
+						node.ip_forward = body.ip_forward;
+					return send(200, { router: node });
+				}
+
+				if (req.method === "PUT" && collection === "links") {
+					const source = body?.src;
+					const target = body?.dst;
+					if (!source || !target)
+						return send(422, { detail: "src and dst are required" });
+					const exists = mininetState.links.some((link) =>
+						(link.from === source && link.to === target) || (link.from === target && link.to === source));
+					if (!exists)
+						return send(404, { detail: "link not found" });
+					mininetLinkAttrs[`${source}|${target}`] = { ...(body.options ?? {}) };
+					return send(200, { from: source, to: target, options: mininetLinkAttrs[`${source}|${target}`] });
 				}
 
 				return send(200, { status: "ok" });
@@ -2348,6 +2400,50 @@ export async function startUpstream(port) {
 						rows.push({ id, type, intfs: [`${id}-eth0`], pid: 1000 + rows.length });
 				}
 				return send(200, { nodes: rows });
+			}
+			// 节点详情（ADR-0022 W13）：与上游同形状 —— 台账字段 + 主机 / 路由器的运行态读数。
+			// 交换机那一支真实上游要 `dpctl`，这里不伪造：页面只把 `stats` 当可选读数。
+			if (segments[0] === "stats" && segments.length === 2) {
+				const id = segments[1];
+				const bucket = mininetBucketOf(id);
+				if (!bucket)
+					return send(404, { detail: `Node ${id} not found` });
+				const typeOfBucket = { hosts: "host", switches: "sw", routers: "router", nats: "nat", controllers: "controller" };
+				const payload = { ...mininetState[bucket][id], type: typeOfBucket[bucket] };
+				if (bucket === "hosts" || bucket === "routers") {
+					payload.default_route = `default via 10.0.0.254 dev ${id}-eth0`;
+					payload.interfaces = [`${id}-eth0`];
+					payload.arp_table = [{ ip: "10.0.0.254", mac: "00:00:00:00:00:fe", interface: `${id}-eth0` }];
+				}
+				return send(200, payload);
+			}
+
+			// 链路读数（ADR-0022 W13）：`intfs[].tx_bytes / rx_bytes` + 已落表的 `options`
+			if (segments[0] === "links" && segments[1] === "stats" && segments.length === 4) {
+				const [, , src, dst] = segments;
+				const exists = mininetState.links.some((link) =>
+					(link.from === src && link.to === dst) || (link.from === dst && link.to === src));
+				if (!exists)
+					return send(404, { detail: "link not found" });
+				return send(200, {
+					from: src,
+					to: dst,
+					intfs: [
+						{ name: `${src}-eth0`, tx_bytes: 1024, rx_bytes: 2048 },
+						{ name: `${dst}-eth0`, tx_bytes: 2048, rx_bytes: 1024 }
+					],
+					options: mininetLinkAttrs[`${src}|${dst}`] ?? mininetLinkAttrs[`${dst}|${src}`] ?? {},
+					timestamp: "2026-11-19T00:00:00Z"
+				});
+			}
+
+			// 链路清单带上 `options`：详情弹窗在「没改过」时也读得到台账里的属性
+			if (segments.length === 1 && segments[0] === "links") {
+				return send(200, mininetState.links.map((link) => ({
+					...link,
+					options: mininetLinkAttrs[`${link.from}|${link.to}`] ?? mininetLinkAttrs[`${link.to}|${link.from}`] ?? {},
+					intfs: { from: `${link.from}-eth0`, to: `${link.to}-eth0` }
+				})));
 			}
 			if (segments.length === 1 && Object.hasOwn(mininetState, segments[0])) {
 				const value = mininetState[segments[0]];

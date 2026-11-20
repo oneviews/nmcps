@@ -349,6 +349,19 @@
 		closeTerminalSession(target);
 	}
 
+	/**
+	 * 右键菜单「打开 Webshell」（`NMCPS-ADR-0022` W12）：页面切到标签后调它。
+	 * 已开的会话只切过去（`openTerminalSession()` 幂等），没有才建一条。
+	 */
+	async function openTerminalFor(nodeId: string): Promise<void> {
+		terminalNode.value = nodeId;
+		await openTerminalSession(nodeId);
+		await nextTick();
+		focusTerminalKeys();
+	}
+
+	defineExpose({ openTerminalFor });
+
 	/** 点终端 = 聚焦键盘载体：终端里没有「输入框」，按键直接进 PTY */
 	function focusTerminalKeys(): void {
 		terminalKeys.value?.focus();

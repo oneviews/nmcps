@@ -22,6 +22,7 @@
 			@pointerleave="onPointerUp"
 			@dragover="onCanvasDragOver"
 			@drop="onCanvasDrop"
+			@contextmenu="onCanvasContextMenu"
 		>
 			<g :transform="transform">
 				<!-- 链路先画：节点永远盖在线上，避免端点被截断 -->
@@ -97,6 +98,7 @@
 						@keydown.space.prevent="emit('selectLink', topologyLinkKey(link, index))"
 						@pointerdown.stop
 						@click.stop="emit('selectLink', topologyLinkKey(link, index))"
+						@dblclick.stop="onLinkDoubleClick(topologyLinkKey(link, index))"
 					/>
 				</g>
 
@@ -112,7 +114,8 @@
 					tabindex="0"
 					:aria-label="nodeAriaLabel(item)"
 					@click.stop="emit('select', item.id)"
-					@dblclick.stop="toggleCollapseOf(item.id)"
+					@dblclick.stop="onNodeDoubleClick(item.id)"
+					@contextmenu="onNodeContextMenu($event, item.id)"
 					@keydown.enter.prevent="emit('select', item.id)"
 					@keydown.space.prevent="emit('select', item.id)"
 					@pointerdown.stop="onNodePointerDown($event, item.id)"
@@ -382,6 +385,18 @@
 		dropEnabled?: boolean
 		/** 拖拽进行中的提示句（页面给；画布只显示，不拼文案） */
 		dropHint?: string
+		/**
+		 * 是否接管右键（缺省 `false`）：为真时节点右键 emit `contextMenu`、空白右键
+		 * `preventDefault` 并 emit `{ id: null }`（NMCPS-ADR-0022 W12）。
+		 *
+		 * 缺省关闭不是保守：生产拓扑页要保留浏览器原生菜单，一个 prop 决定谁说话。
+		 */
+		contextMenu?: boolean
+		/**
+		 * 双击语义（缺省 `false` = 收起 / 展开下级）：为真时节点与链路双击 emit `activate`，
+		 * 交给页面打开详情（NMCPS-ADR-0022 W13）。
+		 */
+		activateOnDoubleClick?: boolean
 
 		/** 无障碍名称（`<svg>` 的 `aria-label`）：屏幕阅读器念的就是这一句 */
 		label: string
@@ -411,6 +426,13 @@
 		 * 已反解 `viewBox` 映射与 `<g>` 的 `translate + scale`），页面据此换算上游 `x` / `y`。
 		 */
 		canvasDrop: [point: Point2D]
+		/**
+		 * 右键命中（`contextMenu` 为真时才发）：`id` 是节点 id，空白处 / 链路上是 `null`。
+		 * 节点那一支**不** `preventDefault` —— 外层 `UContextMenu` 看到事件未被阻止才会在指针处打开。
+		 */
+		contextMenu: [target: { id: string | null }]
+		/** 双击节点 / 链路（`activateOnDoubleClick` 为真时才发）：页面据此打开详情弹窗 */
+		activate: [target: { kind: "node", id: string } | { kind: "link", key: string }]
 	}>();
 
 	const {
@@ -710,6 +732,46 @@
 		if (childCountOf(id) === 0)
 			return;
 		emit("toggleCollapse", id);
+	}
+
+	/**
+	 * 双击节点（`NMCPS-ADR-0022` W13）：`activateOnDoubleClick` 为真时交给页面开详情，
+	 * 否则维持生产拓扑页的「收起 / 展开下级」。
+	 */
+	function onNodeDoubleClick(id: string): void {
+		if (props.activateOnDoubleClick) {
+			emit("activate", { kind: "node", id });
+			return;
+		}
+		toggleCollapseOf(id);
+	}
+
+	/** 双击链路：只有打开详情的页面才需要（生产拓扑页的双击没有语义） */
+	function onLinkDoubleClick(key: string): void {
+		if (props.activateOnDoubleClick)
+			emit("activate", { kind: "link", key });
+	}
+
+	/**
+	 * 节点右键（W12）：**不** `preventDefault`、也不 `stopPropagation` ——
+	 * 外层 `UContextMenu` 的触发器是画布容器的祖先，事件必须继续冒泡到它，
+	 * 而它要看到「未被阻止」才会在指针处打开（`await nextTick()` 之后才检查）。
+	 */
+	function onNodeContextMenu(event: MouseEvent, id: string): void {
+		if (!props.contextMenu)
+			return;
+		emit("contextMenu", { id });
+	}
+
+	/** 空白 / 链路右键（W12）：挡掉浏览器菜单，也挡掉外层菜单；页面据此关掉上一份上下文 */
+	function onCanvasContextMenu(event: MouseEvent): void {
+		if (!props.contextMenu)
+			return;
+		// 节点那一支已经上报过：这里再挡掉就等于把菜单本身也禁了（`closest` 看的是事件源）
+		if ((event.target as Element | null)?.closest?.("[data-node-id]"))
+			return;
+		event.preventDefault();
+		emit("contextMenu", { id: null });
 	}
 
 	/** 角标的无障碍名称：说清「按下去会发生什么」与「会消失几台」 */

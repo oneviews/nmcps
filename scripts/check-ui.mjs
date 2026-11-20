@@ -6578,7 +6578,136 @@ if (upstreamPort) {
 			`上游=${monitorUpstream?.path}?${monitorParams.toString()}`
 		);
 
-		// ── 能力位裁剪（NMCPS-ADR-0022 D6）：标签页按能力位出现，不由 `lab:read` 推导写入口 ──
+		// ── 右键菜单与双击详情（NMCPS-ADR-0022 W12 / W13）──
+		// 先铺一台主机和一条链路：前面几组用例（删节点 / 重置 / 生成）会改变共享状态，这里自己
+		// 建一份，不依赖「上一组留下谁」。**必须走 `/api/lab/**` 写路径** —— 页面读的是台账（出口
+		// 只放行登记过的资源），直接往假上游的 `mininetState` 里塞，画布根本看不见它。
+		// 写请求由**页面自己**发（同源 fetch，带上会话 cookie）：`page.request` 走的是另一套
+		// 请求上下文，实测拿到 503 `bff_auth_not_configured`，铺不成路。
+		const detailSwitch = upstreamServer.mininetState.switches.sw1 ? "sw1" : Object.keys(upstreamServer.mininetState.switches)[0];
+		const seedThroughPage = async (path, payload) => labPage.evaluate(async ({ path, payload }) => {
+			const response = await fetch(path, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(payload)
+			});
+			return { status: response.status, text: await response.text() };
+		}, { path, payload });
+		const detailHostSeed = await seedThroughPage("/api/lab/hosts", {
+			id: "h_detail",
+			type: "host",
+			name: "h_detail",
+			label: "h_detail",
+			ip: "10.0.0.254/8",
+			mac: "00:00:00:00:00:09",
+			x: 420,
+			y: 260
+		});
+		const detailLinkSeed = await seedThroughPage("/api/lab/links", { src: "h_detail", dst: detailSwitch });
+		const detailSeedOk = detailHostSeed.status === 200 && detailLinkSeed.status === 200;
+		await labPage.reload({ waitUntil: "networkidle" });
+		await labPage.waitForSelector("[data-testid='topology-node'][data-node-id='h_detail']", { timeout: 20000 }).catch(() => {});
+		await labPage.waitForTimeout(400);
+
+		// 11.11 节点右键：两项（打开 Webshell / 查看节点详情）；空白右键不弹菜单也不弹浏览器菜单。
+		const detailNode = labPage.locator("[data-testid='topology-node'][data-node-id='h_detail']");
+		const canvasNodeIds = await labPage.evaluate(() => [...document.querySelectorAll("[data-testid='topology-node']")]
+			.map((node) => node.getAttribute("data-node-id")));
+		const detailNodeSeen = await detailNode.count() > 0;
+		if (detailNodeSeen)
+			await detailNode.first().click({ button: "right" }).catch(() => {});
+		await labPage.waitForTimeout(400);
+		const contextItems = await labPage.evaluate(() => [...document.querySelectorAll("[role='menu'] [role='menuitem']")]
+			.map((node) => (node.textContent ?? "").replace(/\s+/g, " ").trim()));
+		await labPage.keyboard.press("Escape");
+		await labPage.waitForTimeout(200);
+		const canvasBox = await labPage.locator("[data-testid='topology-canvas']").boundingBox();
+		if (canvasBox)
+			await labPage.mouse.click(canvasBox.x + 24, canvasBox.y + 24, { button: "right" });
+		await labPage.waitForTimeout(300);
+		const blankMenuCount = await labPage.locator("[role='menu']").count();
+		const detailHostSeedText = detailHostSeed.text.replace(/\s+/g, " ").trim();
+		log(
+			"11.11 节点右键弹出「打开 Webshell / 查看节点详情」两项，空白右键不弹菜单",
+			detailSeedOk && detailNodeSeen
+			&& contextItems.some((item) => item.includes("打开 Webshell"))
+			&& contextItems.some((item) => item.includes("查看节点详情"))
+			&& blankMenuCount === 0,
+			`铺路=${detailHostSeed.status}/${detailLinkSeed.status} 上游=${detailHostSeedText.slice(0, 80)}`
+			+ ` 画布节点=${JSON.stringify(canvasNodeIds)} 菜单=${JSON.stringify(contextItems)} 空白菜单数=${blankMenuCount}`
+		);
+
+		// 11.12 双击主机 → 详情弹窗（台账事实 + 运行态读数），改 IP 走 PATCH /hosts/{id}。
+		await detailNode.first().dblclick({ timeout: 5000 }).catch(() => {});
+		await labPage.waitForSelector("[data-testid='lab-node-detail-ip']", { timeout: 10000 }).catch(() => {});
+		await labPage.waitForTimeout(600);
+		const nodeDetailProbe = await labPage.evaluate(() => ({
+			open: Boolean(document.querySelector("[data-testid='lab-node-detail-ip']")),
+			live: Boolean(document.querySelector("[data-testid='lab-node-detail-live']")),
+			arp: Boolean(document.querySelector("[data-testid='lab-node-detail-arp']")),
+			text: (document.querySelector("[data-testid='lab-node-detail-body']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+		}));
+		await labPage.locator("[data-testid='lab-node-detail-ip']").fill("10.0.0.77/8", { timeout: 5000 }).catch(() => {});
+		await labPage.locator("[data-testid='lab-node-detail-submit']").click({ timeout: 5000 }).catch(() => {});
+		await labPage.waitForTimeout(1200);
+		const hostWrite = upstreamServer.mininetLog.filter((entry) => entry.method === "PATCH" && entry.path === "/api/mininet/hosts/h_detail").at(-1);
+		const nodeDetailClosed = await labPage.locator("[data-testid='lab-node-detail-ip']").count();
+		log(
+			"11.12 双击主机打开详情（台账事实 + 运行态读数），改 IP 走 PATCH /hosts/{id} 并重读台账",
+			nodeDetailProbe.open && nodeDetailProbe.live && nodeDetailProbe.arp
+			&& nodeDetailProbe.text.includes("h_detail") && nodeDetailProbe.text.includes("10.0.0.254")
+			&& hostWrite?.body?.ip === "10.0.0.77/8"
+			&& upstreamServer.mininetState.hosts.h_detail?.ip === "10.0.0.77/8"
+			&& nodeDetailClosed === 0,
+			`弹窗=${nodeDetailProbe.open} 运行态=${nodeDetailProbe.live} 请求=${hostWrite ? JSON.stringify(hostWrite.body) : "无"} 台账IP=${upstreamServer.mininetState.hosts.h_detail?.ip}`
+		);
+
+		// 11.13 双击链路 → 详情弹窗（tx/rx 读数），改带宽走 PUT /links（只带填过的属性）。
+		// 画布上链路很多，按 aria-label 定位到刚铺的那条（`<source> ↔ <target>`），不赌顺序。
+		await labPage.locator("[data-testid='topology-link-hit'][aria-label*='h_detail']").first().dblclick({ force: true, timeout: 5000 }).catch(() => {});
+		await labPage.waitForSelector("[data-testid='lab-link-detail-bw']", { timeout: 10000 }).catch(() => {});
+		await labPage.waitForTimeout(600);
+		const linkDetailText = await labPage.evaluate(() => (document.querySelector("[data-testid='lab-link-detail-body']")?.textContent ?? "").replace(/\s+/g, " ").trim());
+		await labPage.locator("[data-testid='lab-link-detail-bw']").fill("100", { timeout: 5000 }).catch(() => {});
+		await labPage.locator("[data-testid='lab-link-detail-submit']").click({ timeout: 5000 }).catch(() => {});
+		await labPage.waitForTimeout(1200);
+		const linkWrite = upstreamServer.mininetLog.filter((entry) => entry.method === "PUT" && entry.path === "/api/mininet/links").at(-1);
+		const linkDetailClosed = await labPage.locator("[data-testid='lab-link-detail-bw']").count();
+		log(
+			"11.13 双击链路打开详情（tx/rx 读数），改带宽走 PUT /links 且请求体只带填过的属性",
+			linkDetailText.includes("h_detail") && linkDetailText.includes("1024")
+			&& linkWrite?.body?.src !== undefined && linkWrite?.body?.dst !== undefined
+			&& linkWrite?.body?.options?.bw === 100 && Object.keys(linkWrite.body.options).length === 1
+			&& linkDetailClosed === 0,
+			`弹窗文本=${linkDetailText.slice(0, 60)} 请求=${linkWrite ? JSON.stringify(linkWrite.body) : "无"}`
+		);
+
+		// 11.14 只读原因是可见事实（NMCPS-ADR-0022 W13 收尾）：控制器没有保存按钮，
+		// 但弹窗要说清「为什么」—— 上游改控制器只改台账、不重启，给按钮等于承诺不发生的生效。
+		const controllerNode = labPage.locator("[data-testid='topology-node'][data-node-id='c0']");
+		const controllerSeen = await controllerNode.count() > 0;
+		// 上一条若没关成功（它自己失败时），先收掉残留弹窗，免得读到另一份详情
+		await labPage.keyboard.press("Escape");
+		await labPage.waitForTimeout(200);
+		if (controllerSeen)
+			await controllerNode.first().dblclick({ force: true, timeout: 5000 }).catch(() => {});
+		await labPage.waitForSelector("[data-testid='lab-node-detail-body']", { timeout: 10000 }).catch(() => {});
+		await labPage.waitForTimeout(400);
+		const nodeReadOnlyProbe = await labPage.evaluate(() => ({
+			note: (document.querySelector("[data-testid='lab-node-detail-readonly']")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+			submit: document.querySelectorAll("[data-testid='lab-node-detail-submit']").length
+		}));
+		await labPage.keyboard.press("Escape");
+		await labPage.waitForTimeout(300);
+		log(
+			"11.14 控制器详情只读：没有保存按钮，且弹窗写明「只改台账、不重启控制器」",
+			controllerSeen
+			&& nodeReadOnlyProbe.submit === 0
+			&& nodeReadOnlyProbe.note.includes("只读")
+			&& nodeReadOnlyProbe.note.includes("台账") && nodeReadOnlyProbe.note.includes("不重启"),
+			`只读说明=${nodeReadOnlyProbe.note.slice(0, 48) || "无"} 保存按钮=${nodeReadOnlyProbe.submit}`
+		);
+
 		// 两种形态各一条：只读会话（实验台操作员）与只有 `lab:operate` 的会话（租户管理员）。
 		// 两者都不含 `lab:terminal`，所以 Webshell 一律不出现 —— 这是「终端不由 operate 推导」的
 		// 可见证据；只读会话连「连通」也不出现，因为探测 / 测速 / 抓包读数都要写位。
