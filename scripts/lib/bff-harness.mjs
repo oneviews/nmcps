@@ -2390,6 +2390,31 @@ export async function startUpstream(port) {
 				});
 				return res.end(mininetSniffer.pcap);
 			}
+			// 地址规划（ADR-0022 W9）：真实上游在**未启动**时回 400（`network must be started`），
+			// 正文是 `{ generated_at, nodes: [{ id, type, intfs: [{ name, mac, ipv4, ipv6 }] }] }`。
+			// 形状照抄上游：页面把它原样落成 JSON 下载，这里少一个字段，「正文即上游原文」
+			// 就成了一句空话。
+			if (segments.length === 1 && segments[0] === "addressing_plan") {
+				if (!mininetRun.started)
+					return send(400, { detail: "network must be started" });
+				const planNodes = [];
+				const planBuckets = [["hosts", "host"], ["switches", "switch"], ["routers", "router"], ["nats", "nat"], ["controllers", "controller"]];
+				for (const [bucket, type] of planBuckets) {
+					for (const id of Object.keys(mininetState[bucket])) {
+						planNodes.push({
+							id,
+							type,
+							intfs: [{
+								name: `${id}-eth0`,
+								mac: "00:00:00:00:00:0a",
+								ipv4: [`10.0.0.${planNodes.length + 1}/8`],
+								ipv6: []
+							}]
+						});
+					}
+				}
+				return send(200, { generated_at: "2026-11-20T00:00:00Z", nodes: planNodes });
+			}
 			// 接口清单（ADR-0022 D6 监控通道）：与上游同形状 `{ nodes: [{ id, type, intfs, pid }] }`，
 			// 从当前台账派生 —— `full_reset` 之后这里必须也空掉，页面才不会有可点的旧接口。
 			if (segments.length === 1 && segments[0] === "interfaces") {

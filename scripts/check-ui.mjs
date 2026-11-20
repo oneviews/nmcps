@@ -5956,6 +5956,105 @@ if (upstreamPort) {
 			`文件=${exportedScript.name} 头部=${exportedScript.text.split("\n")[0]}`
 		);
 
+		// 二进制下载要用字节比对：`readFileSync(path, "utf8")` 会把 PNG / pcap 解成 U+FFFD，
+		// 魔数永远对不上 —— 这条与 11.6 的 pcap 用例同一口径。
+		const exportBytesOnce = async (name) => {
+			const [download] = await Promise.all([
+				labPage.waitForEvent("download", { timeout: 15000 }),
+				(async () => {
+					const picked = await pickFileItem(name);
+					if (!picked)
+						throw new Error(`没能点中「${name}」`);
+				})()
+			]);
+			const filePath = await download.path();
+			return { name: download.suggestedFilename(), bytes: filePath ? readFileSync(filePath) : Buffer.alloc(0) };
+		};
+
+		/*
+		 * 11.5b 导出拓扑 PNG（NMCPS-ADR-0022 W9 第 1 项）：**纯前端**，画布 SVG 序列化 →
+		 * 内联计算样式 → `<img>` → `<canvas>` → Blob，不经过 BFF 的导出通道，也不读上游。
+		 * 断言两件事：另存下来的是**真 PNG**（魔数 + 非空字节），且这次点击零上游写 ——
+		 * 把「浏览器生成」混进 JSON / 文本导出的断言里，就看不出它到底走没走网络。
+		 */
+		const pngWriteBaseline = upstreamServer.mininetLog.length;
+		const exportedPng = await exportBytesOnce("导出拓扑 PNG");
+		const exportedPngWrites = upstreamServer.mininetLog.length - pngWriteBaseline;
+		log(
+			"11.5b 导出拓扑 PNG：浏览器直接生成真 PNG（魔数 89504e47），全程零上游写",
+			/^lab-topology-\d{8}T\d{6}Z\.png$/.test(exportedPng.name)
+			&& exportedPng.bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47]))
+			&& exportedPng.bytes.length > 1000
+			&& exportedPngWrites === 0,
+			`文件=${exportedPng.name} 大小=${exportedPng.bytes.length}B 魔数=${exportedPng.bytes.subarray(0, 4).toString("hex")} 上游写=${exportedPngWrites}`
+		);
+
+		/*
+		 * 11.5c 导出地址规划（W9 第 2 项）：走 `GET /api/lab/addressing_plan`（`lab:read`），
+		 * 正文是上游原文 `{ generated_at, nodes: [...] }`，由页面落成 JSON 下载 ——
+		 * 不是 BFF 的导出通道（没有 `content-disposition`），所以文件名由页面给。
+		 * 假上游在未启动时按真实上游回 400：这条用例能过，就等于证明「读的是正在跑的网络」。
+		 */
+		const planReadBaseline = upstreamServer.mininetReadLog.length;
+		const exportedPlan = await exportOnce("导出地址规划（JSON）");
+		const planReads = upstreamServer.mininetReadLog
+			.slice(planReadBaseline)
+			.filter((entry) => entry.path === "/api/mininet/addressing_plan");
+		const planBody = (() => {
+			try {
+				return JSON.parse(exportedPlan.text);
+			} catch {
+				return undefined;
+			}
+		})();
+		log(
+			"11.5c 导出地址规划：读 GET /api/lab/addressing_plan，正文是上游原文（不套信封）",
+			/^lab-addressing-\d{8}T\d{6}Z\.json$/.test(exportedPlan.name)
+			&& planReads.length === 1
+			&& Array.isArray(planBody?.nodes) && planBody.nodes.length > 0
+			&& Array.isArray(planBody.nodes[0]?.intfs)
+			&& typeof planBody?.generated_at === "string"
+			&& !exportedPlan.text.includes("\"code\": 0"),
+			`文件=${exportedPlan.name} 上游读=${planReads.length} 节点=${planBody?.nodes?.length ?? "无"} 头部=${exportedPlan.text.slice(0, 24).replace(/\s+/g, " ")}`
+		);
+
+		/*
+		 * 11.5d 生成拓扑（W9 第 3 项）：表单只收参数，页面按 `labGeneratePlan()` 的计划
+		 * **串行**写（D5：单网络只允许一个在途写，并发必 409）。断言比对的是上游写日志的
+		 * **顺序**，不是总数：先交换机、再主机、链路最后 —— 顺序反了链路两端还不存在。
+		 * Linear + 2 交换机 + 每台 1 主机 = 4 节点、3 条链路（1 条级联 + 2 条主机）。
+		 */
+		const generateBefore = await canvasProbe();
+		const generateLogBaseline = upstreamServer.mininetLog.length;
+		await clickIfPresent("[data-testid='mininet-generate-topology']");
+		await labPage.waitForSelector("[data-testid='lab-generate-shape']", { timeout: 10000 }).catch(() => {});
+		await labPage.waitForTimeout(300);
+		await clickIfPresent("[data-testid='lab-generate-shape']");
+		await labPage.waitForTimeout(250);
+		const generateShapePicked = await clickIfPresent(labPage.getByRole("option", { name: /Linear/ }));
+		await labPage.waitForTimeout(250);
+		await labPage.locator("[data-testid='lab-generate-switches']").fill("2", { timeout: 5000 }).catch(() => {});
+		await labPage.locator("[data-testid='lab-generate-hosts-per-switch']").fill("1", { timeout: 5000 }).catch(() => {});
+		await labPage.waitForTimeout(250);
+		const generateSummary = await labPage.evaluate(() =>
+			(document.querySelector("[data-testid='lab-generate-summary']")?.textContent ?? "").replace(/\s+/g, " ").trim());
+		const generateSubmitted = await clickIfPresent("[data-testid='lab-generate-submit']");
+		await labPage.waitForTimeout(3000);
+		const generateWrites = upstreamServer.mininetLog.slice(generateLogBaseline)
+			.filter((entry) => entry.method === "POST")
+			.map((entry) => entry.path.replace("/api/mininet/", ""));
+		const generateAfter = await canvasProbe();
+		const generateModalClosed = await labPage.locator("[data-testid='lab-generate-shape']").count() === 0;
+		log(
+			"11.5d 生成拓扑：按「交换机 → 主机 → 链路」串行写 4 节点 3 链路，画布重读台账",
+			generateShapePicked && generateSubmitted
+			&& generateSummary.includes("4")
+			&& JSON.stringify(generateWrites) === JSON.stringify(["switches", "switches", "hosts", "hosts", "links", "links", "links"])
+			&& generateAfter.nodes === generateBefore.nodes + 4
+			&& generateModalClosed,
+			`摘要=${generateSummary || "无"} 写入=${JSON.stringify(generateWrites)} nodes ${generateBefore.nodes}→${generateAfter.nodes}`
+		);
+
 		// ── 11.6 「工具」菜单（NMCPS-ADR-0022 W5：抓包启停 + pcap 下载）与破坏性重建 ──
 		// 抓包是**独立授权位**：`lab:sniffer` 不在租户管理员的默认权限里，BFF 的导出通道也
 		// 按种类判权限（pcap 要 sniffer，json / script 只要 read）。自检账号另挂一条
