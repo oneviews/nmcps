@@ -38,7 +38,7 @@
 1. 以 root 起真后端：`pnpm dev:lab-api`（`127.0.0.1:8000`），确认 `curl http://127.0.0.1:8000/api/health` 通；Mininet 需要 root，普通用户跑不了。
 2. 真后端必须是**空实例**（`GET /api/mininet/start` 为 `false`，hosts / switches / routers / nats / controllers 全空）。不是就先 `POST /api/mininet/full_reset` —— 脚本会自己建 `h1`、起停网络，拿正在用的拓扑跑会把别人的实验停掉，所以这道空实例守卫是硬门。
 3. `pnpm build:server`（脚本消费 `.output/server/index.mjs`，不自行构建）。
-4. `CHECK_REAL_MININET=1 pnpm check:lab-real`：脚本用假 IAM + 真 BFF（`NUXT_MININET_INSTANCES` 指向真后端）+ Playwright，断言演示开关预填 `alice`、运行态读真后端、五标签切换、真提示符、算术执行、方向键行内编辑、`Ctrl-L` 后仍可执行、粘贴整段执行、`Ctrl+V` 不留 `v`、切标签不拆 socket、收起右栏全断。
+4. `CHECK_REAL_MININET=1 pnpm check:lab-real`：脚本用假 IAM + 真 BFF（`NUXT_MININET_INSTANCES` 指向真后端）+ Playwright，断言演示开关预填 `alice`、运行态读真后端、五标签切换、真提示符、算术执行、方向键行内编辑、`Ctrl-L` 后仍可执行、粘贴整段执行、`Ctrl+V` 不留 `v`、切标签不拆 socket、收起右栏全断；W13 起还覆盖双击链路改带宽。要连 `tc` 那一层一起断言（非 root 只会打 `⏭`）就用 `pnpm check:lab-real:root`，它自己把 `PATH` / `CHECK_REAL_MININET` / `REAL_MININET_BASE` 送进 `sudo -A env`。
 5. 收尾由脚本自己做（停网络、删掉它建的 `h1`、删临时台账）；跑完再确认 `GET /api/mininet/start` 回到 `false`、`GET /api/mininet/hosts` 回到 `{}`。
 
 不带 `CHECK_REAL_MININET=1` 时脚本只打印跳过说明并以 0 退出 —— 「没跑」不是「通过」，别把它当成真机回归的替代品。

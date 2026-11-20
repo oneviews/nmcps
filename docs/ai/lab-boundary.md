@@ -15,7 +15,8 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   用 `SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A <command>`（助手只回显口令文件，口令不进命令行）。
   完整写法与禁令（不要 `echo "$PASS" | sudo`）见 `.clinerules/09-local-sudo.md`。
 - 整跑 `check:lab-real` 用同一套写法，但 `sudo` 会重置环境变量，`PATH`（nvm 的 `node`）/ `CHECK_REAL_MININET` /
-  `REAL_MININET_BASE` 都要跟在 `sudo -A env …` 之后：root 下 tc 那一层不再跳过，2026-11-20 实测 18/18 全绿。
+  `REAL_MININET_BASE` 都要跟在 `sudo -A env …` 之后。**用包装脚本 `pnpm check:lab-real:root`**（`layers/scenario/scripts/check-lab-real-root.mjs`）：
+  它组装好这几个变量并透出被测脚本的退出码，root 下 tc 那一层不再跳过（2026-11-20 实测 18/18 全绿）。
 - 主机的接口在**它自己的 netns** 里：根 netns 里 `tc qdisc show dev h1-eth0` 什么都不打印，要先 `GET /api/mininet/interfaces`
   拿 pid，再 `SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A nsenter -t <pid> -n tc class show dev h1-eth0`。
 - TCLink 用的是 **`htb`**（不是 `tbf`）：`bw=10` 落成 `class htb 5:1 root prio 0 rate 10Mbit ceil 10Mbit`（2026-11-20 实测），
