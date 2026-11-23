@@ -964,6 +964,10 @@
 				"id": "ID",
 				"engine": "Engine",
 				"state": "State",
+				"stateCreating": "Creating",
+				"stateRunning": "Running",
+				"stateStopped": "Stopped",
+				"stateError": "Error",
 				"nodeCount": "Nodes"
 			},
 			"detail": {

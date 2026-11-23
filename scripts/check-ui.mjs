@@ -5141,7 +5141,12 @@ if (upstreamPort) {
 			"11.3 有台账时五类节点与链路投影到画布，网络卡片显示台账事实",
 			topologyProbe.nodes === 6 && topologyProbe.links === 2
 			&& topologyProbe.nodeStat.includes("6") && topologyProbe.linkStat.includes("2")
-			&& topologyProbe.body.includes("net_ui") && topologyProbe.body.includes("running"),
+			// 台账 seed 写的是 `running`，但假上游 `GET /api/mininet/start` 回 `false`；
+			// 读路径对账（`NMCPS-ADR-0026` D4）会把 `running` 改判成「已停止」并落盘 ——
+			// 这正是「从没启动过的网显示运行中」那条缺陷的回归钉。上游原样透传的是「连通」页
+			// 的运行态徽章（`mininet-run-state`），两者别混。
+			&& topologyProbe.body.includes("net_ui")
+			&& topologyProbe.network.includes("已停止"),
 			`nodes=${topologyProbe.nodes} links=${topologyProbe.links}`
 			+ ` 状态=「${topologyProbe.network}」节点=「${topologyProbe.nodeStat}」链路=「${topologyProbe.linkStat}」`
 		);
@@ -5643,6 +5648,14 @@ if (upstreamPort) {
 			await labPage.waitForTimeout(250);
 			return picked;
 		};
+		/**
+		 * 工具栏「网络」读数：读的是**台账** `state`（i18n 后是「运行中」/「已停止」），
+		 * 与「连通」页的 `mininet-run-state`（上游裸布尔）是两个真源。
+		 * 2026-11-20 逐条复验时两者长期不一致：台账从不随 `start` / `stop` 写回，
+		 * 网停了读数还停在 `running`。这里两边都钉住，缺一条就是这个回归又回来了。
+		 */
+		const networkStatText = async () => labPage.evaluate(() =>
+			(document.querySelector("[data-testid='mininet-stat-network']")?.textContent ?? "").replace(/\s+/g, " ").trim());
 		const runMenuProbe = async () => {
 			const [start, stop, restart, reset] = await Promise.all([
 				runButtonState("mininet-run-start"),
@@ -5683,12 +5696,14 @@ if (upstreamPort) {
 		await labPage.waitForTimeout(1500);
 		const startWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/start");
 		const runRunning = await runMenuProbe();
+		const networkRunningStat = await networkStatText();
 		log(
 			"11.4 启动走 POST /api/lab/start，徽章变为运行中且停止 / 重启 / 探测转为可用",
 			startClicked && !!startWrite
 			&& runRunning.state === "运行中"
+			&& networkRunningStat.includes("运行中")
 			&& runRunning.startDisabled && !runRunning.stopDisabled && !runRunning.restartDisabled,
-			`请求=${startWrite ? startWrite.path : "无"} 状态=${runRunning.state} 启动禁用=${runRunning.startDisabled} 停止禁用=${runRunning.stopDisabled} 重启禁用=${runRunning.restartDisabled}`
+			`请求=${startWrite ? startWrite.path : "无"} 状态=${runRunning.state} 台账=${networkRunningStat} 启动禁用=${runRunning.startDisabled} 停止禁用=${runRunning.stopDisabled} 重启禁用=${runRunning.restartDisabled}`
 		);
 
 		const pingClicked = await clickIfPresent("[data-testid='mininet-run-ping']");
@@ -5761,12 +5776,14 @@ if (upstreamPort) {
 		await labPage.waitForTimeout(1500);
 		const stopWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/stop");
 		const runStopped = await runMenuProbe();
+		const networkStoppedStat = await networkStatText();
 		log(
-			"11.4 停止需确认（弹窗写明后果），确认后 POST /api/lab/stop 且徽章回到已停止",
+			"11.4 停止需确认（弹窗写明后果），确认后 POST /api/lab/stop 且徽章与台账都回到已停止",
 			stopOpened && stopModalText.includes("停止会终止全部节点进程")
 			&& stopConfirmed && !!stopWrite
-			&& runStopped.state === "已停止" && !runStopped.startDisabled && runStopped.stopDisabled,
-			`弹窗=${stopOpened} 确认=${stopConfirmed} 请求=${stopWrite ? stopWrite.path : "无"} 状态=${runStopped.state} 启动禁用=${runStopped.startDisabled}`
+			&& runStopped.state === "已停止" && networkStoppedStat.includes("已停止")
+			&& !runStopped.startDisabled && runStopped.stopDisabled,
+			`弹窗=${stopOpened} 确认=${stopConfirmed} 请求=${stopWrite ? stopWrite.path : "无"} 状态=${runStopped.state} 台账=${networkStoppedStat} 启动禁用=${runStopped.startDisabled}`
 		);
 
 		// ── 11.4 菜单栏（复刻 1.0 版式的「视图」，NMCPS-ADR-0022 W2 修订 / W10）──

@@ -2891,8 +2891,31 @@
 		}
 	}
 
+	/**
+	 * 台账 `state` 的显示文案。
+	 *
+	 * 这是我们**自己**的枚举（`LabNetworkState`，见 `~~/shared/types/lab`），不是上游原文：
+	 * 上游只回一个裸布尔（`GET /api/mininet/start`），那个读数是「连通」页的运行态徽章。
+	 * 两处都会显示，但真源不同 —— 台账由 BFF 在 `start` / `stop` / `full_reset` 成功后写回
+	 * （`markLabNetworkState`），否则网停了、「网络」读数还停在 `running`。
+	 */
+	const networkStateLabel = computed(() => {
+		switch (network.value?.state) {
+		case "creating":
+			return t("pages.scenario-simulator.network.stateCreating");
+		case "running":
+			return t("pages.scenario-simulator.network.stateRunning");
+		case "stopped":
+			return t("pages.scenario-simulator.network.stateStopped");
+		case "error":
+			return t("pages.scenario-simulator.network.stateError");
+		default:
+			return "—";
+		}
+	});
+
 	const statBadges = computed(() => [
-		{ key: "network", label: t("pages.scenario-simulator.stats.network"), text: network.value?.state ?? "—", icon: "carbon:flash" },
+		{ key: "network", label: t("pages.scenario-simulator.stats.network"), text: networkStateLabel.value, icon: "carbon:flash" },
 		{ key: "nodes", label: t("pages.scenario-simulator.stats.nodes"), text: String(nodes.value.length), icon: "carbon:bare-metal-server" },
 		{ key: "links", label: t("pages.scenario-simulator.stats.links"), text: String(graphLinks.value.length), icon: "carbon:link" }
 	]);
@@ -2901,7 +2924,7 @@
 		? [
 			{ key: "id", label: t("pages.scenario-simulator.network.id"), value: network.value.id },
 			{ key: "engine", label: t("pages.scenario-simulator.network.engine"), value: network.value.engine },
-			{ key: "state", label: t("pages.scenario-simulator.network.state"), value: network.value.state },
+			{ key: "state", label: t("pages.scenario-simulator.network.state"), value: networkStateLabel.value },
 			{ key: "nodeCount", label: t("pages.scenario-simulator.network.nodeCount"), value: network.value.node_count === null ? "—" : String(network.value.node_count) }
 		]
 		: []);

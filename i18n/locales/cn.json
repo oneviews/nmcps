@@ -964,6 +964,10 @@
 				"id": "ID",
 				"engine": "引擎",
 				"state": "状态",
+				"stateCreating": "创建中",
+				"stateRunning": "运行中",
+				"stateStopped": "已停止",
+				"stateError": "异常",
 				"nodeCount": "节点"
 			},
 			"detail": {

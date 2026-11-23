@@ -370,6 +370,43 @@ export async function recordLabResourceChange(
 	return await upsertLabNetwork(event, { ...network, resources: next, updated_at: new Date().toISOString() });
 }
 
+/**
+ * 台账 `state` 的写回（NMCPS-ADR-0021 D7 的 `state` 字段）。
+ *
+ * `start` / `stop` / `full_reset` 成功之后，新状态是 BFF 自己知道的确定事实（上游这两条
+ * 端点成功即等于状态已切换），不写回的话台账永远停在 seed 那一刻的 `running`：页面的
+ * 「网络」徽章与「网络」标签页读的都是这个字段，于是网停了、读数还写着 `running`
+ * （2026-11-20 逐条复验实测）。运行态的真源仍是 `GET /api/mininet/start`；这里只是让
+ * 台账不撒谎，失败不回滚、也不改判上游结果。
+ *
+ * 入参是 id 而不是记录：写回要跟 `recordLabResourceChange()` 排在同一条写链上重读
+ * 最新记录，拿调用方手里那份旧快照去 upsert 会把刚收敛好的 `resources` 覆盖回去。
+ */
+export async function markLabNetworkState(
+	event: H3Event,
+	networkId: string,
+	state: LabNetworkState
+): Promise<LabNetworkRecord | undefined> {
+	const config = configOf(event);
+	return await enqueueWrite(async () => {
+		const records = await loadRecords(event, config);
+		const index = records.findIndex((item) => item.id === networkId);
+		const current = records[index];
+		if (!current || current.state === state) {
+			return current;
+		}
+
+		const parsed = parseRecord({ ...current, state, updated_at: new Date().toISOString() });
+		if (!parsed) {
+			throw new TypeError("invalid_lab_network_record");
+		}
+
+		records[index] = parsed;
+		await writeRecords(config, records);
+		return parsed;
+	});
+}
+
 /** 路径参数是否属于台账记录的资源清单（未登记清单＝以实例为边界，放行） */
 export function isLabResourceAllowed(
 	network: LabNetworkRecord,

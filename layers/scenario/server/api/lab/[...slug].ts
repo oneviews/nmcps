@@ -1,7 +1,7 @@
 import type { H3Event } from "h3";
 import type { LabPrincipal } from "~~/shared/constants/labPermissions";
 import type { ApiResponse } from "~~/shared/types/api";
-import type { LabNetworkRecord } from "~~/shared/types/lab";
+import type { LabNetworkRecord, LabNetworkState } from "~~/shared/types/lab";
 import type { LabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
 import type { MininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
 import type { MininetMatch } from "#layers/scenario/shared/constants/mininetRoutes";
@@ -11,7 +11,7 @@ import { hasLabPermissions } from "~~/shared/constants/labPermissions";
 import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { appendLabAudit, labClientIp, labRequestId } from "#layers/scenario/server/utils/bff/labAudit";
 import { authorizeLabSession } from "#layers/scenario/server/utils/bff/labGuard";
-import { getActiveLabNetwork, isLabResourceAllowed, listLabNetworks, recordLabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
+import { getActiveLabNetwork, isLabResourceAllowed, listLabNetworks, markLabNetworkState, recordLabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
 import { acquireLabOperation } from "#layers/scenario/server/utils/bff/labLocks";
 import { proxyToMininet } from "#layers/scenario/server/utils/bff/mininet";
 import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
@@ -185,6 +185,24 @@ function labResourceChangeOf(match: MininetMatch, rawBody: string | undefined): 
 }
 
 /**
+ * 写端点 → 台账 `state` 的新值（NMCPS-ADR-0021 D7）。
+ *
+ * 只有「一成功就等于状态已切换」的三条端点登记在这里：`start` 让网跑起来，`stop` 终止
+ * 全部节点进程，`full_reset` 把网清空后按「未启动」重建。增删节点 / 链路、流表、
+ * `pingall` / `iperf`、抓包都不改运行态 —— 它们照样可能是「网没起也成功」的写操作，
+ * 顺手写 `running` 只会让台账更假。
+ */
+function labNetworkStateAfterWrite(template: string): LabNetworkState | undefined {
+	if (template === "/start") {
+		return "running";
+	}
+	if (template === "/stop" || template === "/full_reset") {
+		return "stopped";
+	}
+	return undefined;
+}
+
+/**
  * 写端点：先判「是否允许再建网」，再取锁、写审计、读请求体，最后出站。
  *
  * 审计与锁的释放都用 `finally` 收口：抢到锁但审计失败时必须解锁，
@@ -302,6 +320,17 @@ async function handleWrite(
 					// 上游已经改了，不能因为台账写失败就回滚或改判成功为失败；但必须留痕 ——
 					// 清单落后会让新节点在列表里“消失”，排障时这是第一条线索
 					console.warn("[lab] resource list not updated", network.id, error);
+				}
+			}
+
+			// 运行态同样收口到台账：页面读的是台账 `state`，不写回就永远停在 seed 那一刻
+			const nextState = labNetworkStateAfterWrite(route.template);
+			if (nextState) {
+				try {
+					await markLabNetworkState(event, network.id, nextState);
+				} catch (error) {
+					// 同上：上游已切换，台账落后只影响展示（页面还会读 `GET /start`）
+					console.warn("[lab] network state not updated", network.id, error);
 				}
 			}
 		}
