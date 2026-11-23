@@ -11,7 +11,7 @@
 // 空实例守卫仍在 `check-lab-real.mjs` 里（`GET /api/mininet/start` 为 false 且五类节点全空）：
 // 这层不重复实现，也不替它兜底 —— 别人的拓扑一律不碰。
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { chownSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,67 @@ import { fileURLToPath } from "node:url";
 const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "check-lab-real.mjs");
 const ASKPASS = resolve(".clinerules/sudo-askpass.sh");
 const REAL_BASE = process.env.REAL_MININET_BASE ?? "http://127.0.0.1:8000";
+
+/**
+ * 收尾：把 `.data` 下 root 名下的产物还给调用者。
+ *
+ * root 整跑会留下 `root:root` 的当日审计分片（`.data/audit/lab-audit-<日期>.jsonl`）。之后
+ * 普通用户起的 BFF 再往同一分片追加就是 `EACCES` → 每个写端点回 503 `audit_unavailable`，
+ * `check:ui` 的写用例全假红（实测 2026-11-22：11.4 四条 + 后续 Modal 卡死）。这层本来就是
+ * 为了提权才存在，顺手把所有权还原是它自己的职责，不该让下一个人去猜「为什么刚才是绿的」。
+ */
+function rootOwnedEntries(dir) {
+	if (!existsSync(dir))
+		return [];
+
+	const found = [];
+	const walk = (target) => {
+		const info = lstatSync(target);
+		if (info.uid === 0)
+			found.push(target);
+		if (info.isDirectory()) {
+			for (const entry of readdirSync(target))
+				walk(resolve(target, entry));
+		}
+	};
+
+	walk(dir);
+	return found;
+}
+
+/** 已经是 root：自己动手 chown，还原给 `SUDO_UID:$SUDO_GID`（`sudo -i` 时可能没有） */
+function restoreDataOwnershipInProcess() {
+	const uid = Number(process.env.SUDO_UID ?? "");
+	const gid = Number(process.env.SUDO_GID ?? "");
+	if (!Number.isInteger(uid) || uid === 0)
+		return 0;
+
+	const entries = rootOwnedEntries(".data");
+	for (const entry of entries)
+		chownSync(entry, uid, Number.isInteger(gid) ? gid : uid);
+	return entries.length;
+}
+
+/**
+ * 普通用户进程：自己 chown 会 `EPERM`，交给 `sudo -A`（同一次提权后的凭据缓存还在，
+ * 过期也只是再走一次 askpass，不会卡在等输入）。只碰 root 名下的条目，不动别人的文件。
+ */
+function restoreDataOwnershipViaSudo() {
+	const owned = rootOwnedEntries(".data");
+	if (owned.length === 0)
+		return 0;
+
+	execFileSync("sudo", [
+		"-A",
+		"chown",
+		`${process.getuid()}:${process.getgid()}`,
+		...owned
+	], {
+		stdio: "ignore",
+		env: { ...process.env, SUDO_ASKPASS: ASKPASS }
+	});
+	return owned.length;
+}
 
 if (!existsSync(SCRIPT)) {
 	console.log(`❌ 找不到 ${SCRIPT}：这层包装只负责提权，脚本本体必须存在`);
@@ -50,6 +111,10 @@ if (isRoot) {
 		});
 	} catch (caught) {
 		process.exitCode = typeof caught?.status === "number" ? caught.status : 1;
+	} finally {
+		const restored = restoreDataOwnershipInProcess();
+		if (restored > 0)
+			console.log(`  ⏎ 已把 ${restored} 个 root 名下的 .data 产物还给调用者（否则普通用户的写端点会 503 audit_unavailable）`);
 	}
 	process.exit();
 }
@@ -69,4 +134,15 @@ try {
 } catch (caught) {
 	// sudo 失败（口令错 / 无权限）或被测脚本失败：原样透出退出码，不要伪装成通过
 	process.exitCode = typeof caught?.status === "number" ? caught.status : 1;
+} finally {
+	// 被测脚本失败也要还原：半途崩掉同样会留下 root 名下的审计分片
+	let restored = 0;
+	try {
+		restored = restoreDataOwnershipViaSudo();
+	} catch (caught) {
+		// 还原失败不该盖掉被测结果，但必须说清楚：下一个人会撞上 503 audit_unavailable
+		console.warn(`  ⚠ 还原 .data 所有权失败（${caught?.message ?? caught}）：先看 \`find .data -user root\``);
+	}
+	if (restored > 0)
+		console.log(`  ⏎ 已把 ${restored} 个 root 名下的 .data 产物还给调用者（否则普通用户的写端点会 503 audit_unavailable）`);
 }

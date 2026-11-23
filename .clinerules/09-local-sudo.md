@@ -72,6 +72,11 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
   浏览器的 `PLAYWRIGHT_BROWSERS_PATH` 不用管，脚本自己回落到 `$SUDO_USER` 的缓存。
   中途失败会把 `h1` / `h2` 与那条带 `bw` 的链路留在真后端上（脚本在起网之后才崩的话）—— 下次跑前先
   `POST /api/mininet/full_reset` 清空，别让「非空实例」守卫替你报错。
+- root 跑完会留下 **root 名下的 `.data` 产物**（当日审计分片 `.data/audit/lab-audit-<日期>.jsonl`）。
+  之后普通用户起的 BFF 往同一分片追加就是 `EACCES`，**每条写端点回 503 `audit_unavailable`** ——
+  `check:ui` 的写用例会全红（实测 2026-11-22：11.4 四条 + 后续弹窗卡死，读用例仍然全绿，极易误判成代码回归）。
+  包装脚本已在 `finally` 里把 `.data` 下 root 名下的文件 chown 回 `$SUDO_UID:$SUDO_GID`；手工跑过 root 命令的话，
+  收尾自己补一条 `sudo -A chown -R "$(id -u):$(id -g)" .data`。诊断口径：`find .data -user root` 有输出就先修权限再谈代码。
 - 提权统一走 `sudo -A` + `$PWD/.clinerules/sudo-askpass.sh`（或 `pnpm check:lab-real:root`，两者同一路径）：
   新增脚本别再自造提权方式，也别把口令搬到别的文件 —— `pnpm check:rules` 断言 helper 可执行、
   `.sudo.local` 被忽略且未被跟踪、口令原文不出现在任何被跟踪文件里。

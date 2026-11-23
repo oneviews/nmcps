@@ -26,6 +26,10 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   写断言时不要按「`h1` 在前」找连线、也不要固定用 `h1` 的 pid 去 `nsenter` 看别的接口 ——
   `check:lab-real` 的 W13 就因此假红过一次（双击落空 → `PUT /links` 没发 → 后两条跟着红）；
   现在按「两个节点 id 都在这条连线的无障碍名称里」定位，再按接口名前缀（`h2-eth0` → `h2`）取 pid。
+- root 跑完会在 `.data` 留下 **root 名下**的产物（当日审计分片 `.data/audit/lab-audit-<日期>.jsonl`）。
+  普通用户的 BFF 再往同一分片追加就 `EACCES` → 所有写端点 `503 audit_unavailable`，而读端点照常 200 ——
+  `check:ui` 的 11.4 写用例会整段假红（2026-11-22 实测）。包装脚本现在在 `finally` 里把 `.data` 下 root 名下的
+  文件 chown 回调用者；先看 `find .data -user root`，再怀疑代码。
 
 ## 本机 `:8000` 必须跑本仓代码（2026-11-18 现场）
 

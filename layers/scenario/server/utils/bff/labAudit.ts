@@ -96,9 +96,7 @@ export async function appendLabAudit(event: H3Event | undefined, entry: LabAudit
 		await appendFile(file, `${JSON.stringify({ ...entry, created_at: new Date().toISOString() })}\n`, "utf8");
 		return true;
 	} catch (error) {
-		if (import.meta.dev) {
-			console.error("[lab] audit append failed", file, error);
-		}
+		console.error("[lab] audit append failed", file, error);
 		return false;
 	}
 }
