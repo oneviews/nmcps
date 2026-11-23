@@ -6261,6 +6261,30 @@ if (upstreamPort) {
 		);
 
 		/*
+		 * 11.6c 空画布导出拓扑 PNG：不出文件、只报错（2026-11-20 逐条复验暴露的缺陷）。
+		 *
+		 * 画布自 W11 起常驻，`svgElement` 永远非空 —— 导出判据若只判「拿得到 SVG」，
+		 * 就会把一张空白画布导成 PNG（复验时实测下载了 `lab-topology-*.png`，打开是全空）。
+		 * 判据必须是「画布上有可见节点」，所以这里应当：没有 `download` 事件，且给出
+		 * 红 toast 说明原因。这条同时守着 11.5b（有节点时仍然导得出）。
+		 */
+		const emptyPngDownload = labPage
+			.waitForEvent("download", { timeout: 1500 })
+			.then(() => true)
+			.catch(() => false);
+		const emptyPngPicked = await pickFileItem("导出拓扑 PNG");
+		const emptyPngToast = await labPage
+			.waitForFunction(() => (document.body.textContent ?? "").includes("画布上还没有可导出的拓扑"), null, { timeout: 5000 })
+			.then(() => true)
+			.catch(() => false);
+		const emptyPngDownloaded = await emptyPngDownload;
+		log(
+			"11.6c 空画布导出拓扑 PNG：不产生下载，改用红 toast「画布上还没有可导出的拓扑」",
+			emptyPngPicked && !emptyPngDownloaded && emptyPngToast,
+			`点中=${emptyPngPicked} 下载=${emptyPngDownloaded} toast=${emptyPngToast}`
+		);
+
+		/*
 		 * 假上游是**整段 11.x 共用**的（后面的资源清单用例还要读它），而 `full_reset`
 		 * 已经把台账清空。这里把快照放回去 —— 恢复的是测试夹具，不是被测行为：
 		 * 页面上「重建后画布为空」已经在上一行断言完。

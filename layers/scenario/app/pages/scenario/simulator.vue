@@ -2356,7 +2356,10 @@
 	 */
 	async function exportTopologyPng(): Promise<void> {
 		const svg = canvasRef.value?.svgElement;
-		if (!svg) {
+		// 画布是常驻的（W11：0 节点也要能接拖放），所以 `svg` 永远存在 —— 只判它就会把
+		// 一张空白画布导成 PNG（2026-11-20 逐条复验实测）。判据换成「画布上有没有可见节点」：
+		// 导出的是用户当前看到的图（含「视图」开关的过滤结果），藏光了同样无从导出。
+		if (!svg || !visibleNodes.value.length) {
 			toast.add({
 				title: t("pages.scenario-simulator.export.pngUnavailable"),
 				color: "error"
