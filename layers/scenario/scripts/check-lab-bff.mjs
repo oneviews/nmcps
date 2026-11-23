@@ -324,10 +324,31 @@ async function startMininet(port) {
 		pcap: Buffer.from([0xD4, 0xC3, 0xB2, 0xA1, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00])
 	};
 
+	/**
+	 * 运行态与延迟注入（NMCPS-ADR-0026 D1 / D4）。
+	 *
+	 * - `runState.started` 决定 `GET /api/mininet/start` 回的裸布尔；`runState.fail` 让同一个
+	 *   读端点回 500 —— 台账对账用例要证明「读到 false 就改判、读不到就保持原值」；
+	 * - `delays` 按上游路径注入响应延迟：长时预算的用例要的是一个「读端点必然超出短预算、
+	 *   长时端点仍在预算内」的真实慢请求，而不是把 BFF 的超时改成 0。
+	 */
+	const runState = { started: true, fail: false };
+	const delays = new Map();
+
 	const server = createServer(async (req, res) => {
 		const url = new URL(req.url, `http://${HOST}:${port}`);
 		const path = url.pathname;
 		log.push({ method: req.method, path, search: url.search, headers: req.headers });
+
+		const pause = delays.get(path) ?? 0;
+		if (pause > 0) {
+			await new Promise((resolve) => setTimeout(resolve, pause));
+			// 客户端（BFF）可能已经按短预算放弃了这次请求：此时 `req` 已销毁，再 `for await`
+			// 读请求体会以 `Error: aborted` 拒绝，而 createServer 的回调不是被 await 的，
+			// 未捕获拒绝会直接杀掉这个假上游进程 —— 后面所有用例跟着一起红。
+			if (req.destroyed || res.destroyed)
+				return;
+		}
 
 		const send = (status, payload) => {
 			res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -363,7 +384,9 @@ async function startMininet(port) {
 		}
 
 		if (path === "/api/mininet/start" && req.method === "GET") {
-			return send(200, true);
+			if (runState.fail)
+				return send(500, { detail: "run state exploded" });
+			return send(200, runState.started);
 		}
 
 		if (path === "/api/mininet/sniffer/state" && req.method === "GET") {
@@ -498,6 +521,9 @@ async function startMininet(port) {
 	// 台账对账（⑭）要能直接铺上游事实 / 注入读失败，暴露可变拓扑
 	server.topology = topology;
 	server.sniffer = sniffer;
+	// 运行态 / 延迟注入（NMCPS-ADR-0026 D1 / D4）：⑮ 要直接改上游事实
+	server.runState = runState;
+	server.delays = delays;
 	// 抓包实时流（NMCPS-ADR-0022 D6）：升级记录留在 `snifferSocketLog`，用来证明 BFF 真向上游建了连
 	server.snifferSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
 	return server;
@@ -1382,6 +1408,87 @@ try {
 		const whitelisted = readMininetWhitelist().some((entry) => entry.template.includes("/sync"));
 		log("⑭ `/networks/{id}/sync` 不在 MININET_ROUTES 白名单里（只改台账，不转发）", !whitelisted, `whitelisted=${whitelisted}`);
 	});
+
+	/*
+	 * ⑮ 长时预算与台账运行态对账（NMCPS-ADR-0026 D1 / D2 / D4）
+	 *
+	 * 真后端 9 节点上一次 `pingall` 实测 42.6 秒（`NMCPS-ADR-0026` §1），而读端点的出站预算只有
+	 * 15 秒 —— 请求其实还在正常跑，用户却先拿到 `504`。这里用「短预算 1.2 秒 / 长预算 3 秒 +
+	 * 上游延迟 2 秒」给出可复现的分档取证，不靠调小真超时去凑：
+	 *   1. 写端点（不在长时清单里）沿用短预算 → 504 `mininet_timeout`；
+	 *   2. `/pingall` 走长时预算 → 200；
+	 *   3. 台账 `running` + 上游 `false` → 列表回 `stopped` 且落盘改判；
+	 *   4. 上游运行态读不到 → 保持原值、零写盘（「未知」不是「已停止」）。
+	 */
+	const SLOW_UPSTREAM_MS = 2000;
+	const ledgerRecordOf = (file, id) => {
+		if (!existsSync(file))
+			return undefined;
+		const body = JSON.parse(readFileSync(file, "utf8"));
+		return (body?.networks ?? []).find((item) => item.id === id);
+	};
+
+	mininet.delays.set("/api/mininet/hosts", SLOW_UPSTREAM_MS);
+	mininet.delays.set("/api/mininet/pingall", SLOW_UPSTREAM_MS);
+	mininet.runState.started = false;
+	const longLedgerFile = `.data/check-lab-bff-long-${process.pid}.json`;
+	const unknownLedgerFile = `.data/check-lab-bff-unknown-${process.pid}.json`;
+	rmSync(longLedgerFile, { force: true });
+	rmSync(unknownLedgerFile, { force: true });
+
+	try {
+		await withBff(labEnv({
+			NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+			NUXT_MININET_TIMEOUT_MS: "1200",
+			NUXT_MININET_LONG_TIMEOUT_MS: "3000",
+			NUXT_LAB_LEDGER_FILE: longLedgerFile,
+			NUXT_LAB_LEDGER_SEED: JSON.stringify([{ ...DEFAULT_LEDGER[0], id: "net_long", state: "running" }])
+		}), async (port) => {
+			const auth = await login(port);
+
+			const slowWrite = await request(port, "/api/lab/hosts", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				cookie: auth.cookie,
+				body: JSON.stringify({ name: "h9", ip: "10.0.0.9" })
+			});
+			log("⑮ 非长时端点仍用短预算：上游慢 2 秒、预算 1.2 秒 → 504 mininet_timeout", slowWrite.status === 504 && slowWrite.json?.message === "mininet_timeout", `${slowWrite.status} ${describe(slowWrite.json?.message)}`);
+
+			const pingall = await request(port, "/api/lab/pingall", { method: "POST", cookie: auth.cookie });
+			log("⑮ /pingall 走长时预算：同一份 2 秒延迟、预算 3 秒 → 200（不把「还在跑」判成超时）", pingall.status === 200, `${pingall.status} ${describe(pingall.json?.message)}`);
+
+			const before = mininet.log.filter((entry) => entry.method === "GET" && entry.path === "/api/mininet/start").length;
+			const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
+			const record = (networks.json?.data ?? [])[0];
+			const after = mininet.log.filter((entry) => entry.method === "GET" && entry.path === "/api/mininet/start").length;
+			log("⑮ 台账 running + 上游 false → 列表回 stopped（一次列表只读一次上游运行态）", networks.status === 200 && record?.state === "stopped" && after === before + 1, `state=${describe(record?.state)} reads=${after - before}`);
+
+			const persisted = ledgerRecordOf(longLedgerFile, "net_long");
+			log("⑮ 改判同步落盘（重启后不再是 seed 的 running）", persisted?.state === "stopped", `ledger=${describe(persisted?.state)}`);
+		});
+
+		// 运行态读不到：改成 500，台账里的 running 必须原样站着
+		mininet.runState.fail = true;
+		await withBff(labEnv({
+			NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+			NUXT_MININET_TIMEOUT_MS: "1200",
+			NUXT_MININET_LONG_TIMEOUT_MS: "3000",
+			NUXT_LAB_LEDGER_FILE: unknownLedgerFile,
+			NUXT_LAB_LEDGER_SEED: JSON.stringify([{ ...DEFAULT_LEDGER[0], id: "net_unknown", state: "running" }])
+		}), async (port) => {
+			const auth = await login(port);
+			const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
+			const record = (networks.json?.data ?? [])[0];
+			log("⑮ 上游运行态读不到 → 保持原值（「未知」不是「已停止」）", networks.status === 200 && record?.state === "running", `state=${describe(record?.state)}`);
+
+			const persisted = ledgerRecordOf(unknownLedgerFile, "net_unknown");
+			log("⑮ 读不到时零写盘：不猜也不改，台账文件根本没被创建", persisted === undefined, `ledger=${describe(persisted?.state ?? "absent")}`);
+		});
+	} finally {
+		mininet.delays.clear();
+		mininet.runState.started = true;
+		mininet.runState.fail = false;
+	}
 
 	const passed = results.filter((item) => item.ok).length;
 	console.log(`\n${passed}/${results.length} 项通过`);

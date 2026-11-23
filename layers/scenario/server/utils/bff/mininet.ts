@@ -6,7 +6,7 @@ import type { MininetConfig } from "./mininetConfig";
 import { Buffer } from "node:buffer";
 import { getHeader, getQuery, setResponseHeader, setResponseStatus } from "h3";
 import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
-import { buildMininetUpstreamPath } from "#layers/scenario/shared/constants/mininetRoutes";
+import { buildMininetUpstreamPath, isLongOperationRoute } from "#layers/scenario/shared/constants/mininetRoutes";
 import { filterLabPayload } from "./labEgress";
 import { getMininetConfig } from "./mininetConfig";
 
@@ -231,7 +231,10 @@ export async function proxyToMininet<T = unknown>(
 	}
 
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+	// 长时端点（`pingall` / `start` / `stop` …）走独立预算（NMCPS-ADR-0026 D1）：15 秒会把
+	// 「上游还在跑」判成 `504`，而请求其实已经生效 —— 用户看到假失败、再点一次就是 409。
+	const budgetMs = isLongOperationRoute(match.route) ? config.longTimeoutMs : config.timeoutMs;
+	const timer = setTimeout(() => controller.abort(), budgetMs);
 	const jsonBody = options.body !== undefined && method !== "GET" && options.upload === undefined;
 	const headers = buildMininetHeaders(event, jsonBody);
 	const outgoing = options.upload

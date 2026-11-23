@@ -14,6 +14,8 @@ export interface MininetConfig {
 	baseUrl: string
 	/** 单次出站超时（毫秒） */
 	timeoutMs: number
+	/** 长时端点（`pingall` / `start` / `stop` …）的出站超时（毫秒），见 `NMCPS-ADR-0026` D1 */
+	longTimeoutMs: number
 	/** 是否按租户查过实例；为 true 时空 baseUrl 表示该租户没有实例 */
 	tenantScoped: boolean
 }
@@ -21,10 +23,19 @@ export interface MininetConfig {
 interface MininetInstance {
 	baseUrl: string
 	timeoutMs?: number
+	longTimeoutMs?: number
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MIN_TIMEOUT_MS = 1000;
+/** 一次 `pingall` 在 9 节点网络上实测 42.6 秒（`NMCPS-ADR-0026` §1），180 秒留足余量 */
+const DEFAULT_LONG_TIMEOUT_MS = 180_000;
+/**
+ * 长时预算的下界与读预算同值（`NMCPS-ADR-0026` D1）：真正要保证的不变量是
+ * `longTimeoutMs >= timeoutMs`，那由 `Math.max()` 兜住；这里再卡一个下界只会让自检
+ * 无法用「短预算 1.2 秒 / 长预算 3 秒」验证分档（卡到 30 秒等于每条用例多等半分钟）。
+ */
+const MIN_LONG_TIMEOUT_MS = 1000;
 
 function stripTrailingSlash(value: string): string {
 	return value.replace(/\/+$/, "");
@@ -51,9 +62,11 @@ function parseInstance(value: unknown): MininetInstance | undefined {
 	}
 
 	const timeout = Number(record.timeoutMs);
+	const longTimeout = Number(record.longTimeoutMs);
 	return {
 		baseUrl: stripTrailingSlash(baseUrl),
-		...(Number.isFinite(timeout) && timeout >= MIN_TIMEOUT_MS ? { timeoutMs: timeout } : {})
+		...(Number.isFinite(timeout) && timeout >= MIN_TIMEOUT_MS ? { timeoutMs: timeout } : {}),
+		...(Number.isFinite(longTimeout) && longTimeout >= MIN_LONG_TIMEOUT_MS ? { longTimeoutMs: longTimeout } : {})
 	};
 }
 
@@ -117,14 +130,27 @@ export function getMininetConfig(event: H3Event | undefined, tenantId?: string):
 		? timeoutCandidate
 		: DEFAULT_TIMEOUT_MS;
 
+	// 长时预算独立解析：它可以比读超时小只会让「长操作」退回读预算，那是配置错误而不是
+	// 保守取值，所以下界单列一个 `MIN_LONG_TIMEOUT_MS`（`NMCPS-ADR-0026` D1）。
+	const longCandidate = Number(mininet.longTimeoutMs);
+	const globalLongTimeoutMs = Number.isFinite(longCandidate) && longCandidate >= MIN_LONG_TIMEOUT_MS
+		? longCandidate
+		: DEFAULT_LONG_TIMEOUT_MS;
+
 	if (tenantId !== undefined) {
 		const instance = parseInstances(mininet.instances).get(tenantId);
 		return {
 			baseUrl: instance?.baseUrl ?? "",
 			timeoutMs: instance?.timeoutMs ?? globalTimeoutMs,
+			longTimeoutMs: Math.max(instance?.longTimeoutMs ?? globalLongTimeoutMs, globalTimeoutMs),
 			tenantScoped: true
 		};
 	}
 
-	return { baseUrl: globalBaseUrl, timeoutMs: globalTimeoutMs, tenantScoped: false };
+	return {
+		baseUrl: globalBaseUrl,
+		timeoutMs: globalTimeoutMs,
+		longTimeoutMs: Math.max(globalLongTimeoutMs, globalTimeoutMs),
+		tenantScoped: false
+	};
 }

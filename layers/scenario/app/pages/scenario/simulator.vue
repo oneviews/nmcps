@@ -952,6 +952,7 @@
 	import type { MininetChannelCapabilities, MininetChannelInfo } from "#layers/scenario/shared/types/mininet";
 	import { topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
 	import { topologyPngBlobOf, topologyPngFilename } from "~~/app/utils/graph/topologyPngExport";
+	import { LAB_LONG_OPERATION_TIMEOUT_MS } from "#layers/scenario/shared/constants/mininetRoutes";
 	import {
 		LAB_FLOW_PRIORITY_MAX,
 		labFlowClearError,
@@ -1510,7 +1511,7 @@
 
 		importBusy.value = true;
 		try {
-			await api.post("/api/lab/import_json", parsed.payload);
+			await api.post("/api/lab/import_json", parsed.payload, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			toast.add({
 				title: t("pages.scenario-simulator.import.ok"),
 				description: t("pages.scenario-simulator.import.okHint", {
@@ -2662,7 +2663,7 @@
 		runError.value = undefined;
 
 		try {
-			await api.post("/api/lab/start");
+			await api.post("/api/lab/start", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			toast.add({ title: t("pages.scenario-simulator.run.started"), color: "success" });
 			await load();
 		} catch (caught) {
@@ -2720,7 +2721,7 @@
 		resetError.value = undefined;
 
 		try {
-			await api.post("/api/lab/full_reset", { confirm });
+			await api.post("/api/lab/full_reset", { confirm }, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			resetOpen.value = false;
 			pingOutput.value = "";
 			iperfResult.value = null;
@@ -2797,7 +2798,7 @@
 		stopError.value = undefined;
 
 		try {
-			await api.post("/api/lab/stop");
+			await api.post("/api/lab/stop", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			stopOpen.value = false;
 			pingOutput.value = "";
 			iperfResult.value = null;
@@ -2826,8 +2827,8 @@
 		stopError.value = undefined;
 
 		try {
-			await api.post("/api/lab/stop");
-			await api.post("/api/lab/start");
+			await api.post("/api/lab/stop", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/lab/start", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			stopOpen.value = false;
 			pingOutput.value = "";
 			iperfResult.value = null;
@@ -2853,7 +2854,7 @@
 		pingOutput.value = "";
 
 		try {
-			pingOutput.value = labRunOutputOf(await api.post<unknown>("/api/lab/pingall"));
+			pingOutput.value = labRunOutputOf(await api.post<unknown>("/api/lab/pingall", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS }));
 			toast.add({ title: t("pages.scenario-simulator.run.pinged"), color: "success" });
 			if (selectedNode.value?.kind === "switch")
 				await loadFlows(selectedNode.value.positioned.id);
@@ -2882,7 +2883,7 @@
 		iperfResult.value = null;
 
 		try {
-			iperfResult.value = labIperfResultOf(await api.post<unknown>("/api/lab/iperf", labIperfPayloadOf(iperfDraft.value)));
+			iperfResult.value = labIperfResultOf(await api.post<unknown>("/api/lab/iperf", labIperfPayloadOf(iperfDraft.value), { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS }));
 			toast.add({ title: t("pages.scenario-simulator.run.iperfDone"), color: "success" });
 		} catch (caught) {
 			runError.value = messageOf(caught);

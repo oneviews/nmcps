@@ -86,7 +86,10 @@ export default defineNuxtConfig({
 			// 租户 → 实例注册表（JSON 字符串）：{"t_a":{"baseUrl":"http://127.0.0.1:8000"}}
 			// 配了注册表后，租户请求只查这里；未命中即 503 tenant_runtime_unavailable，绝不回退全局 baseUrl。
 			instances: "",
-			timeoutMs: 15000
+			timeoutMs: 15000,
+			// 长时端点（`pingall` / `start` / `stop` …）的独立预算（NMCPS-ADR-0026 D1）：
+			// 一次 pingall 在 9 节点网上实测 42.6 秒，沿用读端点的 15 秒会被判成「超时」
+			longTimeoutMs: 180000
 		},
 		// 仿真网络台账（NMCPS-ADR-0021 P2）：BFF 自有的资源归属记录。
 		// 文件不存在时读 seed；文件存在即只信文件，避免“删了又被 seed 复活”。

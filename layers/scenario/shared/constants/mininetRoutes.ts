@@ -43,6 +43,30 @@ export function isWriteRoute(route: MininetRoute): boolean {
 }
 
 /**
+ * 长时端点（`NMCPS-ADR-0026` D1）：这些请求在上游要跑几十秒（一次 `pingall` 在 9 节点网
+ * 实测 42.6 秒、`start` / `stop` 要建 / 拆整个 Mininet 网络），15 秒的出站预算会把
+ * 「还在跑」判成 `504 mininet_timeout`。名单以 `METHOD template` 形式登记，BFF 与浏览器侧
+ * **共用这一份**：两处各写一份必然漂移。
+ */
+export const MININET_LONG_OPERATION_TEMPLATES: readonly string[] = [
+	"POST /start",
+	"POST /stop",
+	"POST /reset",
+	"POST /full_reset",
+	"POST /import_json",
+	"POST /pingall",
+	"POST /iperf"
+];
+
+/** 浏览器侧与 BFF 同口径的长时预算（毫秒）：`useApi` 的默认 20 秒在这里必须让位 */
+export const LAB_LONG_OPERATION_TIMEOUT_MS = 180_000;
+
+/** 该端点是否走长时预算（判据只有名单本身，不看动词以外的任何状态） */
+export function isLongOperationRoute(route: Pick<MininetRoute, "method" | "template">): boolean {
+	return MININET_LONG_OPERATION_TEMPLATES.includes(`${route.method} ${route.template}`);
+}
+
+/**
  * 白名单本体（20 条查询 + 28 条写端点）。
  *
  * 刻意**不登记**：
