@@ -480,8 +480,23 @@ try {
 	 * tc 那一层要 CAP_NET_ADMIN 才看得见（`tc qdisc show`），所以只在脚本以 root 运行时断言
 	 * `tbf` 限速；普通用户跑就显式跳过并说明 —— 别把它悄悄算成通过。
 	 */
-	const linkHit = () => page.locator("[data-testid='topology-link-hit'][aria-label*='h1 ↔ h2']");
-	const linkOnCanvas = await linkHit().count() > 0;
+	/*
+	 * 命中区不能按固定方向找：上游 `GET /links` 的 `from` / `to` 在 **stop → start** 之后会换个
+	 * 方向（2026-11-21 真机实测：建链时回 `h1→h2`，重启后回 `h2→h1`，`intfs` 也跟着换）。
+	 * 写成 `aria-label*='h1 ↔ h2'` 时，重启过的那一轮就「画布上没有这条链路」—— 双击落空、
+	 * `PUT /links` 根本没发，后面两条断言跟着一起假红。这里只要求「两个 id 都在这条连线的
+	 * 无障碍名称里」，方向由上游决定；拿到它的 `data-link-hit-key` 再精确定位。
+	 */
+	const linkHitKey = await page.evaluate(([left, right]) => {
+		const hit = Array.from(document.querySelectorAll("[data-testid='topology-link-hit']"))
+			.find((element) => {
+				const label = element.getAttribute("aria-label") ?? "";
+				return label.includes(left) && label.includes(right);
+			});
+		return hit?.getAttribute("data-link-hit-key") ?? "";
+	}, [NODE_ID, NODE_ID_2]);
+	const linkHit = () => page.locator(`[data-testid='topology-link-hit'][data-link-hit-key='${linkHitKey}']`);
+	const linkOnCanvas = Boolean(linkHitKey);
 	await linkHit().first().dblclick({ force: true, timeout: 10000 }).catch(() => {});
 	await page.waitForSelector("[data-testid='lab-link-detail-bw']", { timeout: 15000 }).catch(() => {});
 	await page.waitForTimeout(600);
@@ -508,27 +523,31 @@ try {
 
 	if (process.getuid?.() === 0 && writtenLink?.intfs?.from) {
 		/*
-		 * 两个真机事实（2026-11-20 实测）：
+		 * 三个真机事实（2026-11-20 / 2026-11-21 实测）：
 		 * ① 接口不在根 netns —— Mininet 把每台主机的接口放进它自己的 netns，根 netns 里
-		 *    `tc qdisc show dev h1-eth0` 什么都不打印，必须先 `nsenter -t <h1 pid> -n`；
-		 * ② TCLink 默认用 `htb`（不是 tbf），`bw` 落到 `class htb 5:1 root … rate <bw>Mbit`。
-		 * 所以断言看的是 h1 netns 里那行 class 的 rate，而不是 qdisc 的类型名。
+		 *    `tc qdisc show dev h1-eth0` 什么都不打印，必须先 `nsenter -t <该主机的 pid> -n`；
+		 * ② TCLink 默认用 `htb`（不是 tbf），`bw` 落到 `class htb 5:1 root … rate <bw>Mbit`；
+		 * ③ `intfs.from` 是**上游给的那一端**，重启后它会换方向（见上面命中区那段注释），
+		 *    所以 pid 要按接口名的前缀（`h2-eth0` → `h2`）去找 —— 固定拿 `h1` 的 pid 去
+		 *    `nsenter` 看 `h2-eth0`，只会得到 `Cannot find device "h2-eth0"`。
 		 */
+		const iface = writtenLink.intfs.from;
+		const ifaceHost = iface.split("-")[0] ?? "";
 		const interfaces = await call("GET", "/api/mininet/interfaces");
-		const hostNode = (interfaces.json?.nodes ?? []).find((entry) => entry.id === NODE_ID);
+		const hostNode = (interfaces.json?.nodes ?? []).find((entry) => entry.id === ifaceHost);
 		let hostClass = "";
 		try {
-			hostClass = execFileSync("nsenter", ["-t", String(hostNode?.pid), "-n", "tc", "class", "show", "dev", writtenLink.intfs.from], { encoding: "utf8" });
+			hostClass = execFileSync("nsenter", ["-t", String(hostNode?.pid), "-n", "tc", "class", "show", "dev", iface], { encoding: "utf8" });
 		} catch (error) {
 			hostClass = `ERR ${error.message}`;
 		}
 		log(
-			"W13 带宽真落到接口（root：h1 netns 里 htb 类的 rate 已是 10Mbit）",
+			`W13 带宽真落到接口（root：${ifaceHost} netns 里 htb 类的 rate 已是 10Mbit）`,
 			hostNode?.pid !== undefined && /htb/.test(hostClass) && /rate\s+10Mbit/.test(hostClass),
-			`${writtenLink.intfs.from}@pid ${hostNode?.pid ?? "无"}：${hostClass.split("\n")[0]?.slice(0, 80) ?? "无输出"}`
+			`${iface}@pid ${hostNode?.pid ?? "无"}：${hostClass.split("\n")[0]?.slice(0, 80) ?? "无输出"}`
 		);
 	} else {
-		console.log("⏭  跳过 tc 断言：脚本不是以 root 运行（接口在主机自己的 netns 里，`nsenter` 要 root）——`PUT /links` 的属性回读已证明写入链路，tc 那一层不算已验证；以 root 手验用 `nsenter -t <h1 pid> -n tc class show dev h1-eth0`");
+		console.log("⏭  跳过 tc 断言：脚本不是以 root 运行（接口在主机自己的 netns 里，`nsenter` 要 root）——`PUT /links` 的属性回读已证明写入链路，tc 那一层不算已验证；以 root 手验用 `nsenter -t <接口所属主机的 pid> -n tc class show dev <接口名>`");
 	}
 
 	// 保存后页面 `load()` 重读 `GET /links`：再双击一次，输入框里应是新值（不是本地乐观更新）

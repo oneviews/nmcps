@@ -21,6 +21,11 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   拿 pid，再 `SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A nsenter -t <pid> -n tc class show dev h1-eth0`。
 - TCLink 用的是 **`htb`**（不是 `tbf`）：`bw=10` 落成 `class htb 5:1 root prio 0 rate 10Mbit ceil 10Mbit`（2026-11-20 实测），
   所以「带宽有没有生效」要看那行 `rate`，不是看 qdisc 类型名。
+- **`GET /links` 的 `from` / `to` 不是稳定的**：`stop` → `start` 之后同一条链路会换个方向回读
+  （2026-11-21 实测：建链时 `h1→h2`，重启后 `h2→h1`，`intfs` 一起变成 `h2-eth0→h1-eth0`）。
+  写断言时不要按「`h1` 在前」找连线、也不要固定用 `h1` 的 pid 去 `nsenter` 看别的接口 ——
+  `check:lab-real` 的 W13 就因此假红过一次（双击落空 → `PUT /links` 没发 → 后两条跟着红）；
+  现在按「两个节点 id 都在这条连线的无障碍名称里」定位，再按接口名前缀（`h2-eth0` → `h2`）取 pid。
 
 ## 本机 `:8000` 必须跑本仓代码（2026-11-18 现场）
 
