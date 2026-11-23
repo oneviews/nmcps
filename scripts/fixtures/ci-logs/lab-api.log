@@ -5,3 +5,4 @@
 ✅ 停网 / 全量重建都先等 pingall / iperf 收尾（NMCPS-ADR-0026 D3）
 ✅ 吞吐测试自带子进程与硬超时，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）
 ✅ 源码守卫 3/3 组通过（--source-only：未导入后端，无 Mininet 依赖）
+# drill: 注入漂移 2026-11-23T23:30:01Z（随后自动回滚）
