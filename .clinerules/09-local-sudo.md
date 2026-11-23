@@ -61,8 +61,11 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
   （`layers/scenario/scripts/check-lab-real-root.mjs`）：它自己把 `PATH`（nvm 的 `node` 不在 sudo 的
   `secure_path` 里）、`CHECK_REAL_MININET=1`、`REAL_MININET_BASE` 跟在 `sudo -A env …` 之后传，
   并检查 askpass helper 存在可执行 —— 手写这条命令最容易漏变量（漏 `PATH` = `sudo: node: command not found`，
-  漏门禁变量 = 打 `⏭` 却被读成「已验」）。要手工复现等价命令（2026-11-20 实测 root 下 18/18 全绿；
-  2026-11-23 新增真 iperf 用例后共 19 项，整跑待下次 root 回归）：
+  漏门禁变量 = 打 `⏭` 却被读成「已验」）。**`REAL_MININET_BASE` 的缺省是 `http://127.0.0.1:8000`**，
+  本机那个端口被 nginx 的默认 server 占着（回 400），所以包装脚本也要显式传网卡地址：
+  `REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root`。不传时脚本会在空实例守卫附近
+  报错退出（实测 2026-11-23：什么都没测就 `EXIT=1`，极易被读成「用例挂了」）。要手工复现等价命令
+  （2026-11-20 实测 root 下 18/18 全绿；2026-11-23 新增真 iperf 用例后 19/19 全绿）：
   ```bash
   NODE_BIN=$(dirname "$(command -v node)")
   SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A env \
