@@ -120,6 +120,12 @@ class RouterUpdate(BaseModel):
     proxy_arp: Optional[bool] = None
     ip_forward: Optional[bool] = None
 
+# 停网前等正在跑的 pingall / iperf 收尾的上限（NMCPS-ADR-0026 D3）：
+# 一次 pingall 在 9 节点网络上实测 42.6 秒，180 秒留足余量；超时就记日志继续停，
+# 不把运维卡在一个卡死的测试上。
+PINGALL_IDLE_TIMEOUT_SECONDS = 180.0
+
+
 class IperfRequest(BaseModel):
     client: str
     server: str
@@ -706,6 +712,29 @@ async def _stop_all_sniffers_quietly():
         pass
 
 
+async def _await_idle_operations(timeout: float = PINGALL_IDLE_TIMEOUT_SECONDS) -> bool:
+    """Wait (bounded) for a running pingall / iperf before tearing nodes down.
+
+    `pingFull()` cannot be cancelled (Mininet has no hook), and rebuilding the
+    topology while it iterates node interfaces kills the upstream with
+    `AttributeError: 'NoneType' object has no attribute 'IP'` (measured
+    2026-11-21, NMCPS-ADR-0026 D3). So stop waits instead of racing: poll the
+    two flags on the event loop, and if the deadline passes, log and continue
+    stopping anyway -- an operator must never be blocked by a stuck test.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while app.pingall_running or app.iperf_running:
+        if loop.time() >= deadline:
+            info(
+                f"*** pingall/iperf still running after {timeout:.0f}s, "
+                "stopping the network anyway\n"
+            )
+            return False
+        await asyncio.sleep(0.2)
+    return True
+
+
 async def _stop_mininet_with_timeout(timeout: float = 5.0):
     controllers = list(getattr(app.net, "controllers", []) or [])
     if controllers:
@@ -832,6 +861,9 @@ def start_network():
 @app.post("/api/mininet/stop")
 async def stop_network():
     """Stop network and nodes"""
+    # 先等正在跑的探测 / 测速收尾：pingFull() 不可中断，中途拆节点会让上游
+    # AttributeError（NMCPS-ADR-0026 D3）
+    await _await_idle_operations()
     await _stop_all_sniffers_quietly()
     _terminate_all_terminals()
     app.iperf_running = False
@@ -892,6 +924,8 @@ async def reset_network():
 @app.post("/api/mininet/full_reset")
 async def full_reset_network():
     """Full reset: stop everything, cleanup, and clear saved topology."""
+    # 与 stop_network() 同一条约束：清理拓扑前先等探测 / 测速收尾（NMCPS-ADR-0026 D3）
+    await _await_idle_operations()
     await _stop_all_sniffers_quietly()
     _terminate_all_terminals()
     clear_log_file()

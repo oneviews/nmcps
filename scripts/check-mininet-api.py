@@ -178,7 +178,25 @@ if "app.link_attrs.pop(key, None)" not in delete_node_src:
         "删节点后 export 仍会输出挂在该节点上的死链路"
     )
 
+# NMCPS-ADR-0026 D3：停网 / 全量重建前必须先等正在跑的 pingall / iperf 收尾。
+# `pingFull()` 不可中断，中途拆节点会让上游以 `AttributeError: 'NoneType' object has no
+# attribute 'IP'` 崩掉（2026-11-21 实测）。两条路径都漏掉等待就等于把这条裁决写在注释里。
+await_idle_src = inspect.getsource(lab_api._await_idle_operations)
+if "app.pingall_running" not in await_idle_src or "app.iperf_running" not in await_idle_src:
+    raise SystemExit(
+        "_await_idle_operations() 没同时看 pingall_running / iperf_running："
+        "只等其中一个仍会在另一个跑着时拆节点"
+    )
+for name in ("stop_network", "full_reset_network"):
+    src = inspect.getsource(getattr(lab_api, name))
+    if "await _await_idle_operations()" not in src:
+        raise SystemExit(
+            f"{name}() 拆节点前没有 await _await_idle_operations()："
+            "pingall / iperf 跑到一半被拆节点会让上游 AttributeError（NMCPS-ADR-0026 D3）"
+        )
+
 print("✅ 无控制器交换机默认 standalone：四个 OVS 分支 + 导出脚本一致（NMCPS-ADR-0024）")
+print("✅ 停网 / 全量重建都先等 pingall / iperf 收尾（NMCPS-ADR-0026 D3）")
 print(f"✅ Mininet 后端可导入：{len(http_paths)} 条 HTTP 路径 / {len(ws_paths)} 条 WebSocket 路径，无 CORS 中间件")
 print(f"   HTTP: {', '.join(sorted(http_paths)[:3])} …")
 print(f"   WS:   {', '.join(sorted(ws_paths))}")
