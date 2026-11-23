@@ -20,9 +20,10 @@
 #   bff         → `136/136 项通过`
 #   ui          → `299/299 项通过`
 #   lab-terminal → `6/6 项通过（真实 bash + PTY）`
+#   lab-api     → `源码守卫 3/3 组通过`（`--source-only`，无 Mininet 依赖）
 set -eu
 
-KEYS='lint typecheck i18n governance bff ui lab-terminal'
+KEYS='lint typecheck i18n governance bff ui lab-terminal lab-api'
 
 # 表本体：case 分支即数据，新增步骤 = 加一个 key + 在 ci.yml 加一个调用点
 lookup() {
@@ -49,6 +50,11 @@ lookup() {
 			# 与 bff / ui 同为「N/N 项通过」，但额外要求真 PTY 的括号说明：脚本被改成
 			# 只吐计数、或非 POSIX 静默跳过（没有小结行）都要在这里显形。
 			printf '%s\n' '[0-9]+/[0-9]+ 项通过（真实 bash \+ PTY）'
+			;;
+		lab-api)
+			# Mininet 后端源码守卫（`--source-only`）：三组断言跑完才有这一行，
+			# 某组被跳过、脚本退化到只打印计数、或 import 失败被当成「跳过」都在这里显形。
+			printf '%s\n' '源码守卫 [0-9]+/[0-9]+ 组通过'
 			;;
 		*)
 			return 1

@@ -36,7 +36,7 @@ Browser/Tauri
 |---|---|
 | `pnpm dev` / `pnpm dev:web` | 启动 Nuxt |
 | `pnpm dev:lab-api` | 启动 Mininet FastAPI（`127.0.0.1:8000`） |
-| `pnpm lab:check` | 导入后端并校验 HTTP/WS 路由 |
+| `pnpm lab:check` | 导入后端并校验 HTTP/WS 路由（CI 只跑 `--source-only` 的源码守卫，见 `lab-api` 步骤） |
 | `pnpm check:lab-bff` | 校验 `/api/lab/**` 只读 BFF 通道（需先 `build:server`） |
 | `pnpm check:lab-flows` | 校验流表编辑纯函数（草稿校验 / 请求体 / 清流请求体 / 行号口径） |
 | `pnpm check:lab-run` | 校验运行控制纯函数（运行态三态 / iperf 校验与请求体 / pingall 与 iperf 文本化） |

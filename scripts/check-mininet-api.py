@@ -1,20 +1,153 @@
 #!/usr/bin/env python3
 """Mininet 仿真后端的最小静态自检。
 
-只做 import + 路由清单校验，不启动 uvicorn、不创建 Mininet 网络。
-供仓库根目录 `pnpm lab:check` 使用；需要在 Linux 上具备 Mininet 依赖。
+两种模式共用同一批断言函数（`check_*()`），断言语义只有一份：
+  python3 scripts/check-mininet-api.py                完整自检：导入后端 + 路由清单 / CORS / standalone 落库
+  python3 scripts/check-mininet-api.py --source-only  只跑源码守卫，零第三方依赖（CI 的 `lab-api` 步骤用它）
+
+完整模式用 `inspect.getsource()` 取函数体，`--source-only` 从 `api.py` 文本里切同名函数，跑的是同一批断言。
+不启动 uvicorn、不创建 Mininet 网络。
+
+为什么要有 `--source-only`：`pnpm lab:check` 要 import fastapi / starlette / mininet，而 CI 的 quality job
+不装这些依赖，于是「iperf 不许回到 `Net.iperf()`」这条守卫一度只在本机能跑 —— 2026-11-23 那条会永久挂起的
+回归路径就是这么回到线上的。源码守卫进 CI 后，回归在 PR 上就变红，不用等人记得本地跑一次。
 """
 
 from __future__ import annotations
 
+import inspect
+import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+SOURCE_ONLY = "--source-only" in sys.argv[1:]
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICE_DIR = ROOT / "services" / "mininet-api"
+API_PATH = SERVICE_DIR / "mininet_gui_backend" / "api.py"
 
-if not (SERVICE_DIR / "mininet_gui_backend" / "api.py").exists():
+if not API_PATH.exists():
     raise SystemExit(f"缺少 Mininet 后端源码：{SERVICE_DIR}")
+
+# 源码守卫分三组：组名进 ✅ 行，最后的 `3/3` 由这张表算出来，漏跑一组会当场报错。
+SOURCE_GROUPS = ("链路生命周期", "停网 / 重建前等待", "iperf 子进程")
+passed: list[str] = []
+
+
+def _function_source(text: str, name: str) -> str:
+    """从 `api.py` 文本里切出顶层函数（`--source-only` 用）。"""
+    match = re.search(rf"^(?:async )?def {name}\(", text, re.MULTILINE)
+    if match is None:
+        raise SystemExit(f"api.py 里找不到 {name}()：断言指向的函数被改名或删除（NMCPS-ADR-0024 / 0026）")
+    rest = text[match.start():]
+    following = re.search(r"^(?:@|(?:async )?def |class )", rest[1:], re.MULTILINE)
+    return rest if following is None else rest[: following.start() + 1]
+
+
+def _pass(group: str, summary: str) -> None:
+    passed.append(group)
+    print(f"✅ {summary}")
+
+
+# NMCPS-ADR-0024 第二条：运行中加链路时，无控制器的交换机也必须重新初始化端口。
+# OVSSwitch.start() 是 del-br + add-br，只有走这一步新链路接口才会 add-port 进 bridge。
+# 老实现写的是 `elif node.type == "sw" and node.controller:`，于是 controller=None 的交换机
+# （经 BFF 新建的常态）在运行中加链路后端口不在 bridge 里 —— 链路台账有、ARP 也到了交换机，
+# 但 bridge 里没有那条 port，帧无处可去，ping 依旧 100% 丢包。
+def check_link_lifecycle(source_of) -> None:
+    create_link_src = source_of("create_link")
+    if re.search(r'elif node\.type == "sw"\s+and\s+node\.controller', create_link_src):
+        raise SystemExit(
+            "create_link() 仍只给有控制器的交换机初始化端口："
+            "无控制器交换机在运行中加链路后端口进不了 bridge（NMCPS-ADR-0024）"
+        )
+    if not re.search(r"node\.start\(\s*\[controller_node\]\s+if\s+controller_node\s+else\s+\[\]\s*\)", create_link_src):
+        raise SystemExit(
+            "create_link() 缺少无控制器交换机的 node.start([]) 分支："
+            "运行中新增链路的端口不会被 add-port 进 bridge"
+        )
+    if "node.failMode = switch_fail_mode(" not in create_link_src:
+        raise SystemExit(
+            "create_link() 重启交换机前没按控制器关联重设 failMode："
+            "重启会把 bridge 重建回默认 secure"
+        )
+
+    # 删除路径的对称要求：Mininet 的 delNode / delLink 只删接口、不通知 OVS，bridge 里会留下
+    # `ofport: -1` 的鬼端口（`ovs-vsctl list-ports` 看起来链路还在），删节点还会把死链路留在
+    # app.links 里让 export 输出已不存在的链路。
+    delete_node_src = source_of("delete_node")
+    delete_link_src = source_of("delete_link")
+    for name, src in (("delete_node", delete_node_src), ("delete_link", delete_link_src)):
+        if "release_switch_port(" not in src:
+            raise SystemExit(
+                f"{name}() 删除前没有 release_switch_port()："
+                "交换机侧端口会作为 ofport=-1 的鬼端口留在 bridge 里"
+            )
+    if "app.link_attrs.pop(key, None)" not in delete_node_src:
+        raise SystemExit(
+            "delete_node() 没清理 app.links / app.link_attrs："
+            "删节点后 export 仍会输出挂在该节点上的死链路"
+        )
+    _pass("链路生命周期", "加 / 删链路时交换机端口与 failMode 跟着走（NMCPS-ADR-0024）")
+
+
+# NMCPS-ADR-0026 D3：停网 / 全量重建前必须先等正在跑的 pingall / iperf 收尾。
+# `pingFull()` 不可中断，中途拆节点会让上游以 `AttributeError: 'NoneType' object has no
+# attribute 'IP'` 崩掉（2026-11-21 实测）。两条路径都漏掉等待就等于把这条裁决写在注释里。
+def check_idle_guard(source_of) -> None:
+    await_idle_src = source_of("_await_idle_operations")
+    if "app.pingall_running" not in await_idle_src or "app.iperf_running" not in await_idle_src:
+        raise SystemExit(
+            "_await_idle_operations() 没同时看 pingall_running / iperf_running："
+            "只等其中一个仍会在另一个跑着时拆节点"
+        )
+    for name in ("stop_network", "full_reset_network"):
+        src = source_of(name)
+        if "await _await_idle_operations()" not in src:
+            raise SystemExit(
+                f"{name}() 拆节点前没有 await _await_idle_operations()："
+                "pingall / iperf 跑到一半被拆节点会让上游 AttributeError（NMCPS-ADR-0026 D3）"
+            )
+    _pass("停网 / 重建前等待", "停网 / 全量重建都先等 pingall / iperf 收尾（NMCPS-ADR-0026 D3）")
+
+
+
+# NMCPS-ADR-0026 §5：iperf 不能再回到 Mininet 的 `Net.iperf()`。Debian 打包版的实现用
+# `while len(re.findall('/sec', servout)) < 2` 判断收尾，第 2 个 `/sec` 来自 `waitListening()`
+# 的 telnet 探测；而本机 iperf 2.2.1 对那条零字节连接不再打印速率行，于是循环永不结束、
+# `iperf_running` 卡死、两端 shell 留在 waiting，紧接着的 pingall 直接 500（2026-11-23 实测）。
+def check_iperf_guard(source_of) -> None:
+    run_iperf_src = source_of("run_iperf")
+    if "net.iperf(" in run_iperf_src or "app.net.iperf(" in run_iperf_src:
+        raise SystemExit(
+            "run_iperf() 又在调 Mininet 的 `Net.iperf()`：打包版实现等第 2 个 /sec 却等不到，"
+            "端点会无限挂起并把 iperf_running 卡在 True（NMCPS-ADR-0026 §5）"
+        )
+    for needle, reason in (
+        ("subprocess.Popen", "服务端没有自己起进程（收尾就没法保证）"),
+        ("subprocess.run", "客户端没有自己的硬超时（上游一发散就永久占住 iperf_running）"),
+        ("app.iperf_running = False", "异常路径没有复位 iperf_running"),
+    ):
+        if needle not in run_iperf_src:
+            raise SystemExit(
+                f"run_iperf() {reason}：iperf 挂起后 pingall / stop 会一起被拖住（NMCPS-ADR-0026 §5）"
+            )
+    _pass("iperf 子进程", "吞吐测试自带子进程与硬超时，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）")
+
+
+# `--source-only`：不 import 后端（CI 没有 fastapi / starlette / mininet），只读 `api.py` 文本。
+if SOURCE_ONLY:
+    api_text = API_PATH.read_text(encoding="utf-8")
+    for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard):
+        check(lambda name, text=api_text: _function_source(text, name))
+    if passed != list(SOURCE_GROUPS):
+        raise SystemExit(f"源码守卫只跑了 {len(passed)}/{len(SOURCE_GROUPS)} 组：{passed}")
+    print(
+        f"✅ 源码守卫 {len(passed)}/{len(SOURCE_GROUPS)} 组通过"
+        "（--source-only：未导入后端，无 Mininet 依赖）"
+    )
+    raise SystemExit(0)
 
 sys.path.insert(0, str(SERVICE_DIR))
 
@@ -60,11 +193,6 @@ if cors_middleware:
 # Mininet 的 OVSSwitch 默认 failMode='secure'，secure 模式下没有已连接的控制器就既没有
 # 流表也没有 NORMAL 兜底，帧全部丢弃（现场：pingall 100% 丢包）；而经 BFF 新建的交换机
 # controller 恒为 None，所以「没有控制器」是常态而不是例外。
-from types import SimpleNamespace  # noqa: E402
-
-import inspect  # noqa: E402
-import re  # noqa: E402
-
 from mininet_gui_backend import api as lab_api  # noqa: E402
 from mininet_gui_backend.schema import Switch  # noqa: E402
 
@@ -139,85 +267,15 @@ if 'failMode="standalone"' not in exported_off or 'failMode="secure"' not in exp
         f"无控制器={exported_off} / 有控制器={exported_on}"
     )
 
-# NMCPS-ADR-0024 第二条：运行中加链路时，无控制器的交换机也必须重新初始化端口。
-# OVSSwitch.start() 是 del-br + add-br，只有走这一步新链路接口才会 add-port 进 bridge。
-# 老实现写的是 `elif node.type == "sw" and node.controller:`，于是 controller=None 的交换机
-# （经 BFF 新建的常态）在运行中加链路后端口不在 bridge 里 —— 链路台账有、ARP 也到了交换机，
-# 但 bridge 里没有那条 port，帧无处可去，ping 依旧 100% 丢包。
-create_link_src = inspect.getsource(lab_api.create_link)
-if re.search(r'elif node\.type == "sw"\s+and\s+node\.controller', create_link_src):
-    raise SystemExit(
-        "create_link() 仍只给有控制器的交换机初始化端口："
-        "无控制器交换机在运行中加链路后端口进不了 bridge（NMCPS-ADR-0024）"
-    )
-if not re.search(r"node\.start\(\s*\[controller_node\]\s+if\s+controller_node\s+else\s+\[\]\s*\)", create_link_src):
-    raise SystemExit(
-        "create_link() 缺少无控制器交换机的 node.start([]) 分支："
-        "运行中新增链路的端口不会被 add-port 进 bridge"
-    )
-if "node.failMode = switch_fail_mode(" not in create_link_src:
-    raise SystemExit(
-        "create_link() 重启交换机前没按控制器关联重设 failMode："
-        "重启会把 bridge 重建回默认 secure"
-    )
-
-# 删除路径的对称要求：Mininet 的 delNode / delLink 只删接口、不通知 OVS，bridge 里会留下
-# `ofport: -1` 的鬼端口（`ovs-vsctl list-ports` 看起来链路还在），删节点还会把死链路留在
-# app.links 里让 export 输出已不存在的链路。
-delete_node_src = inspect.getsource(lab_api.delete_node)
-delete_link_src = inspect.getsource(lab_api.delete_link)
-for name, src in (("delete_node", delete_node_src), ("delete_link", delete_link_src)):
-    if "release_switch_port(" not in src:
-        raise SystemExit(
-            f"{name}() 删除前没有 release_switch_port()："
-            "交换机侧端口会作为 ofport=-1 的鬼端口留在 bridge 里"
-        )
-if "app.link_attrs.pop(key, None)" not in delete_node_src:
-    raise SystemExit(
-        "delete_node() 没清理 app.links / app.link_attrs："
-        "删节点后 export 仍会输出挂在该节点上的死链路"
-    )
-
-# NMCPS-ADR-0026 D3：停网 / 全量重建前必须先等正在跑的 pingall / iperf 收尾。
-# `pingFull()` 不可中断，中途拆节点会让上游以 `AttributeError: 'NoneType' object has no
-# attribute 'IP'` 崩掉（2026-11-21 实测）。两条路径都漏掉等待就等于把这条裁决写在注释里。
-await_idle_src = inspect.getsource(lab_api._await_idle_operations)
-if "app.pingall_running" not in await_idle_src or "app.iperf_running" not in await_idle_src:
-    raise SystemExit(
-        "_await_idle_operations() 没同时看 pingall_running / iperf_running："
-        "只等其中一个仍会在另一个跑着时拆节点"
-    )
-for name in ("stop_network", "full_reset_network"):
-    src = inspect.getsource(getattr(lab_api, name))
-    if "await _await_idle_operations()" not in src:
-        raise SystemExit(
-            f"{name}() 拆节点前没有 await _await_idle_operations()："
-            "pingall / iperf 跑到一半被拆节点会让上游 AttributeError（NMCPS-ADR-0026 D3）"
-        )
-
-# NMCPS-ADR-0026 §5：iperf 不能再回到 Mininet 的 `Net.iperf()`。Debian 打包版的实现用
-# `while len(re.findall('/sec', servout)) < 2` 判断收尾，第 2 个 `/sec` 来自 `waitListening()`
-# 的 telnet 探测；而本机 iperf 2.2.1 对那条零字节连接不再打印速率行，于是循环永不结束、
-# `iperf_running` 卡死、两端 shell 留在 waiting，紧接着的 pingall 直接 500（2026-11-23 实测）。
-run_iperf_src = inspect.getsource(lab_api.run_iperf)
-if "net.iperf(" in run_iperf_src or "app.net.iperf(" in run_iperf_src:
-    raise SystemExit(
-        "run_iperf() 又在调 Mininet 的 `Net.iperf()`：打包版实现等第 2 个 /sec 却等不到，"
-        "端点会无限挂起并把 iperf_running 卡在 True（NMCPS-ADR-0026 §5）"
-    )
-for needle, reason in (
-    ("subprocess.Popen", "服务端没有自己起进程（收尾就没法保证）"),
-    ("subprocess.run", "客户端没有自己的硬超时（上游一发散就永久占住 iperf_running）"),
-    ("app.iperf_running = False", "异常路径没有复位 iperf_running"),
-):
-    if needle not in run_iperf_src:
-        raise SystemExit(
-            f"run_iperf() {reason}：iperf 挂起后 pingall / stop 会一起被拖住（NMCPS-ADR-0026 §5）"
-        )
-
 print("✅ 无控制器交换机默认 standalone：四个 OVS 分支 + 导出脚本一致（NMCPS-ADR-0024）")
-print("✅ 停网 / 全量重建都先等 pingall / iperf 收尾（NMCPS-ADR-0026 D3）")
-print("✅ 吞吐测试自带子进程与硬超时，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）")
+
+# 与 `--source-only` 跑的是同一批断言，这里只是换个取源码的方式（inspect 而不是切文本）。
+for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard):
+    check(lambda name: inspect.getsource(getattr(lab_api, name)))
+
+if passed != list(SOURCE_GROUPS):
+    raise SystemExit(f"源码守卫只跑了 {len(passed)}/{len(SOURCE_GROUPS)} 组：{passed}")
+
 print(f"✅ Mininet 后端可导入：{len(http_paths)} 条 HTTP 路径 / {len(ws_paths)} 条 WebSocket 路径，无 CORS 中间件")
 print(f"   HTTP: {', '.join(sorted(http_paths)[:3])} …")
 print(f"   WS:   {', '.join(sorted(ws_paths))}")

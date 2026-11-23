@@ -11,6 +11,10 @@
 		"sha256": "9be0ee1543270321b1417e2203951968042182f6ca61be447cb770b7f61254b4",
 		"source": "本地 `pnpm check:i18n` 真实输出尾部（2026-11-17 重采）"
 	},
+	"lab-api": {
+		"sha256": "0fbe8678871cfd8aaaf4c3b89e3da9f440a17cf1f0c2a84a2b5911c75dbcd3a6",
+		"source": "本地 `python3 scripts/check-mininet-api.py --source-only` 真实输出尾部（2026-11-23 重采）"
+	},
 	"lab-terminal": {
 		"sha256": "b1d4b3b5a5d36c20995a98c41512a5947bb45ba239e03c41cd5398ba1b31c4a2",
 		"source": "本地 `pnpm check:lab-terminal` 真实输出尾部（2026-11-17 重采）"
