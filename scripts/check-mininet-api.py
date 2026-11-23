@@ -195,8 +195,29 @@ for name in ("stop_network", "full_reset_network"):
             "pingall / iperf 跑到一半被拆节点会让上游 AttributeError（NMCPS-ADR-0026 D3）"
         )
 
+# NMCPS-ADR-0026 §5：iperf 不能再回到 Mininet 的 `Net.iperf()`。Debian 打包版的实现用
+# `while len(re.findall('/sec', servout)) < 2` 判断收尾，第 2 个 `/sec` 来自 `waitListening()`
+# 的 telnet 探测；而本机 iperf 2.2.1 对那条零字节连接不再打印速率行，于是循环永不结束、
+# `iperf_running` 卡死、两端 shell 留在 waiting，紧接着的 pingall 直接 500（2026-11-23 实测）。
+run_iperf_src = inspect.getsource(lab_api.run_iperf)
+if "net.iperf(" in run_iperf_src or "app.net.iperf(" in run_iperf_src:
+    raise SystemExit(
+        "run_iperf() 又在调 Mininet 的 `Net.iperf()`：打包版实现等第 2 个 /sec 却等不到，"
+        "端点会无限挂起并把 iperf_running 卡在 True（NMCPS-ADR-0026 §5）"
+    )
+for needle, reason in (
+    ("subprocess.Popen", "服务端没有自己起进程（收尾就没法保证）"),
+    ("subprocess.run", "客户端没有自己的硬超时（上游一发散就永久占住 iperf_running）"),
+    ("app.iperf_running = False", "异常路径没有复位 iperf_running"),
+):
+    if needle not in run_iperf_src:
+        raise SystemExit(
+            f"run_iperf() {reason}：iperf 挂起后 pingall / stop 会一起被拖住（NMCPS-ADR-0026 §5）"
+        )
+
 print("✅ 无控制器交换机默认 standalone：四个 OVS 分支 + 导出脚本一致（NMCPS-ADR-0024）")
 print("✅ 停网 / 全量重建都先等 pingall / iperf 收尾（NMCPS-ADR-0026 D3）")
+print("✅ 吞吐测试自带子进程与硬超时，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）")
 print(f"✅ Mininet 后端可导入：{len(http_paths)} 条 HTTP 路径 / {len(ws_paths)} 条 WebSocket 路径，无 CORS 中间件")
 print(f"   HTTP: {', '.join(sorted(http_paths)[:3])} …")
 print(f"   WS:   {', '.join(sorted(ws_paths))}")

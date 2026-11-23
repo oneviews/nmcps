@@ -13,6 +13,8 @@ import os
 import pty
 import json
 import select
+import signal
+import time
 import asyncio
 import subprocess
 import logging
@@ -124,6 +126,21 @@ class RouterUpdate(BaseModel):
 # 一次 pingall 在 9 节点网络上实测 42.6 秒，180 秒留足余量；超时就记日志继续停，
 # 不把运维卡在一个卡死的测试上。
 PINGALL_IDLE_TIMEOUT_SECONDS = 180.0
+
+# iperf 自己的三个上限（NMCPS-ADR-0026 的 D1 修订）：
+# 这里不再调用 Mininet 的 `Net.iperf()` —— 它靠「服务端输出里出现 2 个 /sec」判断结束，
+# 而 iperf 2.2.1 对 `waitListening` 的零字节 telnet 探测不再打印速率行，条件永远不成立，
+# 端点就此永久挂起（`iperf_running` 卡在 True，两端 shell 也被留在 waiting 状态）。
+# 现在自己起进程：服务端后台、客户端用 `timeout` 包住、全部走 subprocess 并带硬超时，
+# 任何路径（含异常）都会把服务端收干净、把 `iperf_running` 复位。
+IPERF_START_TIMEOUT_SECONDS = 15.0
+# 客户端跑满 `-t` 之后还要收尾收包：余量给足，但绝不无限等
+IPERF_CLIENT_GRACE_SECONDS = 20.0
+# 与浏览器侧 `LAB_IPERF_SECONDS_MAX` 同口径（`layers/scenario/shared/types/labRun.ts`）
+IPERF_SECONDS_MAX = 3600
+IPERF_DEFAULT_PORT = 5001
+IPERF_OUTPUT_TAIL_LINES = 12
+IPERF_OUTPUT_LIMIT = 4000
 
 
 class IperfRequest(BaseModel):
@@ -1563,6 +1580,93 @@ def delete_flow_by_id(switch_id: str, flow_id: int):
         raise HTTPException(status_code=400, detail=detail)
     return {"status": "ok", "match": match}
 
+def _iperf_namespace_command(node, args: List[str]) -> List[str]:
+    """在节点自己的 netns 里执行命令（Mininet 节点持有宿主 pid）。"""
+    pid = getattr(node, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        raise HTTPException(status_code=409, detail="host process is not running")
+    return ["nsenter", "-t", str(pid), "-n", *args]
+
+
+def _iperf_output_tail(text: str) -> str:
+    """输出的最后几行：够定位问题，又不会把整段 pty 噪声塞回浏览器。"""
+    lines = [line.rstrip() for line in (text or "").splitlines() if line.strip()]
+    return "\n".join(lines[-IPERF_OUTPUT_TAIL_LINES:])[:IPERF_OUTPUT_LIMIT]
+
+
+def _iperf_rate_of(text: str) -> str:
+    """取最后一条带宽读数（`… Gbits/sec`）；没有就返回空串。"""
+    for line in reversed((text or "").splitlines()):
+        match = re.search(r"([\d.]+\s+[KMGTP]?bits/sec)", line)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _drain_iperf_process(process) -> str:
+    """收掉 `iperf -s` 并取回它的输出。
+
+    先 SIGINT 而不是 SIGKILL：iperf 自己的信号处理会打印报告再退出，
+    直接 -9 会把还在 stdio 缓冲里的服务端读数一起丢掉。幂等 ——
+    重复调用（正常路径取过输出、`finally` 再兜一次）只会拿到空串。
+    """
+    try:
+        if process.poll() is None:
+            try:
+                process.send_signal(signal.SIGINT)
+            except Exception:
+                pass
+        output, _ = process.communicate(timeout=5)
+        return output or ""
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            output, _ = process.communicate(timeout=5)
+            return output or ""
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+
+def _wait_for_iperf_listener(process, server_node, port: int, udp: bool) -> None:
+    """等 `iperf -s` 真正 listen：在服务端自己的 netns 里用 `ss` 查这个端口。
+
+    协议无关（TCP 查 `-ltn`、UDP 查 `-lun`），而且不产生任何连接 —— 旧实现走 mininet 的
+    `waitListening()`，那条 telnet 连接既会产生速率行噪声，又是把 `Net.iperf()` 拖进死循环的诱因。
+    """
+    probe_args = ["ss", "-H", "-lun" if udp else "-ltn", f"sport = :{port}"]
+    deadline = time.monotonic() + IPERF_START_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            output = _drain_iperf_process(process)
+            raise HTTPException(
+                status_code=400,
+                detail=f"iperf server exited: {_iperf_output_tail(output) or 'no output'}",
+            )
+        try:
+            probe = subprocess.run(
+                _iperf_namespace_command(server_node, probe_args),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            probe = None
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"cannot enter host netns: {exc}") from exc
+        if probe is not None and probe.returncode == 0 and probe.stdout.strip():
+            return
+        time.sleep(0.2)
+    raise HTTPException(
+        status_code=504,
+        detail=(
+            f"iperf server did not listen on port {port} within "
+            f"{IPERF_START_TIMEOUT_SECONDS:.0f}s"
+        ),
+    )
+
+
 @app.post("/api/mininet/iperf")
 def run_iperf(request: IperfRequest):
     if not app.net.is_started:
@@ -1578,27 +1682,82 @@ def run_iperf(request: IperfRequest):
     if getattr(client_node, "type", None) != "host" or getattr(server_node, "type", None) != "host":
         raise HTTPException(status_code=400, detail="client and server must be hosts")
 
-    kwargs = {}
-    if request.udp_bw:
-        kwargs["udpBw"] = request.udp_bw
+    l4_type = (request.l4_type or "TCP").strip().upper() or "TCP"
+    if l4_type not in ("TCP", "UDP"):
+        raise HTTPException(status_code=400, detail="l4_type must be TCP or UDP")
+    seconds = request.seconds if request.seconds is not None else 5
+    if not 1 <= seconds <= IPERF_SECONDS_MAX:
+        raise HTTPException(status_code=400, detail=f"seconds must be between 1 and {IPERF_SECONDS_MAX}")
+    port = request.port if request.port is not None else IPERF_DEFAULT_PORT
+    if not 1 <= port <= 65535:
+        raise HTTPException(status_code=400, detail="port must be between 1 and 65535")
+
+    base_args = ["iperf", "-p", str(port)]
+    if l4_type == "UDP":
+        base_args.append("-u")
     if request.fmt:
-        kwargs["fmt"] = request.fmt
-    if request.seconds:
-        kwargs["seconds"] = request.seconds
-    if request.port:
-        kwargs["port"] = request.port
+        base_args += ["-f", request.fmt]
+
+    server_ip = server_node.IP()
+    client_args = [
+        "timeout",
+        str(int(seconds + IPERF_CLIENT_GRACE_SECONDS)),
+        *base_args,
+        "-t",
+        str(seconds),
+        "-c",
+        server_ip,
+    ]
+    if l4_type == "UDP":
+        client_args += ["-b", request.udp_bw or "10M"]
 
     app.iperf_running = True
+    server_process = None
     try:
-        result = app.net.iperf(
-            hosts=[client_node, server_node],
-            l4Type=request.l4_type or "TCP",
-            **kwargs,
+        server_process = subprocess.Popen(
+            _iperf_namespace_command(server_node, [*base_args, "-s"]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
-        if isinstance(result, (list, tuple)) and len(result) >= 2:
-            return {"client": result[0], "server": result[1]}
-        return {"result": result}
+        _wait_for_iperf_listener(server_process, server_node, port, l4_type == "UDP")
+        try:
+            client = subprocess.run(
+                _iperf_namespace_command(client_node, client_args),
+                capture_output=True,
+                text=True,
+                timeout=seconds + IPERF_CLIENT_GRACE_SECONDS + 5,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "iperf client did not finish within "
+                    f"{int(seconds + IPERF_CLIENT_GRACE_SECONDS)}s"
+                ),
+            ) from exc
+        client_output = f"{client.stdout or ''}{client.stderr or ''}"
+        server_output = _drain_iperf_process(server_process)
+        if client.returncode != 0 and not _iperf_rate_of(client_output):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "iperf failed: "
+                    + (_iperf_output_tail(client_output) or f"exit {client.returncode}")
+                ),
+            )
+        info(
+            f"*** iperf {l4_type} {request.client}->{request.server} {seconds}s: "
+            f"client={_iperf_rate_of(client_output) or 'n/a'} "
+            f"server={_iperf_rate_of(server_output) or 'n/a'}\n"
+        )
+        return {
+            "client": _iperf_output_tail(client_output),
+            "server": _iperf_output_tail(server_output),
+        }
     finally:
+        if server_process is not None:
+            _drain_iperf_process(server_process)
         app.iperf_running = False
 
 @app.get("/api/mininet/export_script", response_class=PlainTextResponse)

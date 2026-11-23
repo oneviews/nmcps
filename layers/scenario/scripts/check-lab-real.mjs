@@ -7,7 +7,8 @@
 //   演示开关预填 alice → 运行态读真后端 → 栏顶「停止 / 启动 / 重启」真打 Mininet（h1 的 pid 换人）→
 //   五标签切换 → 真提示符 → 算术执行 →
 //   方向键行内编辑 → `Ctrl-L` 清屏后仍可用 → 粘贴整段执行 → `Ctrl+V` 不留 `v` →
-//   切标签不拆 socket → 收起右栏全断 → 双击链路改带宽（W13）并回读上游属性。
+//   切标签不拆 socket → 收起右栏全断 → 双击链路改带宽（W13）并回读上游属性 →
+//   真后端 iperf 收尾并回读两侧读数（2026-11-23 补的 D1 缺口）。
 //
 // 门禁：默认**不跑**（脚本会建 h1 / h2 与一条链路、起停一个真网络），必须显式开门：
 //   CHECK_REAL_MININET=1 pnpm check:lab-real
@@ -19,7 +20,7 @@
 // 覆盖：有些机器 127.0.0.1:8000 被 nginx 的默认 SSL server 占着，只有走网卡地址才能拿到后端。
 // 前置：`pnpm build:server`（消费 `.output/server/index.mjs`）+ 一个**空**的真后端
 // （`GET /api/mininet/start` 为 false 且 hosts / switches / routers / nats / controllers 全空）。
-// root 整跑（tc 那一层不再跳过，共 18 项）：`sudo -A env PATH=… CHECK_REAL_MININET=1 … node <本文件>`，
+// root 整跑（tc 那一层不再跳过，共 19 项）：`sudo -A env PATH=… CHECK_REAL_MININET=1 … node <本文件>`，
 // 完整命令见 `.clinerules/09-local-sudo.md`；`sudo` 会重置环境变量，所以那几个变量得跟在 `env` 之后。
 // 结束时脚本自己收尾：停网络、删掉它建的 `h1` / `h2`（连带那条自建链路）、删临时台账；
 // 不碰别人正在跑的拓扑 —— 所以空实例守卫是硬门，别为了「跑通」把它去掉。
@@ -52,11 +53,12 @@ const log = (name, ok, detail) => {
 };
 
 /** 真后端的直连调用：只用于**准备与收尾**（建 / 删节点、起停网络、读健康） */
-const call = async (method, path, body) => {
+const call = async (method, path, body, timeoutMs) => {
 	const response = await fetch(`${REAL_BASE}${path}`, {
 		method,
 		headers: body === undefined ? undefined : { "content-type": "application/json" },
-		body: body === undefined ? undefined : JSON.stringify(body)
+		body: body === undefined ? undefined : JSON.stringify(body),
+		signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
 	});
 	const text = await response.text();
 	let json;
@@ -365,6 +367,38 @@ try {
 		`真后端=${startedForReal} 徽章=${afterStart.badge} 启动禁用=${afterStart.start}`
 		+ ` 停止禁用=${afterStart.stop} 重启禁用=${afterStart.restart}`
 		+ ` 探测=${pingWhileRunning.status} h1进程=${pidAfterStart}`
+	);
+
+	// ── 吞吐测试：真 iperf（2026-11-23 补的 D1 缺口） ──
+	// 旧实现走 Mininet 的 `Net.iperf()`，它等「服务端输出里第 2 个 `/sec`」；
+	// Debian 打包的 mininet 用 `waitListening()` 的 telnet 探测，而本机 iperf 2.2.1
+	// 对那条零字节连接不再打印速率行 → 条件永远不成立，端点永久挂起、`iperf_running`
+	// 卡死，紧接着的 pingall 还会因为两端 shell 留在 waiting 而以 AssertionError 500。
+	// 现在上游自己起进程并带硬超时，所以这里必须证明：能收尾、两侧都有读数、标志复位。
+	const iperfStarted = Date.now();
+	const iperfFirst = await call("POST", "/api/mininet/iperf", {
+		client: NODE_ID,
+		server: NODE_ID_2,
+		l4_type: "TCP",
+		seconds: 3
+	}, 120000);
+	const iperfElapsed = Date.now() - iperfStarted;
+	const iperfSecond = await call("POST", "/api/mininet/iperf", {
+		client: NODE_ID_2,
+		server: NODE_ID,
+		l4_type: "TCP",
+		seconds: 1
+	}, 120000);
+	const lastLine = (text) => String(text ?? "").trim().split("\n").pop() ?? "";
+	log(
+		"11.10 真后端 iperf：3 秒内收尾、两侧都有带宽读数，紧接着再跑一次不撞 409（标志已复位）",
+		iperfFirst.status === 200
+		&& /bits\/sec/.test(String(iperfFirst.json?.client ?? ""))
+		&& /bits\/sec/.test(String(iperfFirst.json?.server ?? ""))
+		&& iperfElapsed < 60000
+		&& iperfSecond.status === 200,
+		`首个=${iperfFirst.status} 耗时=${iperfElapsed}ms 客户端=${JSON.stringify(lastLine(iperfFirst.json?.client))}`
+		+ ` 服务端=${JSON.stringify(lastLine(iperfFirst.json?.server))} 第二个=${iperfSecond.status}`
 	);
 
 	// ── 重启 = 先停再起：stop 段会重建拓扑（h1 换 pid），结束后必须回到运行中 ──
