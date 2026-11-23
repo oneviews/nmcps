@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.55.2
+version: 0.57.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-19"
+updatedAt: "2026-11-23"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -254,3 +254,5 @@ tags:
 | 2026-11-19 | 0.55.2 | **实验台设备栏移到画布外并撑满高度，运行控制搬到栏顶**：需求方要求「设备选取栏放到拓扑图外边、占据整个容器高度靠上摆放，并把 toolbar『运行』菜单的功能放到设备栏顶部」。`SimulatorNodePaletteRail` 去掉全部定位类（`absolute left-2 top-1/2` 一并删除），画布区改成 flex 行：设备栏是第一个子项（`w-[72px] shrink-0 self-stretch`，与画布同高、内容从顶部开始、类型列表在列内滚动），画布本体是第二个子项。栏顶 `#top` 常驻运行控制（`mininet-run-start` / `-stop` / `-restart` 与 `mininet-reset-network`，禁用条件与运行态同源）和「生成拓扑」，工具栏「运行」菜单整组删除、`menu.run` 文案随之下线（1528 → 1527 键）；整列只在 `create \|\| operate` 时渲染，只有 `operate` 的会话类型列表为空。`check:ui` 11.4 改为断言「设备栏在画布**外面**、与画布同高、生成拓扑在栏顶」，运行控制用例直接点栏顶按钮并读原生 `disabled`。`NMCPS-ADR-0022` 补 W10 段（CN / EN），`.clinerules/11-lab-ui.md` 三处描述同步订正。 |
 
 | 2026-11-21 | 0.56.0 | **登记 ADR-0026「长时操作的出站预算与台账运行态对账」并修两条实验台故障**。① 真后端 9 节点上 `POST /api/mininet/pingall` 实测 42.6 秒，而 BFF 出站超时是 15 秒 —— 请求被判 `504 mininet_timeout`、页面只剩 `<no response> Failed to fetch`，上游却仍在逐对 ping；此时点「停止」会在 `pingFull()` 中途拆节点，上游死于 `AttributeError: 'NoneType' object has no attribute 'IP'`。② 台账 `.data/lab-ledger.json` 的 `state` 是 seed 的 `running`，上游 `GET /api/mininet/start` 回 `false`，于是「没启动的网」显示运行中。裁决：D1 长时端点（`start` / `stop` / `reset` / `full_reset` / `import_json` / `pingall` / `iperf`）用独立预算 `longTimeoutMs`（默认 180000，`NUXT_MININET_LONG_TIMEOUT_MS` 可覆盖，租户实例可带 `longTimeoutMs`），读端点仍 15 秒；D2 浏览器侧同一预算（`LAB_LONG_OPERATION_TIMEOUT_MS`，客户端预算必须 ≥ BFF，否则看不到 BFF 的 504）；D3 上游 `stop_network()` / `full_reset_network()` 拆节点前 `await _await_idle_operations()`（200ms 轮询、最长 180 秒，超时后继续并记日志），不在 `pingFull()` 中途重建拓扑；D4 `GET /api/lab/networks` 出口前按租户读一次 `GET /api/mininet/start`，只纠正 `running` ↔ `stopped`，读不到 / 非布尔 / 无实例一律保持原值；D5 不引入 job + 轮询，重估触发条件写死。验收：`check:lab-bff` 新增 ⑮（短预算 1.2 秒 / 长预算 3 秒 + 上游延迟 2 秒 → 读端点 504、长时端点 200；台账 `running` + 上游 `false` → 列表回 `stopped`；上游读失败 → 保持 `running`），`lab:check` 断言两个停网路径都 await 空闲等待，`check:ui` 11.3 的期望从「运行中」改为「已停止」（seed 仍写 `running`，这条就是回归用例）。 |
+
+| 2026-11-23 | 0.57.0 | **真机 iperf 修掉一条会永久挂起的执行路径（ADR-0026 §5）**。`tenantadmin` 在真后端跑 `POST /api/mininet/iperf`（`h1`→`h2` TCP 3 秒）**120 秒无响应**、`iperf_running` 卡 `True`、两端 shell 留在 waiting；紧接着的 `pingall` 以 `AssertionError`（`mininet/node.py:303`）500，`POST /stop` 只能靠 D3 的 180 秒守卫收场（实测 182.3 秒）。根因：Debian 打包 mininet 的 `Mininet.iperf()` 等第 2 个 `/sec`，而本机 iperf 2.2.1 对 `waitListening()` 的零字节 telnet 探测不再打速率行（隔离 `unshare -n` 复现）。裁决：`run_iperf()` 不再用 `Net.iperf()`，改 `nsenter -t <pid> -n` 起 `iperf -s` / `iperf -c` —— 服务端 Popen + SIGINT 收尾、客户端 `timeout` + `subprocess.run` 硬超时、`ss` 查监听就绪（TCP/UDP 都适用、不建连接）、`finally` 收进程并复位标志；客户端超时回 504、非零退出且无速率行回 400（正文是输出尾部）。实测 TCP 3 秒 4.4 秒 / UDP 2 秒 2.3 秒 / 紧接着 TCP 1 秒 2.0 秒（28.3 Gbits/sec、10.5 Mbits/sec），之后 `pingall` 正常且无残留 `iperf -s`；`check:lab-real` 增真 iperf 用例（18 → 19 项）。 |
