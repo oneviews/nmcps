@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.scenario
 status: baseline
-version: 0.1.0
+version: 0.1.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -22,7 +22,7 @@ dependsOn:
   - NMCPS-ARCH-001
   - NMCPS-ARCH-002
 createdAt: "2026-10-25"
-updatedAt: "2026-10-25"
+updatedAt: "2026-11-25"
 icon: "carbon:map"
 tags:
   - "领域基准"
@@ -69,7 +69,7 @@ tags:
 
 - **上游依赖**：拓扑/设备数据（见 `NMCPS-ARCH-002`）、数据下发（见 `NMCPS-ARCH-001`）。
 - **消费方**：transmission（任务数据下发）、dashboard（推演结果呈现）。
-- **不承载**：底层仿真引擎实现。
+- **不承载**：底层仿真引擎实现（见 `NMCPS-DESIGN-008`）。
 
 ---
 
@@ -86,3 +86,4 @@ tags:
 | 日期 | 版本 | 变更 |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | 首版：固化场景建模领域基准（定位、功能范围、数据实体、边界、演进）。 |
+| 2026-11-25 | 0.1.1 | §四「不承载」补指针：底层仿真引擎实现见 `NMCPS-DESIGN-008`。边界本身不变。 |

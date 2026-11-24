@@ -2,7 +2,7 @@
 
 > **用途**：把「2.0 废弃 `:8001`、由本仓重新实现其全部功能」拆成可排期的模块清单。本文是
 > 工程计划产物（`docs/ai/` 作业面），**不是受治理文档**，不参与 `pnpm check:doc-system`；
-> 定稿后的裁决进 `NMCPS-ADR-0027` / `NMCPS-DESIGN-008` / `NMCPS-ARCH-007`。
+> 定稿后的裁决进 `NMCPS-DESIGN-008`（已登记，2026-11-25）/ `NMCPS-ADR-0027` / `NMCPS-ARCH-007`。
 >
 > **数据来源**：`_reference/netsim/backend`（只读参考）与本仓 `services/mininet-api` 的实测行数、
 > 端点清单（2026-11-24 实测）。参考侧行数含 `.bak-*` 热修残留文件，已单独剔除。
@@ -316,7 +316,7 @@
 ## 七、下一步
 
 1. 「废弃 `:8001`」写进 `NMCPS-ADR-0027`（引擎面定位 + R1–R8），把 P0 边界冻结成受治理文档。
-2. P0 范围折进 `NMCPS-DESIGN-008`；部署 / 特权 / token 与端口约束折进 `NMCPS-ARCH-007`。
+2. P0 范围折进 `NMCPS-DESIGN-008`（**已登记**，2026-11-25，`layers/content/collections/cn/architecture/2.domain/simulation.md`）；部署 / 特权 / token 与端口约束折进 `NMCPS-ARCH-007`（待登记）。
 3. 起 M1：统一 node 模型 + `/api/simulation/sessions/{id}/nodes` 接管有线 CRUD，
    同时把会话路径登记进 BFF 白名单（含权限位、台账归属、审计），前端从 `/api/mininet/**` 迁过来。
    **进度（2026-11-24）**：统一节点 / 链路与白名单已落地（见 §五之二「M1 已落地」）；

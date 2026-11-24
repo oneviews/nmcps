@@ -12,7 +12,7 @@ authority: normative
 scope:
   - domain.scenario
 status: baseline
-version: 0.1.0
+version: 0.1.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -21,7 +21,7 @@ dependsOn:
   - NMCPS-ARCH-001
   - NMCPS-ARCH-002
 createdAt: "2026-10-25"
-updatedAt: "2026-10-25"
+updatedAt: "2026-11-25"
 icon: "carbon:map"
 tags:
   - "Domain"
@@ -68,7 +68,7 @@ Scenario modeling is the "drill plane" of the NMS: it abstracts network operatio
 
 - **Upstream**: topology/device data (`NMCPS-ARCH-002`), data dispatch (`NMCPS-ARCH-001`).
 - **Consumers**: transmission (data dispatch), dashboard (result display).
-- **Out of scope**: low-level simulation engine.
+- **Out of scope**: low-level simulation engine (see `NMCPS-DESIGN-008`).
 
 ---
 
@@ -85,3 +85,4 @@ Scenario modeling is the "drill plane" of the NMS: it abstracts network operatio
 | Date | Version | Change |
 | :--- | :--- | :--- |
 | 2026-10-25 | 0.1.0 | Initial: scenario modeling domain baseline. |
+| 2026-11-25 | 0.1.1 | §4 "Out of scope" gains a pointer: the low-level simulation engine lives in `NMCPS-DESIGN-008`. The boundary itself is unchanged. |

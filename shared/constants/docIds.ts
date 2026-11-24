@@ -54,6 +54,7 @@ export const DOC_PATHS = {
 	"NMCPS-DESIGN-005": "layers/content/collections/cn/architecture/2.domain/system.md",
 	"NMCPS-DESIGN-006": "layers/content/collections/cn/architecture/2.domain/scenario.md",
 	"NMCPS-DESIGN-007": "layers/content/collections/cn/architecture/2.domain/dashboard.md",
+	"NMCPS-DESIGN-008": "layers/content/collections/cn/architecture/2.domain/simulation.md",
 	"NMCPS-CONTRACT-001": "layers/content/collections/cn/architecture/3.contract/shared-types.md",
 	"NMCPS-CONTRACT-002": "layers/content/collections/cn/architecture/3.contract/metrics.md",
 	"NMCPS-REC-001": "layers/content/collections/cn/records/defects/auth-upstream-defects.md",

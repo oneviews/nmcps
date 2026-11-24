@@ -4,7 +4,7 @@ paths:
 ---
 # Mininet API
 
-本目录是独立部署的 FastAPI 服务，不是 Nitro 的一部分。
+本目录是独立部署的 FastAPI 服务，不是 Nitro 的一部分。引擎面的领域裁决（会话为资源根、统一节点投影、阶段边界）见 `NMCPS-DESIGN-008`（`layers/content/collections/cn/architecture/2.domain/simulation.md`）。
 
 - 沿用 `mininet_gui_backend/` 现有模块划分；新增文件放同包内，不建第二套入口。
 - 依赖保持 `requirements.txt` + `pyproject.toml` 显式声明；不引入 Node 工具链。
