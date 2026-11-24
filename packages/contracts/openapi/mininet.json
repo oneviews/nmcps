@@ -665,6 +665,25 @@
         "title": "LinkOptions",
         "type": "object"
       },
+      "LinkStateUpdate": {
+        "description": "链路 ifconfig 状态（`NMCPS-ADR-0027` §4 R8 的引擎面读 / 写补齐）。\n\n`toggle` 由**服务端**按当前状态取反：页面只有一个「来回切」按钮，客户端不该先读一次再算目标值\n（两次往返之间状态可能已变，客户端算出来的目标就是旧结论）。",
+        "properties": {
+          "state": {
+            "enum": [
+              "up",
+              "down",
+              "toggle"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "LinkStateUpdate",
+        "type": "object"
+      },
       "LinkUpdate": {
         "properties": {
           "dst": {
@@ -1945,6 +1964,63 @@
           }
         },
         "summary": "Get Link Stats"
+      }
+    },
+    "/api/mininet/links/{src_id}/{dst_id}/state": {
+      "patch": {
+        "description": "把一条链路的两个接口 `ifconfig up|down`，并写回运行态读数。\n\n为什么单独一条端点而不是塞进 `PUT /links`：`PUT /links` 改的是 `TCLink` 的**属性**\n（bw / delay / loss，落 `app.link_attrs`，停网重建后仍然生效），这里改的是链路**此刻通不通**\n（运行态，停网 / 重建即失效）。两件事的生命周期不同，混成一个请求就会在停网后「看起来还断着」。\n\n网络未启动时回 400：接口不存在，`up` / `down` 无处可落；此刻写下的状态也无法在\n`GET /links` 里被验证（`_link_status()` 那时恒为 `unknown`），等于让客户端收到一个假成功。",
+        "operationId": "set_link_state_api_mininet_links__src_id___dst_id__state_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "src_id",
+            "required": true,
+            "schema": {
+              "title": "Src Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dst_id",
+            "required": true,
+            "schema": {
+              "title": "Dst Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkStateUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Link State"
       }
     },
     "/api/mininet/nats": {

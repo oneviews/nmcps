@@ -323,6 +323,10 @@ class WiredEngine(Engine):
                 "dst": target,
                 "options": dict(edge.get("options") or {}),
             }
+            # 运行态读数（`up` / `down` / `unknown`）：legacy `list_edges()` 已给，引擎层只做透传 ——
+            # 它不在 `LinkSpec` 里，因为状态改的是「此刻通不通」，不是链路的配置属性。
+            if edge.get("status"):
+                record["status"] = str(edge["status"])
             if edge.get("intfs"):
                 record["intfs"] = edge["intfs"]
             links.append(record)

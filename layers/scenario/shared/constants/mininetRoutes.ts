@@ -69,7 +69,7 @@ export function isLongOperationRoute(route: Pick<MininetRoute, "method" | "templ
 }
 
 /**
- * 白名单本体（21 条查询 + 36 条写端点，其中 12 条是 2.0 会话入口）。
+ * 白名单本体（22 条查询 + 37 条写端点，其中 12 条是 2.0 会话入口）。
  *
  * 刻意**不登记**：
  * - `export_json` / `export_script` / `sniffer/export`：响应是文本 / pcap 二进制，
@@ -126,6 +126,9 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 	{ method: "PATCH", template: "/hosts/{host_id}", upstream: "/api/mininet/hosts/{host_id}", permissions: ["lab:operate"] },
 	{ method: "PATCH", template: "/routers/{router_id}", upstream: "/api/mininet/routers/{router_id}", permissions: ["lab:operate"] },
 	{ method: "PUT", template: "/links", upstream: "/api/mininet/links", permissions: ["lab:operate"] },
+	// 链路通断（`NMCPS-ADR-0027` §4 R8）：`up` / `down` / `toggle` 改的是**运行态**，与
+	// `PUT /links` 的属性（bw / delay / loss，停网重建后仍生效）是两件事，因此单列一条端点。
+	{ method: "PATCH", template: "/links/{src_id}/{dst_id}/state", upstream: "/api/mininet/links/{src_id}/{dst_id}/state", permissions: ["lab:operate"] },
 	{ method: "PUT", template: "/controllers/{controller_id}", upstream: "/api/mininet/controllers/{controller_id}", permissions: ["lab:operate"] },
 	{ method: "PUT", template: "/switches/{switch_id}/openflow", upstream: "/api/mininet/switches/{switch_id}/openflow", permissions: ["lab:operate"] },
 	{ method: "DELETE", template: "/delete_link/{src_id}/{dst_id}", upstream: "/api/mininet/delete_link/{src_id}/{dst_id}", permissions: ["lab:operate"] },

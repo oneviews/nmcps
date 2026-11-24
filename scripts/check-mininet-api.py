@@ -303,6 +303,85 @@ if 'failMode="standalone"' not in exported_off or 'failMode="secure"' not in exp
 
 print("✅ 无控制器交换机默认 standalone：四个 OVS 分支 + 导出脚本一致（NMCPS-ADR-0024）")
 
+
+# 链路通断（NMCPS-ADR-0027 §4 R8）：`up` / `down` / `toggle` 只改运行态，且必须能分辨三种拒绝。
+# 用桩网 / 桩链路跑真函数：不需要 root，也不创建命名空间；`ifconfig` 的调用参数就是断言对象。
+class _StubIntf:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls: list[tuple] = []
+
+    def ifconfig(self, *args) -> str:
+        self.calls.append(args)
+        return ""
+
+
+class _StubLink:
+    def __init__(self) -> None:
+        self.intf1 = _StubIntf("h1-eth0")
+        self.intf2 = _StubIntf("h2-eth0")
+
+
+state_link = _StubLink()
+state_key = frozenset(("h1", "h2"))
+saved_state = {
+    name: (hasattr(lab_api.app, name), getattr(lab_api.app, name, None))
+    for name in ("net", "links", "link_attrs", "link_states")
+}
+lab_api.app.links = {state_key: state_link}
+lab_api.app.link_attrs = {state_key: {"bw": 10}}
+lab_api.app.link_states = {}
+try:
+    from fastapi import HTTPException  # noqa: E402 - 完整模式才有 fastapi
+
+    lab_api.app.net = SimpleNamespace(is_started=False)
+    try:
+        lab_api.set_link_state("h1", "h2", lab_api.LinkStateUpdate(state="down"))
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise SystemExit(f"未启动的网络上改链路状态回了 {exc.status_code}，期望 400（接口还不存在）")
+    else:
+        raise SystemExit("未启动的网络上改链路状态成功了：客户端会收到一个无法验证的假状态")
+    if lab_api._link_status(state_key) != "unknown":
+        raise SystemExit(
+            f"未启动时 _link_status={lab_api._link_status(state_key)!r}，期望 unknown（不是 up）"
+        )
+
+    try:
+        lab_api.set_link_state("h1", "nope", lab_api.LinkStateUpdate(state="down"))
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise SystemExit(f"不存在的链路回了 {exc.status_code}，期望 404")
+    else:
+        raise SystemExit("不存在的链路改状态成功了：路径参数没有被当成台账键校验")
+
+    lab_api.app.net = SimpleNamespace(is_started=True)
+    first = lab_api.set_link_state("h1", "h2", lab_api.LinkStateUpdate(state="toggle"))
+    if first.get("status") != "down":
+        raise SystemExit(f"首次 toggle 得到 {first.get('status')!r}，期望 down")
+    if state_link.intf1.calls != [("down",)] or state_link.intf2.calls != [("down",)]:
+        raise SystemExit(
+            f"toggle → down 时两端接口调用为 {state_link.intf1.calls}/{state_link.intf2.calls}，"
+            "期望两段都 ifconfig('down')（只断一端等于链路还通）"
+        )
+    second = lab_api.set_link_state("h1", "h2", lab_api.LinkStateUpdate(state="toggle"))
+    if second.get("status") != "up" or state_link.intf1.calls[-1] != ("up",):
+        raise SystemExit(
+            f"再次 toggle 得到 {second.get('status')!r} / {state_link.intf1.calls[-1]!r}，期望 up"
+        )
+    if first.get("options") != {"bw": 10}:
+        raise SystemExit(f"链路通断回了 options={first.get('options')!r}，期望原样带回台账属性")
+    if lab_api._link_status(state_key) == "unknown":
+        raise SystemExit("网络运行中仍读到 unknown：运行态读数没跟着写回")
+finally:
+    for name, (existed, value) in saved_state.items():
+        if existed:
+            setattr(lab_api.app, name, value)
+        elif hasattr(lab_api.app, name):
+            delattr(lab_api.app, name)
+
+print("✅ 链路通断只改运行态：未启动 400 / 未知链路 404 / toggle 由服务端取反（NMCPS-ADR-0027 §4 R8）")
+
 # 与 `--source-only` 跑的是同一批断言，这里只是换个取源码的方式（inspect 而不是切文本）。
 for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard):
     check(lambda name: inspect.getsource(getattr(lab_api, name)))

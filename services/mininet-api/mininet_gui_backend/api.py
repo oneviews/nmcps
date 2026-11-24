@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from mininet_gui_backend.sniffer import SnifferManager
 import pyshark.ek_field_mapping as ek_field_mapping
 from pyshark.tshark.output_parser.tshark_ek import TsharkEkJsonParser
-from typing import Any, Tuple, Union, Optional, Set, Dict, List
+from typing import Any, Tuple, Union, Optional, Set, Dict, List, Literal
 from contextlib import asynccontextmanager
 import pkgutil
 
@@ -91,6 +91,16 @@ class LinkUpdate(BaseModel):
     src: str
     dst: str
     options: Optional[LinkOptions] = None
+
+
+class LinkStateUpdate(BaseModel):
+    """链路 ifconfig 状态（`NMCPS-ADR-0027` §4 R8 的引擎面读 / 写补齐）。
+
+    `toggle` 由**服务端**按当前状态取反：页面只有一个「来回切」按钮，客户端不该先读一次再算目标值
+    （两次往返之间状态可能已变，客户端算出来的目标就是旧结论）。
+    """
+
+    state: Literal["up", "down", "toggle"]
 
 
 class ControllerUpdate(BaseModel):
@@ -206,6 +216,10 @@ async def lifespan(app: FastAPI):
     app.routers = dict()
     app.links = dict()
     app.link_attrs = dict()
+    # 链路 ifconfig 状态（`up` / `down`）：**运行态**而不是配置，键与 `app.links` 同口径。
+    # 网络没起来时一律按 `unknown` 读（见 `_link_status()`）—— 停网后回 `up` 等于替上游宣称
+    # 「这条线通着」，而此刻两端命名空间根本不在了。
+    app.link_states = dict()
     app.terminals = dict()
     app.sniffers = dict()
     app.sniffer_manager = SnifferManager(list_mininet_interfaces, start_sniffer_process)
@@ -896,6 +910,27 @@ def list_unified_nodes():
     return unified_nodes()
 
 
+def _link_states() -> dict:
+    """`app.link_states` 的惰性初始化：lifespan 会建它，但自检脚本可能只 import `app` 就调函数。"""
+    states = getattr(app, "link_states", None)
+    if states is None:
+        states = dict()
+        app.link_states = states
+    return states
+
+
+def _link_status(key) -> str:
+    """链路的运行态读数：`up` / `down` / `unknown`。
+
+    是**读出来的运行态**而不是配置项：网络没起来时两端的命名空间都不存在，任何具体读数都是编的，
+    因此回 `unknown`（页面渲染 `—`）。`app.link_states` 只在 `PATCH /links/{src}/{dst}/state`
+    成功后才写入，`stop` / `full_reset` 会清空它 —— 重建后的接口是全新的，旧的 `down` 不成立。
+    """
+    if getattr(app.net, "is_started", False) is not True:
+        return "unknown"
+    return _link_states().get(key, "up")
+
+
 @app.get("/api/mininet/links")
 def list_edges():
     edges = []
@@ -913,7 +948,13 @@ def list_edges():
             to_node = intf2.node.name
             intfs = {"from": intf1.name, "to": intf2.name}
         if from_node and to_node:
-            edges.append({"from": from_node, "to": to_node, "options": attrs, "intfs": intfs})
+            edges.append({
+                "from": from_node,
+                "to": to_node,
+                "options": attrs,
+                "intfs": intfs,
+                "status": _link_status(key),
+            })
     return edges
 
 @app.get("/api/mininet/start")
@@ -967,6 +1008,8 @@ async def stop_network():
     app.net = Mininet(autoSetMacs=True, topo=Topo())
     app.net.is_started = False
     app.links = dict()
+    # 重建出来的接口是全新的：旧的 `down` 不会跟着新接口成立
+    app.link_states = dict()
     # Recreate topology without start
     entries = [
         (add_host_to_net, app.hosts.values(), {}),
@@ -1029,6 +1072,7 @@ async def full_reset_network():
     app.routers = dict()
     app.links = dict()
     app.link_attrs = dict()
+    app.link_states = dict()
     app.terminals = dict()
     app.sniffers = dict()
     app.pingall_running = False
@@ -1311,6 +1355,8 @@ def create_link(payload: Union[Tuple[str, str], LinkCreate]):
     # It is important to store this Link object because
     # mininet (apparently) doesn't have an easy way to access this
     app.links[key] = new_link
+    # 新链路两端接口刚起来：运行态读数从 `up` 起算（旧 `down` 不跟着重建）
+    _link_states()[key] = "up"
     if options:
         app.link_attrs[key] = options.model_dump(exclude_none=True)
     else:
@@ -1347,6 +1393,52 @@ def update_link(payload: LinkUpdate):
             debug("failed to update link config", exc)
 
     return {"from": src, "to": dst, "options": app.link_attrs[key]}
+
+
+@app.patch("/api/mininet/links/{src_id}/{dst_id}/state")
+def set_link_state(src_id: str, dst_id: str, payload: LinkStateUpdate):
+    """把一条链路的两个接口 `ifconfig up|down`，并写回运行态读数。
+
+    为什么单独一条端点而不是塞进 `PUT /links`：`PUT /links` 改的是 `TCLink` 的**属性**
+    （bw / delay / loss，落 `app.link_attrs`，停网重建后仍然生效），这里改的是链路**此刻通不通**
+    （运行态，停网 / 重建即失效）。两件事的生命周期不同，混成一个请求就会在停网后「看起来还断着」。
+
+    网络未启动时回 400：接口不存在，`up` / `down` 无处可落；此刻写下的状态也无法在
+    `GET /links` 里被验证（`_link_status()` 那时恒为 `unknown`），等于让客户端收到一个假成功。
+    """
+    key = frozenset((src_id, dst_id))
+    link = app.links.get(key)
+    if not link:
+        raise HTTPException(status_code=404, detail="link not found")
+    if getattr(app.net, "is_started", False) is not True:
+        raise HTTPException(status_code=400, detail="network must be started to change link state")
+
+    current = _link_states().get(key, "up")
+    if payload.state == "toggle":
+        target = "down" if current == "up" else "up"
+    else:
+        target = payload.state
+
+    for intf in (getattr(link, "intf1", None), getattr(link, "intf2", None)):
+        if not intf or not getattr(intf, "name", None):
+            continue
+        try:
+            intf.ifconfig(target)
+        except Exception as exc:  # noqa: BLE001 - 上游原话要透出，不能吞成 200
+            debug("failed to set link state", intf.name, target, exc)
+            raise HTTPException(status_code=500, detail=f"failed to set {intf.name} {target}: {exc}")
+
+    _link_states()[key] = target
+    intfs = None
+    if getattr(link, "intf1", None) and getattr(link, "intf2", None):
+        intfs = {"from": link.intf1.name, "to": link.intf2.name}
+    return {
+        "from": src_id,
+        "to": dst_id,
+        "status": target,
+        "options": app.link_attrs.get(key, {}),
+        "intfs": intfs,
+    }
 
 
 @app.get("/api/mininet/links/stats/{src_id}/{dst_id}")
@@ -1424,6 +1516,7 @@ def delete_node(node_id: str):
     for key in [k for k in app.links if node_id in k]:
         app.links.pop(key, None)
         app.link_attrs.pop(key, None)
+        _link_states().pop(key, None)
     app.net.delNode(node)
     if node.type == "sw":
         del app.switches[node_id]
@@ -1454,6 +1547,7 @@ def delete_link(src_id: str, dst_id: str):
     app.net.delLink(link)
     del app.links[key]
     app.link_attrs.pop(key, None)
+    _link_states().pop(key, None)
     return {"message": f"Link {key} deleted successfully"}
 
 @app.delete("/api/mininet/remove_association/{src_id}/{dst_id}")

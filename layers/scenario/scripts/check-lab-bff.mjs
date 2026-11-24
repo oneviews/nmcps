@@ -648,6 +648,23 @@ async function startMininet(port) {
 
 			const parsed = raw ? JSON.parse(raw) : undefined;
 
+			// 链路通断（`NMCPS-ADR-0027` §4 R8）：真实后端回 `{ from, to, status, options, intfs }`。
+			// 形状要真：`status` 是服务端算出来的目标值（`toggle` 也不由客户端决定）。
+			const linkState = path.match(/^\/api\/mininet\/links\/([^/]+)\/([^/]+)\/state$/);
+			if (linkState && req.method === "PATCH") {
+				if (!["up", "down", "toggle"].includes(parsed?.state))
+					return send(422, { detail: [{ msg: "invalid state", loc: ["body", "state"] }] });
+				const from = decodeURIComponent(linkState[1]);
+				const to = decodeURIComponent(linkState[2]);
+				return send(200, {
+					from,
+					to,
+					status: parsed.state === "down" ? "down" : "up",
+					options: {},
+					intfs: { from: `${from}-eth0`, to: `${to}-eth0` }
+				});
+			}
+
 			// iperf（NMCPS-ADR-0026 §5）：成功形状 = 真后端的两段输出；失败形状由用例切换
 			if (path === "/api/mininet/iperf" && req.method === "POST") {
 				if (iperf.reply)
@@ -859,7 +876,7 @@ async function startIam(port) {
 
 	log("⓪ 白名单条目可从源码抽取（抽取为空即红）", whitelist.length > 0, `${whitelist.length} 条`);
 	log("⓪ 查询端点 22 条且权限位都是 lab:read", reads.length === 22 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
-	log("⓪ 写端点 36 条且都带非读权限位", writes.length === 36 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 写端点 37 条且都带非读权限位", writes.length === 37 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
 	log("⓪ full_reset / import_json 为双权限（lab:delete + lab:create）", dual.length === 2 && dual.every((entry) => entry.permissions.includes("lab:delete") && entry.permissions.includes("lab:create")), dual.map((entry) => `${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无");
 	log("⓪ 白名单 ⊆ Mininet OpenAPI 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.map((entry) => `${entry.method} ${entry.upstream}`).join(", ") || `${whitelist.length}/${whitelist.length}`);
 }
@@ -882,7 +899,7 @@ try {
 
 		const channel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
 		log("① 未配租户实例的 channel 仍 200 且 configured=false", channel.status === 200 && channel.json?.data?.configured === false, `${channel.status} ${describe(channel.json?.data?.configured)}`);
-		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 58, describe(channel.json?.data));
+		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 59, describe(channel.json?.data));
 		log("① channel 不回传 baseUrl", !JSON.stringify(channel.json ?? {}).includes(mininetBase), describe(channel.json?.data));
 
 		const noPath = await request(port, "/api/mininet");
@@ -1223,6 +1240,14 @@ try {
 		log("⑧ 写请求体原样转发", pingall.status === 200 && pingHit?.body === body, `${pingall.status} body=${describe(pingHit?.body)}`);
 		log("⑧ 出站 content-type 为 application/json（不转发客户端原始头）", pingHit?.headers["content-type"] === "application/json", describe(pingHit?.headers["content-type"]));
 
+		// 链路通断（`NMCPS-ADR-0027` §4 R8）：路径两段都编码、`state` 原样到达、返回值是上游的 `status`
+		const stateBody = JSON.stringify({ state: "down" });
+		const stateHitBefore = mininet.log.length;
+		const linkDown = await request(port, "/api/mininet/links/h1/h2/state", { method: "PATCH", headers: { "content-type": "application/json" }, cookie: auth.cookie, body: stateBody });
+		const stateHit = mininet.log.slice(stateHitBefore).at(-1);
+		log("⑧ PATCH 链路通断到达上游且方法 / 路径一致", linkDown.status === 200 && stateHit?.method === "PATCH" && stateHit?.path === "/api/mininet/links/h1/h2/state", `${linkDown.status} ${stateHit?.method} ${stateHit?.path}`);
+		log("⑧ 链路通断的 state 原样转发、回上游算出的 status", stateHit?.body === stateBody && linkDown.json?.data?.status === "down" && linkDown.json?.data?.from === "h1", `body=${describe(stateHit?.body)} status=${describe(linkDown.json?.data?.status)}`);
+
 		const entries = readAuditEntries(auditFile);
 		const stopEntries = entries.filter((entry) => entry.action === "post /stop");
 		log("⑧ 审计先 allowed 后 succeeded", stopEntries.some((item) => item.result === "allowed") && stopEntries.some((item) => item.result === "succeeded"), describe(stopEntries.map((item) => item.result)));
@@ -1251,6 +1276,10 @@ try {
 
 		const erinReset = await request(port, "/api/mininet/full_reset", { method: "POST", cookie: erin.cookie });
 		log("⑧ full_reset 双权限：只有读权限 → 403", erinReset.status === 403, `${erinReset.status}`);
+
+		const erinStateHits = mininet.log.length;
+		const erinState = await request(port, "/api/mininet/links/h1/h2/state", { method: "PATCH", headers: { "content-type": "application/json" }, cookie: erin.cookie, body: JSON.stringify({ state: "down" }) });
+		log("⑧ 无 lab:operate → 链路通断 403 且不触达上游", erinState.status === 403 && erinState.json?.message === "lab_permission_denied" && mininet.log.length === erinStateHits, `${erinState.status} hits=${mininet.log.length - erinStateHits}`);
 
 		const frank = await login(port, "frank");
 		const frankChannel = await request(port, "/api/mininet/channel", { cookie: frank.cookie });

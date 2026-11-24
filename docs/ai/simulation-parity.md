@@ -2,7 +2,7 @@
 
 > **用途**：把「2.0 废弃 `:8001`、由本仓重新实现其全部功能」拆成可排期的模块清单。本文是
 > 工程计划产物（`docs/ai/` 作业面），**不是受治理文档**，不参与 `pnpm check:doc-system`；
-> 定稿后的裁决进 `NMCPS-DESIGN-008`（已登记，2026-11-25）/ `NMCPS-ARCH-007`（已登记，2026-11-25）/ `NMCPS-ADR-0027`（待登记）。
+> 定稿后的裁决进 `NMCPS-DESIGN-008`（已登记，2026-11-25）/ `NMCPS-ARCH-007`（已登记，2026-11-25）/ `NMCPS-ADR-0027`（已登记，2026-11-25）。
 >
 > **数据来源**：`_reference/netsim/backend`（只读参考）与本仓 `services/mininet-api` 的实测行数、
 > 端点清单（2026-11-24 实测）。参考侧行数含 `.bak-*` 热修残留文件，已单独剔除。
@@ -91,7 +91,7 @@
 | `POST /network/nodes/{id}/execute` | 节点内任意命令 | — | **P2 永久排除** | 不复刻（`NMCPS-ADR-0022` 已排除） |
 | `GET/POST /network/links` | 链路列表 / 建链 | 有 | P0 | 已有（`POST /links` 支持 `options`→TCLink） |
 | `GET/PATCH/DELETE /network/links/{id}` | 单链路读 / 改 / 删 | 部分 | P0 | 已有 `PUT /links` + `delete_link`，语义待对齐 |
-| `POST /network/links/{id}/{up,down,toggle,disable,power}` | 链路动作 | — | P0 | 传输域动作按钮已在 `SIMULATOR_ROUTES` 登记 |
+| `POST /network/links/{id}/{up,down,toggle,disable,power}` | 链路动作 | 部分（`PATCH /links/{src}/{dst}/state`：`up` / `down` / `toggle`） | P0 | `disable` / `power` 未复刻（语义与 `up`/`down` 重叠）；传输域动作按钮仍登记在 `SIMULATOR_ROUTES` |
 | `POST /network/links/{id}/reconfigure` | 重新协商 | — | P1 | 依赖 `tc` + 接口重建 |
 | `POST/DELETE /network/runtime/{nodes,links}` | 运行态增删 | — | P1 | 建网后改动，风险最高，需二次确认 |
 | `PATCH /network/nodes/{id}/ip` | 运行态改地址 | — | P1 | 地址规划域 |
@@ -269,7 +269,7 @@
 | 项 | 位置 | 验收 |
 |---|---|---|
 | 统一节点 / 链路 | `engines/wired.py`：`list_nodes` / `add_node` / `remove_node` / `list_links` / `add_link` / `remove_link` 全部接管；模型类从 `api` 模块按名取（`api.Host`），建网逻辑仍走 legacy `create_*`，错误按 `status_code` 归一成 `EngineInvalidRequest` / `EngineResourceNotFound` | `pnpm check:engines` 7/7（第 7 条跑 `scripts/check-wired-adapter.py`：桩 `api`，无 root / 无 mininet / 无 fastapi） |
-| 会话入口 | 白名单新增 12 条 `/sessions/**` → `/api/simulation/**`（`mininetRoutes.ts`，靠 `isSimulationRoute()` 与 1.x 区分）；查询 4 + 写 8，总计 **22 查询 + 36 写 = 58**（M1.1 之后查询多一条 `/nodes`） | `pnpm check:lab-bff` ⑯ 十条 + ⓪ 计数断言 |
+| 会话入口 | 白名单新增 12 条 `/sessions/**` → `/api/simulation/**`（`mininetRoutes.ts`，靠 `isSimulationRoute()` 与 1.x 区分）；查询 4 + 写 8，M1 时总计 **22 查询 + 36 写 = 58**（会话侧全是 `/sessions/**`；M1.2 之后写端点为 **37**、总计 **59**） | `pnpm check:lab-bff` ⑯ 十条 + ⓪ 计数断言 |
 | 归属 | 台账新增 `session_id`（`shared/types/lab.ts` / `labLedger.parseRecord`）；`POST /sessions` 成功即写回、`DELETE` 解绑（`bindLabNetworkSession()`）；会话路径与台账不一致一律 404（与「不存在」同口径），已绑定时再建 → 409 `lab_session_exists` 且不触达上游 | ⑯「写回台账」「已绑定 409」「未绑定路径 404 零上游请求」 |
 | 写路径复用 | 会话写与 1.x 写共用 `handleWrite()`：审计先行、同网络在途写 409、成功后清单收敛与 `state` 写回（`start` → running、`stop` / 删会话 → stopped） | ⑯「清单收敛」「start → running」「审计 allowed + succeeded」 |
 | 会话归属由 BFF 写 | `sessionCreateBodyOf()`：客户端只能选 `engine` / `name`，`metadata`（`network_id` / `tenant_id` / `actor_id`）由 BFF 填，客户端伪造无效 | ⑯「metadata 由 BFF 写」 |
@@ -288,7 +288,7 @@
 
 | 项 | 位置 | 验收 |
 |---|---|---|
-| 上游统一读 | `api.py` 的 `GET /api/mininet/nodes` → `engines/wired.py` 的 `unified_nodes()`（五类分表的投影：`id/type/name/x/y` 提出、其余进 `attributes`）；会话侧 `WiredEngine.list_nodes()` 先过 `_bound()` 再复用同一投影 | `pnpm lab:check` 37 条 HTTP 路径；`check:engines` 7/7 不变 |
+| 上游统一读 | `api.py` 的 `GET /api/mininet/nodes` → `engines/wired.py` 的 `unified_nodes()`（五类分表的投影：`id/type/name/x/y` 提出、其余进 `attributes`）；会话侧 `WiredEngine.list_nodes()` 先过 `_bound()` 再复用同一投影 | `pnpm lab:check` 38 条 HTTP 路径；`check:engines` 7/7 不变 |
 | 白名单 | `mininetRoutes.ts` 新增 `GET /nodes`（`lab:read`），查询 21 → **22**、总计 **58** 条 | `check:lab-bff` ⓪ 计数 + ②「GET /nodes 转发上游并回统一投影」 |
 | 页面 | `simulator.vue` 的 `load()` 由五张分表并发改为一条 `/api/mininet/nodes` + `/links`；`rawUnifiedNodesOf()` 只认画布支持的五个 kind（`ap`/`station` 到 M3 才进 `NODE_KIND_ICONS`），字段从 `attributes` 摊平 | `check:ui` 299/299（假上游 `scripts/lib/bff-harness.mjs` 同步给出 `/nodes`） |
 
@@ -298,6 +298,25 @@
   `/api/mininet/nodes` 就是「默认会话」的读，因此只读会话（只有 `lab:read`）也能拿到拓扑。
 - **对账（`NMCPS-ADR-0023`）仍读五张分表**：它要按 kind 逐表比对台账清单，统一投影会把「哪张表少了」这条
   信息抹掉；`check:ui` 11.6b 的 `expectedReconcileReads` 因此保持不变。
+
+**M1.2 已落地（链路运行态面，2026-11-25）**
+
+拓扑监控页的链路动作（断开 / 恢复 / 来回切）原先只存在于 `:8001`（`POST /network/links/{id}/{up,down,toggle}`）。
+这一批把「此刻通不通」补进 mininet 引擎面，页面切读路径时才有可打的端点（`NMCPS-ADR-0027` §4 R8 的第 2 个前置）。
+
+| 项 | 位置 | 验收 |
+|---|---|---|
+| 写端点 | `api.py` 的 `PATCH /api/mininet/links/{src_id}/{dst_id}/state`（`{state: up|down|toggle}`）：两端接口 `ifconfig`，`toggle` 由**服务端**按当前状态取反；网络未启动回 `400`、链路不存在回 `404` | `pnpm lab:check` 新增一组桩断言（未启动 400 / 未知链路 404 / 两次 toggle 先 `down` 再 `up` / 两端都调用 `ifconfig`） |
+| 读端点 | `GET /api/mininet/links` 每项加 `status`：`up` / `down` / `unknown`（网络未启动恒 `unknown`，不拿停网前的状态冒充运行态）；`engines/wired.py` 的 `list_links()` 透传同一字段 | `check:lab-bff` ⑧ 两条（PATCH 到达上游 + `state` 原样 + 回上游算出的 `status`；无 `lab:operate` 403 且零上游请求） |
+| 生命周期 | 状态是**运行态**：`stop` / `full_reset` 清空、建链从 `up` 起算、删节点 / 删链路一并摘除；不改 `app.link_attrs`（`bw` / `delay` / `loss` 仍归 `PUT /links`，停网重建后仍生效） | `pnpm lab:check`；`pnpm contracts:gen` 快照更新 |
+| 白名单 | `mininetRoutes.ts` 新增 `PATCH /links/{src_id}/{dst_id}/state`（`lab:operate`），写 36 → **37**、总计 **59**；`GET /api/mininet/channel` 的 `endpointCount` 同步 | `check:lab-bff` ⓪ 计数 / ① `endpointCount === 59` |
+
+**M1.2 明确不做**
+
+- **`disable` / `power`**：参考侧与 `up` / `down` 语义重叠（都落到接口状态），2.0 只复刻三个动作，
+  多余动作不出现在页面上，也不另开端点。
+- **页面切换**：`layers/topology` 的拓扑监控页仍读 `:8001`（`/api/sim/**`）。缺的还有 **LLDP 面**
+  （`/lldp/summary` / `/lldp/neighbors/{node_id}`），那是 R8 的最后一个前置，见 `NMCPS-ADR-0027` §4。
 
 ## 六、未决问题（阻塞项在前）
 
@@ -315,7 +334,10 @@
 
 ## 七、下一步
 
-1. 「废弃 `:8001`」写进 `NMCPS-ADR-0027`（引擎面定位 + R1–R8），把 P0 边界冻结成受治理文档。
+1. ~~「废弃 `:8001`」写进 `NMCPS-ADR-0027`（引擎面定位 + R1–R8），把 P0 边界冻结成受治理文档。~~ **已完成（2026-11-25）**：`NMCPS-ADR-0027`
+   （`layers/content/collections/cn/records/adr/adr-0027.md`）= D1–D7 引擎面定位（唯一引擎面 / 统一 `NodeSpec` / 会话为资源根 /
+   注册表不回落 / 能力位不随参考侧扩张 / 一宿主一实例 fail closed / 移植门禁）+ R1–R8 退役与不复刻清单
+   （R1–R7 逐条对应 `SIMULATOR_EXCLUDED_PREFIXES`，R8 是 `/api/sim/**` 通道退役，含迁移顺序与完成判据）。
 2. P0 范围折进 `NMCPS-DESIGN-008`（**已登记**，2026-11-25，`layers/content/collections/cn/architecture/2.domain/simulation.md`）；部署 / 特权 / token 与端口约束折进 `NMCPS-ARCH-007`（**已登记**，2026-11-25，`layers/content/collections/cn/architecture/1.architecture/lab-deployment-architecture.md`）。
 3. 起 M1：统一 node 模型 + `/api/simulation/sessions/{id}/nodes` 接管有线 CRUD，
    同时把会话路径登记进 BFF 白名单（含权限位、台账归属、审计），前端从 `/api/mininet/**` 迁过来。
