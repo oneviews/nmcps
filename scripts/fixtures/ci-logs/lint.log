@@ -2,4 +2,3 @@
 # source: CI run 45295921703 步骤 "Lint"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-24 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 $ eslint .
-# drill: 注入漂移 2026-11-24T01:02:23Z（随后自动回滚）
