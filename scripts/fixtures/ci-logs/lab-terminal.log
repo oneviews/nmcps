@@ -9,3 +9,4 @@
 ✅ Ctrl-L 0x0c（通用 Ctrl+字母映射）清屏后命令仍能执行
    尾部：root@h1:~# echo after-clear | after-clear | root@h1:~# exit | exit
 6/6 项通过（真实 bash + PTY）
+# drill: 注入漂移 2026-11-24T01:02:23Z（随后自动回滚）
