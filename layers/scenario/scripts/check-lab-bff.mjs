@@ -325,6 +325,13 @@ async function startMininet(port) {
 	};
 
 	/**
+	 * iperf 应答（NMCPS-ADR-0026 §5）：默认回真后端的成功形状 `{ client, server }`；
+	 * `reply` 可切成真后端会回的失败形状（504 客户端超时 / 409 已在跑），供 BFF 层取证
+	 * 「状态码与上游原话原样透传」。
+	 */
+	const iperf = { reply: null };
+
+	/**
 	 * 运行态与延迟注入（NMCPS-ADR-0026 D1 / D4）。
 	 *
 	 * - `runState.started` 决定 `GET /api/mininet/start` 回的裸布尔；`runState.fail` 让同一个
@@ -484,6 +491,16 @@ async function startMininet(port) {
 
 			const parsed = raw ? JSON.parse(raw) : undefined;
 
+			// iperf（NMCPS-ADR-0026 §5）：成功形状 = 真后端的两段输出；失败形状由用例切换
+			if (path === "/api/mininet/iperf" && req.method === "POST") {
+				if (iperf.reply)
+					return send(iperf.reply.status, { detail: iperf.reply.detail });
+				return send(200, {
+					client: `[  3] 0.00-${parsed?.seconds ?? 5}.00 sec  1.00 GBytes  2.00 Gbits/sec  sender`,
+					server: "[  3] 0.00-5.00 sec  1.00 GBytes  2.00 Gbits/sec  receiver"
+				});
+			}
+
 			// 建节点：真实后端回 `{ status: "ok" }`（switch 除外），节点进可变拓扑
 			if (path === "/api/mininet/hosts" && req.method === "POST") {
 				const name = parsed?.name ?? parsed?.id;
@@ -524,6 +541,8 @@ async function startMininet(port) {
 	// 运行态 / 延迟注入（NMCPS-ADR-0026 D1 / D4）：⑮ 要直接改上游事实
 	server.runState = runState;
 	server.delays = delays;
+	// iperf 失败形状注入（⑮ 的 iperf 用例）：`mininet.iperf.reply = { status: 504, detail }`
+	server.iperf = iperf;
 	// 抓包实时流（NMCPS-ADR-0022 D6）：升级记录留在 `snifferSocketLog`，用来证明 BFF 真向上游建了连
 	server.snifferSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
 	return server;
@@ -1430,6 +1449,7 @@ try {
 
 	mininet.delays.set("/api/mininet/hosts", SLOW_UPSTREAM_MS);
 	mininet.delays.set("/api/mininet/pingall", SLOW_UPSTREAM_MS);
+	mininet.delays.set("/api/mininet/iperf", SLOW_UPSTREAM_MS);
 	mininet.runState.started = false;
 	const longLedgerFile = `.data/check-lab-bff-long-${process.pid}.json`;
 	const unknownLedgerFile = `.data/check-lab-bff-unknown-${process.pid}.json`;
@@ -1456,6 +1476,33 @@ try {
 
 			const pingall = await request(port, "/api/lab/pingall", { method: "POST", cookie: auth.cookie });
 			log("⑮ /pingall 走长时预算：同一份 2 秒延迟、预算 3 秒 → 200（不把「还在跑」判成超时）", pingall.status === 200, `${pingall.status} ${describe(pingall.json?.message)}`);
+
+			// iperf 与 pingall 同属长时清单（NMCPS-ADR-0026 D1）：漏登记就会在真网里被 15 秒预算
+			// 误杀成 504，而吞吐测试其实还在跑 —— 页面只看到假失败，用户再点一次就是 409。
+			const iperfBody = { client: "h1", server: "h2", seconds: 1 };
+			const postIperf = () => request(port, "/api/lab/iperf", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				cookie: auth.cookie,
+				body: JSON.stringify(iperfBody)
+			});
+			const iperfOk = await postIperf();
+			log("⑮ /iperf 走长时预算：同一份 2 秒延迟、预算 3 秒 → 200（吞吐测试不被短预算误杀）", iperfOk.status === 200 && typeof iperfOk.json?.data?.client === "string" && typeof iperfOk.json?.data?.server === "string", `${iperfOk.status} ${describe(iperfOk.json?.message)}`);
+
+			const iperfSent = mininet.log.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/iperf").at(-1);
+			const iperfPayload = iperfSent?.body ? JSON.parse(iperfSent.body) : undefined;
+			log("⑮ iperf 请求体原样到达上游（client / server / seconds 不被改写）", iperfPayload?.client === "h1" && iperfPayload?.server === "h2" && iperfPayload?.seconds === 1, `body=${describe(iperfSent?.body)}`);
+
+			// 真后端 §5 的两种失败形状：客户端超时 504、已在跑 409。BFF 若把它们折成 500 / 502，
+			// 页面就分不清「等久一点再试」和「上游坏了」。
+			mininet.iperf.reply = { status: 504, detail: "iperf client did not finish within 8s" };
+			const iperfTimeout = await postIperf();
+			log("⑮ 上游 iperf 客户端超时（504）→ 504 + 上游原话透传（不折叠成 500）", iperfTimeout.status === 504 && String(iperfTimeout.json?.message ?? "").includes("did not finish"), `${iperfTimeout.status} ${describe(iperfTimeout.json?.message)}`);
+
+			mininet.iperf.reply = { status: 409, detail: "iperf already running" };
+			const iperfBusy = await postIperf();
+			log("⑮ 上游 iperf 已在跑（409）→ 409 保留（页面提示稍后再试，而不是未知错误）", iperfBusy.status === 409 && String(iperfBusy.json?.message ?? "").includes("already running"), `${iperfBusy.status} ${describe(iperfBusy.json?.message)}`);
+			mininet.iperf.reply = null;
 
 			const before = mininet.log.filter((entry) => entry.method === "GET" && entry.path === "/api/mininet/start").length;
 			const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
@@ -1488,6 +1535,7 @@ try {
 		mininet.delays.clear();
 		mininet.runState.started = true;
 		mininet.runState.fail = false;
+		mininet.iperf.reply = null;
 	}
 
 	const passed = results.filter((item) => item.ok).length;

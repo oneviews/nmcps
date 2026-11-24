@@ -128,12 +128,46 @@ def check_iperf_guard(source_of) -> None:
         ("subprocess.Popen", "服务端没有自己起进程（收尾就没法保证）"),
         ("subprocess.run", "客户端没有自己的硬超时（上游一发散就永久占住 iperf_running）"),
         ("app.iperf_running = False", "异常路径没有复位 iperf_running"),
+        # 状态码是页面的诊断信息：客户端超时必须回 504（不是 500 / 400），并且正文带输出尾部，
+        # 否则用户在界面上只看到一句通用失败，无从判断是超时还是连不上。
+        ("subprocess.TimeoutExpired", "客户端超时没有单独分支（会落进 400 或直接 500）"),
+        ("status_code=504", "客户端超时没有回 504"),
+        ("_iperf_output_tail(client_output)", "失败正文不是输出尾部（上游原话会丢）"),
+        # 收尾必须无条件：`finally` + drain，异常路径漏收会留下自己的 `iperf -s`，下一次 409。
+        ("finally:", "没有 finally 收尾块"),
+        ("_drain_iperf_process(server_process)", "finally 里没收服务端进程（残留 `iperf -s` 会占住端口）"),
+        # 两个进程都要进节点自己的 netns（Mininet 节点才有 pid），否则命令跑在宿主网络里。
+        ("_iperf_namespace_command(", "没有在节点 netns 里执行（会跑在宿主网络）"),
     ):
         if needle not in run_iperf_src:
             raise SystemExit(
                 f"run_iperf() {reason}：iperf 挂起后 pingall / stop 会一起被拖住（NMCPS-ADR-0026 §5）"
             )
-    _pass("iperf 子进程", "吞吐测试自带子进程与硬超时，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）")
+
+    # 就绪探测必须走服务端 netns 里的 `ss`。换回 Mininet 的 `waitListening()` 就是又一条 telnet
+    # 连接：iperf 2.2.1 不给零字节连接打印速率行，而 `Net.iperf()` 正是靠「第 2 个 /sec」判收尾 ——
+    # 那正是 §5 裁决要拆掉的死循环诱因。
+    if "waitListening" in run_iperf_src:
+        raise SystemExit(
+            "run_iperf() 又用上了 `waitListening()`：telnet 探测会给服务端输出塞噪声，"
+            "且正是 `Net.iperf()` 死循环的诱因（NMCPS-ADR-0026 §5）"
+        )
+    probe_src = source_of("_wait_for_iperf_listener")
+    for needle, reason in (
+        ('"ss"', "就绪探测没有用 `ss`"),
+        ('"-ltn"', "TCP 就绪探测不是 `ss -ltn`（监听态查询）"),
+        ('"-lun"', "UDP 就绪探测不是 `ss -lun`"),
+        ("status_code=504", "服务端起不来时没有回 504（页面会当成 400 参数错）"),
+    ):
+        if needle not in probe_src:
+            raise SystemExit(
+                f"_wait_for_iperf_listener() {reason}：就绪探测退化成猜测，"
+                "客户端会在服务端没 listen 时硬跑（NMCPS-ADR-0026 §5）"
+            )
+    _pass(
+        "iperf 子进程",
+        "吞吐测试自带子进程 / 硬超时 / netns 内 ss 就绪探测，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）",
+    )
 
 
 # `--source-only`：不 import 后端（CI 没有 fastapi / starlette / mininet），只读 `api.py` 文本。

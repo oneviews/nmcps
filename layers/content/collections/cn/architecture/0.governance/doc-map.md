@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.58.0
+version: 0.58.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -257,3 +257,4 @@ tags:
 
 | 2026-11-23 | 0.57.0 | **真机 iperf 修掉一条会永久挂起的执行路径（ADR-0026 §5）**。`tenantadmin` 在真后端跑 `POST /api/mininet/iperf`（`h1`→`h2` TCP 3 秒）**120 秒无响应**、`iperf_running` 卡 `True`、两端 shell 留在 waiting；紧接着的 `pingall` 以 `AssertionError`（`mininet/node.py:303`）500，`POST /stop` 只能靠 D3 的 180 秒守卫收场（实测 182.3 秒）。根因：Debian 打包 mininet 的 `Mininet.iperf()` 等第 2 个 `/sec`，而本机 iperf 2.2.1 对 `waitListening()` 的零字节 telnet 探测不再打速率行（隔离 `unshare -n` 复现）。裁决：`run_iperf()` 不再用 `Net.iperf()`，改 `nsenter -t <pid> -n` 起 `iperf -s` / `iperf -c` —— 服务端 Popen + SIGINT 收尾、客户端 `timeout` + `subprocess.run` 硬超时、`ss` 查监听就绪（TCP/UDP 都适用、不建连接）、`finally` 收进程并复位标志；客户端超时回 504、非零退出且无速率行回 400（正文是输出尾部）。实测 TCP 3 秒 4.4 秒 / UDP 2 秒 2.3 秒 / 紧接着 TCP 1 秒 2.0 秒（28.3 Gbits/sec、10.5 Mbits/sec），之后 `pingall` 正常且无残留 `iperf -s`；`check:lab-real` 增真 iperf 用例（18 → 19 项）。 |
 | 2026-11-23 | 0.58.0 | **iperf 的源码守卫接进 CI（ADR-0026 §5 的机器面）**。`pnpm lab:check` 要 import fastapi / starlette / mininet，而 CI 的 quality job 不装这些依赖，于是「`run_iperf()` 不许再调 `Net.iperf()`」这条守卫此前只在本机能跑 —— 0.57.0 那条会永久挂起的回归正是这样回到线上的。改法：`scripts/check-mininet-api.py` 增加 `--source-only`（只切 `api.py` 文本、零第三方依赖），与完整模式共用同一批 `check_*()` 断言（链路生命周期 / 停网与重建前等待 / iperf 子进程），完整模式改用 `inspect.getsource()` 取同一批函数；`ci.yml` 的 quality job 新增 `Mininet API source guard` 步骤、`scripts/ci-expectations.sh` 新增 `lab-api` key、样本 `scripts/fixtures/ci-logs/lab-api.log` 入清单。计数同步：`ci.yml` 调用点 8 → 9、样本 7 → 8 份、`--write-fixtures` 本地五步 → 六步，quickstart（cn / en）与 `scripts/ci-doctor.sh` 的措辞一并更新。负例已验：把 `subprocess.Popen(` 换成 `net.iperf(` 后 `--source-only` 退出码 1 并打出 `NMCPS-ADR-0026 §5` 的提示。 |
+| 2026-11-23 | 0.58.1 | **iperf 守卫补全到 §5 的全部不变量，BFF 侧补 iperf 用例**。源码守卫原来只钉「不许 `Net.iperf()` + 必须有 `Popen` / `subprocess.run` / 复位」，但把就绪探测换回 `waitListening()` 会把同一条死循环诱因带回来。`check_iperf_guard()` 现在同时钉：`ss` 就绪探测（`-ltn` / `-lun`，源码里不许出现 `waitListening`）、两段命令都走 `_iperf_namespace_command()`（节点自己的 netns）、客户端超时 `504` 且正文是输出尾部、`finally` 里 `_drain_iperf_process(server_process)` 收进程。组数仍是 3 组，`ci.yml` 调用点 / `lab-api` 期望正则与样本都不变。`layers/scenario/scripts/check-lab-bff.mjs` 的假上游新增 iperf 应答（成功 `{ client, server }`、可切 504 / 409），⑮ 增五条：`POST /iperf` 走长时预算（2 秒延迟 / 3 秒预算 → 200）、请求体原样到达上游、上游 504 / 409 连同原话透传；自检项数 135 → 140，全绿实测 `140/140 项通过`。负例已验：把 `"-lun"` 改成 `"-lunX"` 即 `--source-only` 退出码 1 并打出 `UDP 就绪探测不是 ss -lun`。 |
