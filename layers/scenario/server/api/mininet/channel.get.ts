@@ -7,12 +7,12 @@ import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfi
 import { MININET_ROUTES } from "#layers/scenario/shared/constants/mininetRoutes";
 
 /**
- * Lab 通道能力探针：`GET /api/lab/channel`。
+ * Lab 通道能力探针：`GET /api/mininet/channel`。
  *
  * 三条约束（NMCPS-ADR-0020）：
  * 1. 只回能力位，**不回 baseUrl**：实验后端地址属服务端配置；
  * 2. 通道未启用时仍回 200 + `configured: false`：这是“没开”，不是错误；
- * 3. 静态路由优先于 `server/api/lab/[...slug].ts`，本身不触达上游。
+ * 3. 静态路由优先于 `server/api/mininet/[...slug].ts`，本身不触达上游。
  */
 export default defineEventHandler(async (event): Promise<ApiResponse<MininetChannelInfo> | ApiResponse<never>> => {
 	const authorization = await authorizeLab(event, LAB_PERMISSIONS.READ);

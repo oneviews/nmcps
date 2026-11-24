@@ -1,10 +1,10 @@
 // layers/scenario/app/composables/useLabWsChannel.ts
-// `/lab-ws/*` 的通用页面侧通道（NMCPS-ADR-0022 D6）：Webshell / 日志 / 监控共用。
+// `/mininet-ws/*` 的通用页面侧通道（NMCPS-ADR-0022 D6）：Webshell / 日志 / 监控共用。
 //
 // 三条纪律（与 `useLabSnifferStream()` 相同，只是抓包另有历史回填与包归一）：
 // 1. 组件不 `new WebSocket` —— 换票、建连、断流都在这里；组件只读 `lines` / `text` / `status`。
-// 2. 先换票再建连：`POST /api/lab/ws-ticket` 判会话 + 权限位 + 台账并落审计。
-//    票一次性、60 秒；浏览器拿不到上游地址（`url` 是同源 `/lab-ws/<kind>`）。
+// 2. 先换票再建连：`POST /api/mininet/ws-ticket` 判会话 + 权限位 + 台账并落审计。
+//    票一次性、60 秒；浏览器拿不到上游地址（`url` 是同源 `/mininet-ws/<kind>`）。
 // 3. 文本帧原样保留：日志是逐行文本、终端是 PTY 输出（可能不含换行）、监控是 JSON 行，
 //    归一交给各自的纯函数（`labMonitorFrameOf()`），这里不做「猜格式」。
 
@@ -71,7 +71,7 @@ export function useLabWsChannel(kind: LabWsKind) {
 
 		let ticket: ReturnType<typeof labWsTicketOf>;
 		try {
-			ticket = labWsTicketOf(await api.post<unknown>("/api/lab/ws-ticket", target ? { kind, target } : { kind }));
+			ticket = labWsTicketOf(await api.post<unknown>("/api/mininet/ws-ticket", target ? { kind, target } : { kind }));
 		} catch (caught) {
 			// 403 / 400 / 404 / 503 的原文照登：这是「为什么连不上」的唯一诊断
 			status.value = "error";

@@ -17,5 +17,5 @@
 
 - 不手改 `openapi/mininet.json`。
 - 前端不得绕过 BFF 直接访问 Mininet 端口。
-- BFF 的 `/api/lab/**` 白名单必须能追溯到本快照中的 path + method。
+- BFF 的 `/api/mininet/**` 白名单必须能追溯到本快照中的 path + method。
 - WebSocket 不在 OpenAPI 中，后续在 `layers/scenario/shared/constants/mininetRoutes.ts` 单独登记。

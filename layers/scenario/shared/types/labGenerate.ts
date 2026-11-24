@@ -48,7 +48,7 @@ export interface LabGenerateNode {
 	payload: Record<string, unknown>
 }
 
-/** 生成计划的一条链路（`POST /api/lab/links` 的 `{src, dst}`） */
+/** 生成计划的一条链路（`POST /api/mininet/links` 的 `{src, dst}`） */
 export interface LabGenerateLink {
 	src: string
 	dst: string

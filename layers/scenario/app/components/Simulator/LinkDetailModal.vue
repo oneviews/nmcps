@@ -2,7 +2,7 @@
 	<!--
 		链路详情 / 编辑（NMCPS-ADR-0022 W13，复刻旧 `LinkStats.vue` 的双击入口）。
 
-		事实 = 页面台账里的 `options`（`GET /links` 原样）+ `GET /api/lab/links/stats/{src}/{dst}` 的
+		事实 = 页面台账里的 `options`（`GET /links` 原样）+ `GET /api/mininet/links/stats/{src}/{dst}` 的
 		双向 tx/rx；读数读不到只降级那一块。编辑是 `PUT /links`（`lab:operate`），属性全空时**不发请求**
 		—— 上游对空 `options` 只清台账、不回收已生效的 tc，弹窗里写明这一点。
 	-->
@@ -210,7 +210,7 @@
 		statsLoading.value = true;
 		try {
 			const payload = await api.get<unknown>(
-				`/api/lab/links/stats/${encodeURIComponent(link.source)}/${encodeURIComponent(link.target)}`
+				`/api/mininet/links/stats/${encodeURIComponent(link.source)}/${encodeURIComponent(link.target)}`
 			);
 			stats.value = labLinkStatsOf(payload);
 		} catch (caught) {

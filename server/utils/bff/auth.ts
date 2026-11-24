@@ -181,7 +181,7 @@ export function applySessionCookies(event: H3Event, tokens: IamTokens, user?: Au
 		});
 
 		// 实验通道只认签名会话（NMCPS-ADR-0021 §4.1）；密钥缺失时这里静默跳过，
-		// 由 `/api/lab/**` 回 503 bff_auth_not_configured，不影响普通登录。
+		// 由 `/api/mininet/**` 回 503 bff_auth_not_configured，不影响普通登录。
 		issueLabSessionCookie(event, user, tokens.access_token, config.sessionTtlMs);
 	}
 }

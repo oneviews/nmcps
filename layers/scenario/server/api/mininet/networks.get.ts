@@ -7,10 +7,10 @@ import { listLabNetworks, toLabNetworkSummary } from "#layers/scenario/server/ut
 import { reconcileLabNetworkStates } from "#layers/scenario/server/utils/bff/labNetworkStateReconcile";
 
 /**
- * 当前租户的仿真网络台账：`GET /api/lab/networks`。
+ * 当前租户的仿真网络台账：`GET /api/mininet/networks`。
  *
  * - 只回 BFF `id`、状态与资源计数；`upstream_id` / 租户 ID 不出现在出参；
- * - 静态路由优先于 `server/api/lab/[...slug].ts`；
+ * - 静态路由优先于 `server/api/mininet/[...slug].ts`；
  * - 出口前把 `state` 与上游 `GET /api/mininet/start` 对账（`NMCPS-ADR-0026` D4）：
  *   这是本路由**唯一**触达上游的读取，只读一次裸布尔、只纠正 `running` ↔ `stopped`，
  *   读不到就保持原值 —— 台账 seed / 进程重启 / 外部 `mn -c` 都不会再留下

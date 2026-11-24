@@ -12,6 +12,11 @@ import { useRuntimeConfig } from "nitropack/runtime";
 export interface MininetConfig {
 	/** 实验后端基址（server-only，例：`http://127.0.0.1:8000`）；空串＝通道未启用 */
 	baseUrl: string
+	/**
+	 * 入口凭据（`NUXT_MININET_TOKEN` ↔ 后端 `LAB_API_TOKEN`），空串＝只走回环信任。
+	 * 出站只以 `x-lab-token` 头带它；WebSocket 用它算签名，绝不出现在查询串里。
+	 */
+	token: string
 	/** 单次出站超时（毫秒） */
 	timeoutMs: number
 	/** 长时端点（`pingall` / `start` / `stop` …）的出站超时（毫秒），见 `NMCPS-ADR-0026` D1 */
@@ -22,6 +27,7 @@ export interface MininetConfig {
 
 interface MininetInstance {
 	baseUrl: string
+	token?: string
 	timeoutMs?: number
 	longTimeoutMs?: number
 }
@@ -63,8 +69,10 @@ function parseInstance(value: unknown): MininetInstance | undefined {
 
 	const timeout = Number(record.timeoutMs);
 	const longTimeout = Number(record.longTimeoutMs);
+	const token = toStringOrNull(record.token);
 	return {
 		baseUrl: stripTrailingSlash(baseUrl),
+		...(token ? { token } : {}),
 		...(Number.isFinite(timeout) && timeout >= MIN_TIMEOUT_MS ? { timeoutMs: timeout } : {}),
 		...(Number.isFinite(longTimeout) && longTimeout >= MIN_LONG_TIMEOUT_MS ? { longTimeoutMs: longTimeout } : {})
 	};
@@ -114,7 +122,7 @@ function parseInstances(value: unknown): Map<string, MininetInstance> {
  * - 传 `tenantId`：只查租户注册表，未命中即返回空 baseUrl（绝不回退全局实例）；
  * - 不传：兼容只读能力探针等无租户场景，返回全局 `baseUrl`。
  *
- * `event` 允许为 `undefined`：`/lab-ws/*` 的升级钩子只有 `Request`，拿不到 H3Event，
+ * `event` 允许为 `undefined`：`/mininet-ws/*` 的升级钩子只有 `Request`，拿不到 H3Event，
  * 这时读进程级运行时配置（`NUXT_MININET_*` 注入的就是它）。
  */
 export function getMininetConfig(event: H3Event | undefined, tenantId?: string): MininetConfig {
@@ -124,6 +132,9 @@ export function getMininetConfig(event: H3Event | undefined, tenantId?: string):
 	const globalBaseUrl = typeof mininet.baseUrl === "string"
 		? stripTrailingSlash(mininet.baseUrl.trim())
 		: "";
+
+	// 入口凭据：全局一份，租户实例可覆盖（同一台后端时一般只有全局）。
+	const globalToken = typeof mininet.token === "string" ? mininet.token.trim() : "";
 
 	const timeoutCandidate = Number(mininet.timeoutMs);
 	const globalTimeoutMs = Number.isFinite(timeoutCandidate) && timeoutCandidate >= MIN_TIMEOUT_MS
@@ -141,6 +152,7 @@ export function getMininetConfig(event: H3Event | undefined, tenantId?: string):
 		const instance = parseInstances(mininet.instances).get(tenantId);
 		return {
 			baseUrl: instance?.baseUrl ?? "",
+			token: instance?.token ?? globalToken,
 			timeoutMs: instance?.timeoutMs ?? globalTimeoutMs,
 			longTimeoutMs: Math.max(instance?.longTimeoutMs ?? globalLongTimeoutMs, globalTimeoutMs),
 			tenantScoped: true
@@ -149,6 +161,7 @@ export function getMininetConfig(event: H3Event | undefined, tenantId?: string):
 
 	return {
 		baseUrl: globalBaseUrl,
+		token: globalToken,
 		timeoutMs: globalTimeoutMs,
 		longTimeoutMs: Math.max(globalLongTimeoutMs, globalTimeoutMs),
 		tenantScoped: false

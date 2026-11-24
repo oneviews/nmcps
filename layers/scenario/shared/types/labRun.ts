@@ -47,7 +47,7 @@ export function labIperfDraftOf(): LabIperfDraft {
 }
 
 /**
- * 运行态读数（`GET /api/lab/start` → 上游 `app.net.is_started`）归一。
+ * 运行态读数（`GET /api/mininet/start` → 上游 `app.net.is_started`）归一。
  *
  * 只认布尔：读不到 / 形状不符一律 `null`（= 未知），**不猜「应该没启动」** ——
  * 猜错会让「启动」按钮对着一个已在跑的网络发请求，收一句 400 当失败。

@@ -1,5 +1,5 @@
 // layers/scenario/shared/types/labWs.ts
-// `/lab-ws/*` 的**纯函数**：票响应归一 + 抓包事件归一（NMCPS-ADR-0022 D6 / W5）。
+// `/mininet-ws/*` 的**纯函数**：票响应归一 + 抓包事件归一（NMCPS-ADR-0022 D6 / W5）。
 //
 // 事实源：`services/mininet-api/mininet_gui_backend/sniffer.py` 的 `SnifferEvent`
 // （`{ ts, proto, src, dst, len, info, node, intf, type }`，`len` 是别名）。
@@ -8,13 +8,13 @@
 
 import type { LabWsKind } from "../constants/labWs";
 
-/** `POST /api/lab/ws-ticket` 的成功体 */
+/** `POST /api/mininet/ws-ticket` 的成功体 */
 export interface LabWsTicket {
 	/** 一次性短时票（HMAC，60 秒） */
 	ticket: string
 	/** 过期时刻（ISO 字符串，客户端不得续期） */
 	expiresAt: string
-	/** 同源升级地址：`/lab-ws/<kind>?ticket=…` */
+	/** 同源升级地址：`/mininet-ws/<kind>?ticket=…` */
 	url: string
 	kind: LabWsKind
 }
@@ -102,7 +102,7 @@ export function labSnifferEventOf(payload: unknown): LabSnifferEvent | undefined
 }
 
 /**
- * `GET /api/lab/sniffer/history` 的响应归一：上游回 `{ events: [...] }`。
+ * `GET /api/mininet/sniffer/history` 的响应归一：上游回 `{ events: [...] }`。
  * 形状不符一律空数组 —— 历史读不到时页面显示空态，不继承上一次的包。
  */
 export function labSnifferHistoryOf(payload: unknown): LabSnifferEvent[] {
@@ -119,7 +119,7 @@ export function labSnifferHistoryOf(payload: unknown): LabSnifferEvent[] {
 }
 
 /**
- * 单接口速率采样（`/lab-ws/monitor`）：上游 `websocket_interface_monitor` 每次回
+ * 单接口速率采样（`/mininet-ws/monitor`）：上游 `websocket_interface_monitor` 每次回
  * `{ node, intf, ts, tx_gbps, rx_gbps }`，`ts` 是 ISO 字符串，速率单位 Gbit/s。
  */
 export interface LabMonitorSample {

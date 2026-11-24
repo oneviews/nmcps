@@ -85,7 +85,7 @@ export function labRequestId(event: H3Event): string {
  * 返回 `false` 表示写盘失败：调用方必须据此拒绝高风险动作（503 `audit_unavailable`），
  * 不得把失败当作“审计可选”。
  *
- * `event` 可为 `undefined`（`/lab-ws/*` 的升级 / 关闭阶段没有 H3Event）：此时不记
+ * `event` 可为 `undefined`（`/mininet-ws/*` 的升级 / 关闭阶段没有 H3Event）：此时不记
  * `client_ip`，`request_id` 由调用方自己给。
  */
 export async function appendLabAudit(event: H3Event | undefined, entry: LabAuditEntry): Promise<boolean> {

@@ -1,5 +1,5 @@
 // layers/scenario/shared/types/labInterfaces.ts
-// `GET /api/lab/interfaces` 的响应归一（NMCPS-ADR-0022 D6 监控通道的选项来源）。
+// `GET /api/mininet/interfaces` 的响应归一（NMCPS-ADR-0022 D6 监控通道的选项来源）。
 //
 // 上游 `list_mininet_interfaces()` 回 `{ nodes: [{ id, type, intfs, pid }] }`：
 // 只有 hosts / switches，`intfs` 已剔掉 `lo` / `lo0`。页面拿它填「节点 → 接口」两栏，

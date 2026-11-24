@@ -322,12 +322,12 @@
 	}
 
 	/**
-	 * 接口清单（`GET /api/lab/interfaces`，`lab:read`）：监控的「节点 → 接口」两栏只从这里来。
+	 * 接口清单（`GET /api/mininet/interfaces`，`lab:read`）：监控的「节点 → 接口」两栏只从这里来。
 	 * 读不到就保持空数组：宁可不给选项，也不让用户手打一个猜出来的接口名。
 	 */
 	async function loadInterfaces(): Promise<void> {
 		try {
-			interfaces.value = labInterfaceNodesOf(await api.get<unknown>("/api/lab/interfaces"));
+			interfaces.value = labInterfaceNodesOf(await api.get<unknown>("/api/mininet/interfaces"));
 		} catch {
 			interfaces.value = [];
 		}

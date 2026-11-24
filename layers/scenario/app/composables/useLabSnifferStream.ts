@@ -3,9 +3,9 @@
 //
 // 三条纪律：
 // 1. 组件不 `new WebSocket` —— 建连、换票、断线都在这里；组件只读 `packets` / `status`。
-// 2. 先换票再建连：`POST /api/lab/ws-ticket` 由 BFF 判会话 + 权限位 + 台账并落审计，
-//    票一次性、60 秒。浏览器永远拿不到上游地址（票里的 `url` 是同源 `/lab-ws/*`）。
-// 3. 历史与实时是两条通道：历史走 `GET /api/lab/sniffer/history`（`lab:read`），
+// 2. 先换票再建连：`POST /api/mininet/ws-ticket` 由 BFF 判会话 + 权限位 + 台账并落审计，
+//    票一次性、60 秒。浏览器永远拿不到上游地址（票里的 `url` 是同源 `/mininet-ws/*`）。
+// 3. 历史与实时是两条通道：历史走 `GET /api/mininet/sniffer/history`（`lab:read`），
 //    实时走 WS；列表上限固定，长时间抓包不会把页面内存吃光。
 
 import type { LabSnifferEvent, LabSnifferPacket, LabWsTicket } from "#layers/scenario/shared/types/labWs";
@@ -71,14 +71,14 @@ export function useLabSnifferStream() {
 	}
 
 	/**
-	 * 回填历史（`GET /api/lab/sniffer/history`）。
+	 * 回填历史（`GET /api/mininet/sniffer/history`）。
 	 *
 	 * 成功时以历史为准（它是上游的完整账本，刷新后列表不与上游漂移）；
 	 * 失败只记 `error`，不清空已有列表：历史读不到时实时流仍然可用。
 	 */
 	async function loadHistory(): Promise<void> {
 		try {
-			const payload = await api.get<unknown>("/api/lab/sniffer/history");
+			const payload = await api.get<unknown>("/api/mininet/sniffer/history");
 			packets.value = labSnifferHistoryOf(payload).map((event) => toPacket(event)).slice(-LAB_SNIFFER_PACKET_LIMIT);
 		} catch (caught) {
 			error.value = messageOf(caught);
@@ -96,7 +96,7 @@ export function useLabSnifferStream() {
 
 		let ticket: LabWsTicket | undefined;
 		try {
-			ticket = labWsTicketOf(await api.post<unknown>("/api/lab/ws-ticket", { kind: "sniffer" }));
+			ticket = labWsTicketOf(await api.post<unknown>("/api/mininet/ws-ticket", { kind: "sniffer" }));
 		} catch (caught) {
 			// 403 / 409 / 503 的原文照登：这是「为什么连不上」的唯一诊断
 			status.value = "error";

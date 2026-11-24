@@ -20,7 +20,7 @@ const SESSION_SECRET = "lab-test-session-secret-0123456789abcdef";
 const LAB_TENANT = "t_lab";
 
 /**
- * 默认台账：P2 起 `/api/lab/**` 必须先命中台账才触达上游。
+ * 默认台账：P2 起 `/api/mininet/**` 必须先命中台账才触达上游。
  * 这里不登记 `resources`，表示“以租户实例为边界”（Mininet 一实例一网）。
  */
 const DEFAULT_LEDGER = [{
@@ -342,6 +342,21 @@ async function startMininet(port) {
 	const runState = { started: true, fail: false };
 	const delays = new Map();
 
+	/**
+	 * 入口凭据（M0 远程化）：`token` 非空时所有请求必须带同名 `x-lab-token`，
+	 * 否则 401 —— 用例靠它证明「BFF 把服务端配置的 token 真的发出去了」，
+	 * 而不是只看 BFF 自己的响应。
+	 */
+	const auth = { token: "" };
+	/** 握手契约（`GET /api/version`）：可切成 `1.4` 验证主版本不一致 */
+	const version = { contract: "2.0" };
+
+	/**
+	 * 2.0 会话表（NMCPS-DESIGN-008 M1）：`seq` 让 id 可预测（`sim_0001`），
+	 * 用例据此断言「BFF 把新会话的 id 写回了台账」。
+	 */
+	const simulation = { seq: 0, sessions: new Map() };
+
 	const server = createServer(async (req, res) => {
 		const url = new URL(req.url, `http://${HOST}:${port}`);
 		const path = url.pathname;
@@ -366,6 +381,134 @@ async function startMininet(port) {
 			return send(200, { status: "ok", connected: true, network_started: true, timestamp: "2026-11-15T00:00:00Z" });
 		}
 
+		// 握手（M0 远程化）：形状与真实后端一致（`services/mininet-api` 的 `/api/version`）
+		if (path === "/api/version" && req.method === "GET") {
+			return send(200, { version: "0.3.0", mininet_version: "2.3.0", api_contract: version.contract });
+		}
+
+		if (auth.token && req.headers["x-lab-token"] !== auth.token) {
+			return send(401, { detail: "lab_token_invalid" });
+		}
+
+		// ── 2.0 会话入口（`/api/simulation/**`，NMCPS-DESIGN-008 M1） ──
+		// 形状与真实后端（`services/mininet-api` 的 `/api/simulation/**`）一致；`simulation.sessions`
+		// 可变，用例靠它证明「BFF 把 session_id 写回了台账、并且只放行绑定的那一个」。
+		if (path === "/api/simulation/sessions" || path.startsWith("/api/simulation/sessions/")) {
+			let raw = "";
+			if (req.method !== "GET") {
+				for await (const chunk of req)
+					raw += chunk;
+				const entry = log.at(-1);
+				if (entry)
+					entry.body = raw;
+			}
+
+			const [, sessionId, resource, resourceId] = path.split("/").filter(Boolean).slice(2);
+			const statusOf = (record) => ({
+				...record,
+				live: {
+					engine: record.engine,
+					started: record.state === "running",
+					node_count: record.nodes.length,
+					link_count: record.links.length
+				}
+			});
+
+			if (!sessionId) {
+				if (req.method === "GET") {
+					const sessions = [...simulation.sessions.values()].map(statusOf);
+					return send(200, { sessions, total: sessions.length });
+				}
+				if (req.method === "POST") {
+					const body = raw ? JSON.parse(raw) : {};
+					const id = `sim_${String(++simulation.seq).padStart(4, "0")}`;
+					const record = {
+						id,
+						engine: body.engine ?? "wired",
+						name: body.name ?? id,
+						state: "created",
+						metadata: body.metadata ?? {},
+						nodes: [],
+						links: []
+					};
+					simulation.sessions.set(id, record);
+					return send(201, statusOf(record));
+				}
+				return send(405, { detail: "method not allowed" });
+			}
+
+			const record = simulation.sessions.get(sessionId);
+			if (!record)
+				return send(404, { detail: `session_not_found: unknown session '${sessionId}'` });
+
+			if (!resource) {
+				if (req.method === "GET")
+					return send(200, statusOf(record));
+				if (req.method === "DELETE") {
+					simulation.sessions.delete(sessionId);
+					return send(200, { status: "deleted", id: sessionId });
+				}
+				return send(405, { detail: "method not allowed" });
+			}
+
+			if (resource === "start" || resource === "stop") {
+				record.state = resource === "start" ? "running" : "stopped";
+				return send(200, statusOf(record));
+			}
+
+			if (resource === "nodes") {
+				if (req.method === "GET")
+					return send(200, record.nodes);
+				if (req.method === "POST") {
+					const body = JSON.parse(raw || "{}");
+					const node = {
+						id: body.id,
+						type: body.type,
+						name: body.name ?? body.id,
+						x: body.x ?? 0,
+						y: body.y ?? 0,
+						attributes: body.attributes ?? {}
+					};
+					record.nodes.push(node);
+					return send(201, node);
+				}
+				if (req.method === "DELETE" && resourceId) {
+					const id = decodeURIComponent(resourceId);
+					record.nodes = record.nodes.filter((item) => item.id !== id);
+					record.links = record.links.filter((item) => item.src !== id && item.dst !== id);
+					return send(200, { status: "deleted", id });
+				}
+			}
+
+			if (resource === "links") {
+				if (req.method === "GET")
+					return send(200, record.links);
+				if (req.method === "POST") {
+					const body = JSON.parse(raw || "{}");
+					const link = {
+						id: body.id || [body.src, body.dst].sort().join("--"),
+						src: body.src,
+						dst: body.dst,
+						options: body.options ?? {}
+					};
+					record.links.push(link);
+					return send(201, link);
+				}
+				if (req.method === "DELETE" && resourceId) {
+					const id = decodeURIComponent(resourceId);
+					record.links = record.links.filter((item) => item.id !== id);
+					return send(200, { status: "deleted", id });
+				}
+			}
+
+			return send(404, { detail: "upstream_not_found" });
+		}
+
+		/**
+		 * 上游路径与 BFF 前缀同形（NMCPS-ADR-0022 D11）：下面匹配的是**上游收到的**路径，
+		 * 浏览器打的是同一个字符串但落在 Nitro 上。判「有没有触达上游」只认本函数记录，
+		 * 不要用「浏览器路径 === 上游路径」反推。
+		 */
 		if (path === "/api/mininet/hosts" && req.method === "GET") {
 			if (topology.fail.has("hosts"))
 				return send(500, { detail: "hosts exploded" });
@@ -543,13 +686,18 @@ async function startMininet(port) {
 	server.delays = delays;
 	// iperf 失败形状注入（⑮ 的 iperf 用例）：`mininet.iperf.reply = { status: 504, detail }`
 	server.iperf = iperf;
+	// 入口凭据与握手契约（M0 远程化）：用例直接改这两处上游事实
+	server.auth = auth;
+	server.version = version;
+	// 2.0 会话表（M1）：⑯ 直接铺一个已绑定的会话
+	server.simulation = simulation;
 	// 抓包实时流（NMCPS-ADR-0022 D6）：升级记录留在 `snifferSocketLog`，用来证明 BFF 真向上游建了连
 	server.snifferSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
 	return server;
 }
 
 /**
- * 假主上游：只实现登录 + 角色解析所需端点，供 `/api/lab/**` 的签名会话与 RBAC 取证。
+ * 假主上游：只实现登录 + 角色解析所需端点，供 `/api/mininet/**` 的签名会话与 RBAC 取证。
  * `failRoles` 可在测试进程内切换，用来验证“角色查询失败不降级为 tenant_user”。
  */
 async function startIam(port) {
@@ -696,8 +844,8 @@ async function startIam(port) {
 	const dual = writes.filter((entry) => entry.permissions.length > 1);
 
 	log("⓪ 白名单条目可从源码抽取（抽取为空即红）", whitelist.length > 0, `${whitelist.length} 条`);
-	log("⓪ 查询端点 17 条且权限位都是 lab:read", reads.length === 17 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
-	log("⓪ 写端点 28 条且都带非读权限位", writes.length === 28 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 查询端点 21 条且权限位都是 lab:read", reads.length === 21 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 写端点 36 条且都带非读权限位", writes.length === 36 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
 	log("⓪ full_reset / import_json 为双权限（lab:delete + lab:create）", dual.length === 2 && dual.every((entry) => entry.permissions.includes("lab:delete") && entry.permissions.includes("lab:create")), dual.map((entry) => `${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无");
 	log("⓪ 白名单 ⊆ Mininet OpenAPI 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.map((entry) => `${entry.method} ${entry.upstream}`).join(", ") || `${whitelist.length}/${whitelist.length}`);
 }
@@ -718,20 +866,93 @@ try {
 
 		log("① 登录签发 nmcps_sess（HttpOnly + Path=/）", auth.response.status === 200 && auth.session.length > 0 && /HttpOnly/i.test(auth.cookies.find((raw) => raw.startsWith("nmcps_sess=")) ?? "") && /Path=\//i.test(auth.cookies.find((raw) => raw.startsWith("nmcps_sess=")) ?? ""), describe(auth.session.slice(0, 24)));
 
-		const channel = await request(port, "/api/lab/channel", { cookie: auth.cookie });
+		const channel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
 		log("① 未配租户实例的 channel 仍 200 且 configured=false", channel.status === 200 && channel.json?.data?.configured === false, `${channel.status} ${describe(channel.json?.data?.configured)}`);
-		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 45, describe(channel.json?.data));
+		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 57, describe(channel.json?.data));
 		log("① channel 不回传 baseUrl", !JSON.stringify(channel.json ?? {}).includes(mininetBase), describe(channel.json?.data));
 
-		const noPath = await request(port, "/api/lab");
-		log("① /api/lab 无路径段 → 400 bff_path_missing", noPath.status === 400 && noPath.json?.message === "bff_path_missing", `${noPath.status} ${describe(noPath.json?.message)}`);
+		const noPath = await request(port, "/api/mininet");
+		log("① /api/mininet 无路径段 → 400 bff_path_missing", noPath.status === 400 && noPath.json?.message === "bff_path_missing", `${noPath.status} ${describe(noPath.json?.message)}`);
 
-		const noPathSlash = await request(port, "/api/lab/");
-		log("① /api/lab/ 同样 400（不回落到主网关 404）", noPathSlash.status === 400 && noPathSlash.json?.message === "bff_path_missing", `${noPathSlash.status} ${describe(noPathSlash.headers.get("content-type"))}`);
+		const noPathSlash = await request(port, "/api/mininet/");
+		log("① /api/mininet/ 同样 400（不回落到主网关 404）", noPathSlash.status === 400 && noPathSlash.json?.message === "bff_path_missing", `${noPathSlash.status} ${describe(noPathSlash.headers.get("content-type"))}`);
 
-		const unconfigured = await request(port, "/api/lab/hosts", { cookie: auth.cookie });
+		const unconfigured = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
 		log("① 租户无实例 → 503 tenant_runtime_unavailable（不是全局 mininet_not_configured）", unconfigured.status === 503 && unconfigured.json?.message === "tenant_runtime_unavailable", `${unconfigured.status} ${describe(unconfigured.json?.message)}`);
 		log("① 租户无实例不触达 Mininet", mininet.log.length === hitsBefore, `hits=${mininet.log.length - hitsBefore}`);
+	});
+	// ①b 远程化（M0）：握手 + 入口凭据由服务端配置发出，客户端无法覆盖
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+		NUXT_MININET_TOKEN: "lab-check-secret"
+	}), async (port) => {
+		const auth = await login(port);
+		mininet.auth.token = "lab-check-secret";
+		try {
+			const handshake = await request(port, "/api/mininet/version", { cookie: auth.cookie });
+			log(
+				"①b 握手：GET /api/version 读上游并回契约判定（compatible=true）",
+				handshake.status === 200
+				&& handshake.json?.data?.apiContract === "2.0"
+				&& handshake.json?.data?.compatible === true
+				&& handshake.json?.data?.expectedContract === "2.0"
+				&& handshake.json?.data?.version === "0.3.0",
+				`${handshake.status} ${describe(handshake.json?.data)}`
+			);
+			log(
+				"①b 握手：tokenConfigured=true 但正文不含 token 明文",
+				handshake.json?.data?.tokenConfigured === true && !JSON.stringify(handshake.json ?? {}).includes("lab-check-secret"),
+				describe(handshake.json?.data?.tokenConfigured)
+			);
+
+			const hosts = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
+			const hit = mininet.log.at(-1);
+			log(
+				"①b 出站带 x-lab-token：上游开启校验后仍 200（凭据真的发出去了）",
+				hosts.status === 200 && hit?.path === "/api/mininet/hosts" && hit?.headers?.["x-lab-token"] === "lab-check-secret",
+				`${hosts.status} header=${describe(hit?.headers?.["x-lab-token"])}`
+			);
+
+			const spoofed = await request(port, "/api/mininet/hosts", {
+				cookie: auth.cookie,
+				headers: { "x-lab-token": "forged-by-client" }
+			});
+			const spoofHit = mininet.log.at(-1);
+			log(
+				"①b 客户端自带的 x-lab-token 不能覆盖服务端配置",
+				spoofed.status === 200 && spoofHit?.headers?.["x-lab-token"] === "lab-check-secret",
+				`${spoofed.status} header=${describe(spoofHit?.headers?.["x-lab-token"])}`
+			);
+
+			mininet.version.contract = "1.4";
+			const mismatched = await request(port, "/api/mininet/version", { cookie: auth.cookie });
+			log(
+				"①b 契约主版本不一致 → compatible=false（不拦读，但当场可见）",
+				mismatched.status === 200 && mismatched.json?.data?.compatible === false && mismatched.json?.data?.apiContract === "1.4",
+				describe(mismatched.json?.data?.apiContract)
+			);
+		} finally {
+			mininet.auth.token = "";
+			mininet.version.contract = "2.0";
+		}
+	});
+
+	// 未配 token：握手照常（tokenConfigured=false），出站不带该头
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } })
+	}), async (port) => {
+		const auth = await login(port);
+		const handshake = await request(port, "/api/mininet/version", { cookie: auth.cookie });
+		const hosts = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
+		const hit = mininet.log.at(-1);
+		log(
+			"①b 未配 token：tokenConfigured=false 且出站不带 x-lab-token（回环信任）",
+			handshake.status === 200
+			&& handshake.json?.data?.tokenConfigured === false
+			&& hosts.status === 200
+			&& hit?.headers?.["x-lab-token"] === undefined,
+			`tokenConfigured=${describe(handshake.json?.data?.tokenConfigured)} header=${describe(hit?.headers?.["x-lab-token"])}`
+		);
 	});
 
 	// ② 白名单、查询参数与拒绝边界（全部带签名会话）
@@ -739,38 +960,38 @@ try {
 		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } })
 	}), async (port) => {
 		const auth = await login(port);
-		const channel = await request(port, "/api/lab/channel", { cookie: auth.cookie });
+		const channel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
 		log("② 租户实例命中后 channel configured=true", channel.json?.data?.configured === true, describe(channel.json?.data?.configured));
 
 		const hitsBefore = mininet.log.length;
-		const hosts = await request(port, "/api/lab/hosts?limit=2&tag=a&tag=b", { cookie: auth.cookie });
+		const hosts = await request(port, "/api/mininet/hosts?limit=2&tag=a&tag=b", { cookie: auth.cookie });
 		const hostHit = mininet.log.slice(hitsBefore).at(-1);
 		log("② 白名单内 GET 到达上游且裸 JSON 套信封", hosts.status === 200 && hosts.json?.code === 0 && hosts.json?.data?.length === 2, `${hosts.status} len=${describe(hosts.json?.data?.length)}`);
 		log("② 查询参数原样转发（重复键保留）", hostHit?.path === "/api/mininet/hosts" && hostHit?.search === "?limit=2&tag=a&tag=b", describe(hostHit?.search));
 
-		const health = await request(port, "/api/lab/health", { cookie: auth.cookie });
-		log("② 探针端点映射到 /api/health（不是 /api/mininet/health）", health.status === 200 && health.json?.data?.status === "ok" && mininet.log.at(-1)?.path === "/api/health", describe(mininet.log.at(-1)?.path));
+		const health = await request(port, "/api/mininet/health", { cookie: auth.cookie });
+		log("② 探针端点映射到上游 /api/health（不是 /api/mininet/health）", health.status === 200 && health.json?.data?.status === "ok" && mininet.log.at(-1)?.path === "/api/health", describe(mininet.log.at(-1)?.path));
 
-		const stats = await request(port, "/api/lab/stats/h1", { cookie: auth.cookie });
+		const stats = await request(port, "/api/mininet/stats/h1", { cookie: auth.cookie });
 		log("② 参数化路径 /stats/{node_id} 正常", stats.status === 200 && stats.json?.data?.name === "h1" && mininet.log.at(-1)?.path === "/api/mininet/stats/h1", describe(mininet.log.at(-1)?.path));
 
-		const linkStats = await request(port, "/api/lab/links/stats/sw1/h1", { cookie: auth.cookie });
+		const linkStats = await request(port, "/api/mininet/links/stats/sw1/h1", { cookie: auth.cookie });
 		log("② 多段参数 /links/stats/{src_id}/{dst_id} 正常", linkStats.status === 200 && linkStats.json?.data?.from === "sw1" && linkStats.json?.data?.to === "h1", describe(linkStats.json?.data));
 
-		const unknown = await request(port, "/api/lab/not-a-route", { cookie: auth.cookie });
+		const unknown = await request(port, "/api/mininet/not-a-route", { cookie: auth.cookie });
 		log("② 白名单外路径 → 404 bff_resource_not_allowed", unknown.status === 404 && unknown.json?.message === "bff_resource_not_allowed", `${unknown.status} ${describe(unknown.json?.message)}`);
 
-		const excludedExport = await request(port, "/api/lab/export_json", { cookie: auth.cookie });
-		log("② 上游扁平导出名不进白名单（真正的导出走 /api/lab/export/{json|script}，见 ⑩）→ 404", excludedExport.status === 404, `${excludedExport.status}`);
+		const excludedExport = await request(port, "/api/mininet/export_json", { cookie: auth.cookie });
+		log("② 上游扁平导出名不进白名单（BFF 的导出走 /api/mininet/export/{json|script}，见 ⑩）→ 404", excludedExport.status === 404, `${excludedExport.status}`);
 
-		const wrongVerb = await request(port, "/api/lab/hosts", { method: "PUT", cookie: auth.cookie });
+		const wrongVerb = await request(port, "/api/mininet/hosts", { method: "PUT", cookie: auth.cookie });
 		log("② 已登记路径用未登记动词（PUT /hosts）→ 405 bff_method_not_allowed", wrongVerb.status === 405 && wrongVerb.json?.message === "bff_method_not_allowed", `${wrongVerb.status} ${describe(wrongVerb.json?.message)}`);
 
 		const hitsBeforeWrite = mininet.log.length;
-		const writePath = await request(port, "/api/lab/terminal/h1", { method: "POST", cookie: auth.cookie });
-		log("② 未登记写路径（终端走 /lab-ws）→ 404 且不触达上游", writePath.status === 404 && writePath.json?.message === "bff_resource_not_allowed" && mininet.log.length === hitsBeforeWrite, `${writePath.status} hits=${mininet.log.length - hitsBeforeWrite}`);
+		const writePath = await request(port, "/api/mininet/terminal/h1", { method: "POST", cookie: auth.cookie });
+		log("② 未登记写路径（终端走 /mininet-ws）→ 404 且不触达上游", writePath.status === 404 && writePath.json?.message === "bff_resource_not_allowed" && mininet.log.length === hitsBeforeWrite, `${writePath.status} hits=${mininet.log.length - hitsBeforeWrite}`);
 
-		const traversal = await request(port, "/api/lab/stats/%2e%2e%2fetc%2fpasswd", { cookie: auth.cookie });
+		const traversal = await request(port, "/api/mininet/stats/%2e%2e%2fetc%2fpasswd", { cookie: auth.cookie });
 		log("② 路径穿越（%2e%2e%2f）→ 400 bff_path_invalid", traversal.status === 400 && traversal.json?.message === "bff_path_invalid", `${traversal.status} ${describe(traversal.json?.message)}`);
 	});
 
@@ -780,7 +1001,7 @@ try {
 	}), async (port) => {
 		const auth = await login(port);
 		const hitsBefore = mininet.log.length;
-		const withCreds = await request(port, "/api/lab/hosts", {
+		const withCreds = await request(port, "/api/mininet/hosts", {
 			headers: {
 				authorization: `Bearer ${auth.accessToken}`,
 				"x-request-id": "req-lab-1",
@@ -796,7 +1017,7 @@ try {
 		log("③ 出站头不含 x-tenant-id（客户端伪造头不参与归属）", seen.length > 0 && seen.every((item) => item.headers["x-tenant-id"] === undefined), describe(seen[0]?.headers["x-tenant-id"]));
 		log("③ x-request-id 按白名单透传", seen[0]?.headers["x-request-id"] === "req-lab-1", describe(seen[0]?.headers["x-request-id"]));
 
-		const notFound = await request(port, "/api/lab/stats/missing", { cookie: auth.cookie });
+		const notFound = await request(port, "/api/mininet/stats/missing", { cookie: auth.cookie });
 		log("③ 上游 404 保真 + detail 原话透出", notFound.status === 404 && notFound.json?.message === "Node missing not found", `${notFound.status} ${describe(notFound.json?.message)}`);
 	});
 
@@ -806,18 +1027,18 @@ try {
 	}), async (port) => {
 		const auth = await login(port);
 
-		const anonymous = await request(port, "/api/lab/hosts");
+		const anonymous = await request(port, "/api/mininet/hosts");
 		log("④ 无签名会话 → 401 bff_auth_required", anonymous.status === 401 && anonymous.json?.message === "bff_auth_required", `${anonymous.status} ${describe(anonymous.json?.message)}`);
 
-		const anonymousChannel = await request(port, "/api/lab/channel");
+		const anonymousChannel = await request(port, "/api/mininet/channel");
 		log("④ channel 同样要求签名会话", anonymousChannel.status === 401 && anonymousChannel.json?.message === "bff_auth_required", `${anonymousChannel.status} ${describe(anonymousChannel.json?.message)}`);
 
-		const tampered = await request(port, "/api/lab/hosts", {
+		const tampered = await request(port, "/api/mininet/hosts", {
 			cookie: `nmcps_at=${auth.accessToken}; nmcps_sess=v1.invalid.signature`
 		});
 		log("④ 篡改签名 → 401（不回退未签名 cookie）", tampered.status === 401 && tampered.json?.message === "bff_auth_required", `${tampered.status} ${describe(tampered.json?.message)}`);
 
-		const mismatched = await request(port, "/api/lab/hosts", {
+		const mismatched = await request(port, "/api/mininet/hosts", {
 			cookie: `nmcps_at=at-bob; nmcps_sess=${auth.session}`
 		});
 		log("④ 会话与访问令牌错配 → 401（ath 绑定）", mismatched.status === 401 && mismatched.json?.message === "bff_auth_required", `${mismatched.status} ${describe(mismatched.json?.message)}`);
@@ -834,16 +1055,16 @@ try {
 		log("④ 刷新不信任未签名 nmcps_ui → tid 仍从旧签名会话继承", refresh.status === 200 && decodeSessionTid(refreshedSession) === LAB_TENANT, `${refresh.status} tid=${describe(decodeSessionTid(refreshedSession))}`);
 
 		const platform = await login(port, "platform");
-		const platformLab = await request(port, "/api/lab/hosts", { cookie: platform.cookie });
+		const platformLab = await request(port, "/api/mininet/hosts", { cookie: platform.cookie });
 		log("④ 平台管理员无运行态权限 → 403 lab_permission_denied", platformLab.status === 403 && platformLab.json?.message === "lab_permission_denied", `${platformLab.status} ${describe(platformLab.json?.message)}`);
 
 		const other = await login(port, "bob");
 		const otherHits = mininet.log.length;
-		const otherLab = await request(port, "/api/lab/hosts", { cookie: other.cookie });
+		const otherLab = await request(port, "/api/mininet/hosts", { cookie: other.cookie });
 		log("④ 其他租户无实例 → 503 tenant_runtime_unavailable", otherLab.status === 503 && otherLab.json?.message === "tenant_runtime_unavailable", `${otherLab.status} ${describe(otherLab.json?.message)}`);
 		log("④ 其他租户请求不触达本租户 Mininet 实例", mininet.log.length === otherHits, `hits=${mininet.log.length - otherHits}`);
 
-		const spoofed = await request(port, "/api/lab/hosts", {
+		const spoofed = await request(port, "/api/mininet/hosts", {
 			headers: { "x-tenant-id": "t_other" },
 			cookie: auth.cookie
 		});
@@ -852,7 +1073,7 @@ try {
 
 		const dave = await login(port, "dave");
 		iam.state.failRoles = true;
-		const roleFailure = await request(port, "/api/lab/hosts", { cookie: dave.cookie });
+		const roleFailure = await request(port, "/api/mininet/hosts", { cookie: dave.cookie });
 		iam.state.failRoles = false;
 		log("④ IAM 角色查询失败 → 503 bff_role_resolution_failed（不降级为 tenant_user）", roleFailure.status === 503 && roleFailure.json?.message === "bff_role_resolution_failed", `${roleFailure.status} ${describe(roleFailure.json?.message)}`);
 	});
@@ -864,7 +1085,7 @@ try {
 		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } })
 	}, async (port) => {
 		const auth = await login(port);
-		const noSecret = await request(port, "/api/lab/hosts", { cookie: auth.cookie });
+		const noSecret = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
 		log("⑤ 缺 NUXT_BFF_SESSION_SECRET → 503 bff_auth_not_configured", noSecret.status === 503 && noSecret.json?.message === "bff_auth_not_configured", `${noSecret.status} ${describe(noSecret.json?.message)}`);
 	});
 
@@ -879,32 +1100,32 @@ try {
 	}), async (port) => {
 		const auth = await login(port);
 
-		const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
+		const networks = await request(port, "/api/mininet/networks", { cookie: auth.cookie });
 		const listed = networks.json?.data ?? [];
 		log("⑥ 台账列表只回本租户网络", networks.status === 200 && listed.length === 1 && listed[0]?.id === "net_scoped", `${networks.status} ${describe(listed.map((item) => item.id))}`);
 		log("⑥ 台账出参不含 upstream_id / tenant_id", !JSON.stringify(networks.json ?? {}).includes("upstream_id") && !JSON.stringify(networks.json ?? {}).includes("tenant_id"), describe(listed[0]));
 
 		const bob = await login(port, "bob");
-		const bobNetworks = await request(port, "/api/lab/networks", { cookie: bob.cookie });
+		const bobNetworks = await request(port, "/api/mininet/networks", { cookie: bob.cookie });
 		const bobListed = bobNetworks.json?.data ?? [];
 		log("⑥ 另一个租户只看到自己的台账", bobNetworks.status === 200 && bobListed.length === 1 && bobListed[0]?.id === "net_other", `${bobNetworks.status} ${describe(bobListed.map((item) => item.id))}`);
 
 		const hitsBefore = mininet.log.length;
-		const deniedNode = await request(port, "/api/lab/stats/h2", { cookie: auth.cookie });
+		const deniedNode = await request(port, "/api/mininet/stats/h2", { cookie: auth.cookie });
 		log("⑥ 清单外节点 → 404 lab_resource_not_found", deniedNode.status === 404 && deniedNode.json?.message === "lab_resource_not_found", `${deniedNode.status} ${describe(deniedNode.json?.message)}`);
 		log("⑥ 清单外节点不触达上游", mininet.log.length === hitsBefore, `hits=${mininet.log.length - hitsBefore}`);
 
-		const deniedLink = await request(port, "/api/lab/links/stats/sw1/h2", { cookie: auth.cookie });
+		const deniedLink = await request(port, "/api/mininet/links/stats/sw1/h2", { cookie: auth.cookie });
 		log("⑥ 清单外链路 → 404 且不触达上游", deniedLink.status === 404 && deniedLink.json?.message === "lab_resource_not_found" && mininet.log.length === hitsBefore, `${deniedLink.status} hits=${mininet.log.length - hitsBefore}`);
 
-		const allowedNode = await request(port, "/api/lab/stats/h1", { cookie: auth.cookie });
+		const allowedNode = await request(port, "/api/mininet/stats/h1", { cookie: auth.cookie });
 		log("⑥ 清单内节点仍可读", allowedNode.status === 200 && allowedNode.json?.data?.name === "h1", `${allowedNode.status}`);
 
-		const hosts = await request(port, "/api/lab/hosts", { cookie: auth.cookie });
+		const hosts = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
 		const hostNames = (hosts.json?.data ?? []).map((item) => item.name);
 		log("⑥ 列表出口丢弃清单外节点", hosts.status === 200 && hostNames.length === 1 && hostNames[0] === "h1", `${hosts.status} ${describe(hostNames)}`);
 
-		const linkStats = await request(port, "/api/lab/links/stats/h1/sw1", { cookie: auth.cookie });
+		const linkStats = await request(port, "/api/mininet/links/stats/h1/sw1", { cookie: auth.cookie });
 		log("⑥ 清单内链路仍可读", linkStats.status === 200, `${linkStats.status}`);
 
 		/*
@@ -914,7 +1135,7 @@ try {
 		 * 建完的节点还必须出现在后续列表里，否则画布上永远看不到它。
 		 */
 		const switchBody = JSON.stringify({ id: "sw2", type: "switch", name: "sw2", label: "sw2", x: 400, y: 250, ports: 4, controller: null, switch_type: "ovskernel" });
-		const createdSwitch = await request(port, "/api/lab/switches", {
+		const createdSwitch = await request(port, "/api/mininet/switches", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: auth.cookie,
@@ -922,22 +1143,22 @@ try {
 		});
 		log("⑥ 建交换机（单对象写响应）→ 200，不被写前清单判成 404", createdSwitch.status === 200 && createdSwitch.json?.data?.name === "sw2", `${createdSwitch.status} ${describe(createdSwitch.json?.message ?? createdSwitch.json?.data?.name)}`);
 
-		const switchesAfter = await request(port, "/api/lab/switches", { cookie: auth.cookie });
+		const switchesAfter = await request(port, "/api/mininet/switches", { cookie: auth.cookie });
 		log("⑥ 新建交换机进入台账清单、列表可见", switchesAfter.status === 200 && !!switchesAfter.json?.data?.sw2 && !!switchesAfter.json?.data?.sw1, discoverKeys(switchesAfter.json?.data));
 
-		const createdHost = await request(port, "/api/lab/hosts", {
+		const createdHost = await request(port, "/api/mininet/hosts", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: auth.cookie,
 			body: JSON.stringify({ id: "h3", type: "host", name: "h3", label: "h3", x: 300, y: 200, ip: "10.0.0.3", mac: "00:00:00:00:00:03" })
 		});
-		const hostsAfter = await request(port, "/api/lab/hosts", { cookie: auth.cookie });
+		const hostsAfter = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
 		const hostsAfterNames = (hostsAfter.json?.data ?? []).map((item) => item.name);
 		log("⑥ 新建主机进入台账清单、列表可见（不再被出口过滤丢掉）", createdHost.status === 200 && hostsAfterNames.includes("h3") && hostsAfterNames.includes("h1"), `${createdHost.status} ${describe(hostsAfterNames)}`);
 
-		const removed = await request(port, "/api/lab/delete_node/sw2", { method: "DELETE", cookie: auth.cookie });
-		const switchesFinal = await request(port, "/api/lab/switches", { cookie: auth.cookie });
-		const deniedAfterRemove = await request(port, "/api/lab/flows/sw2", { cookie: auth.cookie });
+		const removed = await request(port, "/api/mininet/delete_node/sw2", { method: "DELETE", cookie: auth.cookie });
+		const switchesFinal = await request(port, "/api/mininet/switches", { cookie: auth.cookie });
+		const deniedAfterRemove = await request(port, "/api/mininet/flows/sw2", { cookie: auth.cookie });
 		log("⑥ 删节点后出清单：列表不见、路径参数重新 404", removed.status === 200 && !switchesFinal.json?.data?.sw2 && deniedAfterRemove.status === 404, `${removed.status} keys=${discoverKeys(switchesFinal.json?.data)} flows=${deniedAfterRemove.status}`);
 	});
 
@@ -949,8 +1170,8 @@ try {
 	}), async (port) => {
 		const auth = await login(port);
 		const hitsBefore = mininet.log.length;
-		const noNetwork = await request(port, "/api/lab/hosts", { cookie: auth.cookie });
-		const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
+		const noNetwork = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
+		const networks = await request(port, "/api/mininet/networks", { cookie: auth.cookie });
 
 		log("⑦ 台账未命中 → 404 lab_resource_not_found", noNetwork.status === 404 && noNetwork.json?.message === "lab_resource_not_found", `${noNetwork.status} ${describe(noNetwork.json?.message)}`);
 		log("⑦ 台账未命中不触达上游", mininet.log.length === hitsBefore, `hits=${mininet.log.length - hitsBefore}`);
@@ -965,13 +1186,13 @@ try {
 		const auditFile = `.data/check-lab-audit-${process.pid}/lab-audit.jsonl`;
 
 		const hitsBefore = mininet.log.length;
-		const stop = await request(port, "/api/lab/stop", { method: "POST", cookie: auth.cookie });
+		const stop = await request(port, "/api/mininet/stop", { method: "POST", cookie: auth.cookie });
 		const stopHit = mininet.log.slice(hitsBefore).at(-1);
 		log("⑧ 有 lab:operate 的写请求到达上游（POST /stop）", stop.status === 200 && stop.json?.data?.ok === true, `${stop.status}`);
 		log("⑧ 出站方法 / 路径与白名单一致", stopHit?.method === "POST" && stopHit?.path === "/api/mininet/stop", `${stopHit?.method} ${stopHit?.path}`);
 
 		const body = JSON.stringify({ hosts: ["h1", "h2"], count: 2 });
-		const pingall = await request(port, "/api/lab/pingall", { method: "POST", headers: { "content-type": "application/json" }, cookie: auth.cookie, body });
+		const pingall = await request(port, "/api/mininet/pingall", { method: "POST", headers: { "content-type": "application/json" }, cookie: auth.cookie, body });
 		const pingHit = mininet.log.at(-1);
 		log("⑧ 写请求体原样转发", pingall.status === 200 && pingHit?.body === body, `${pingall.status} body=${describe(pingHit?.body)}`);
 		log("⑧ 出站 content-type 为 application/json（不转发客户端原始头）", pingHit?.headers["content-type"] === "application/json", describe(pingHit?.headers["content-type"]));
@@ -981,7 +1202,7 @@ try {
 		log("⑧ 审计先 allowed 后 succeeded", stopEntries.some((item) => item.result === "allowed") && stopEntries.some((item) => item.result === "succeeded"), describe(stopEntries.map((item) => item.result)));
 		log("⑧ 审计记录租户 / 主体 / 网络 / request_id", stopEntries.length > 0 && stopEntries.every((item) => item.tenant_id === LAB_TENANT && item.actor_id === "u_lab" && item.network_id === "net_lab" && typeof item.request_id === "string"), describe(stopEntries[0]));
 
-		const slow = (suffix) => request(port, `/api/lab/pingall?__delay=250&k=${suffix}`, {
+		const slow = (suffix) => request(port, `/api/mininet/pingall?__delay=250&k=${suffix}`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: auth.cookie,
@@ -992,27 +1213,27 @@ try {
 		log("⑧ 同一网络并发写 → 一个 200、一个 409 lab_operation_in_progress", statuses[0] === 200 && statuses[1] === 409 && [first, second].some((item) => item.json?.message === "lab_operation_in_progress"), describe(statuses));
 
 		const erin = await login(port, "erin");
-		const erinChannel = await request(port, "/api/lab/channel", { cookie: erin.cookie });
+		const erinChannel = await request(port, "/api/mininet/channel", { cookie: erin.cookie });
 		log("⑧ tenant_user 的 channel 只读（writeEnabled=false / operate=false）", erinChannel.json?.data?.writeEnabled === false && erinChannel.json?.data?.capabilities?.operate === false, describe(erinChannel.json?.data?.capabilities));
 
 		const erinHits = mininet.log.length;
-		const erinStop = await request(port, "/api/lab/stop", { method: "POST", cookie: erin.cookie });
+		const erinStop = await request(port, "/api/mininet/stop", { method: "POST", cookie: erin.cookie });
 		log("⑧ 无 lab:operate → 403 lab_permission_denied 且不触达上游", erinStop.status === 403 && erinStop.json?.message === "lab_permission_denied" && mininet.log.length === erinHits, `${erinStop.status} hits=${mininet.log.length - erinHits}`);
 
-		const erinDelete = await request(port, "/api/lab/delete_node/h1", { method: "DELETE", cookie: erin.cookie });
+		const erinDelete = await request(port, "/api/mininet/delete_node/h1", { method: "DELETE", cookie: erin.cookie });
 		log("⑧ 无 lab:delete → 403（删节点不是读权限兜底）", erinDelete.status === 403, `${erinDelete.status}`);
 
-		const erinReset = await request(port, "/api/lab/full_reset", { method: "POST", cookie: erin.cookie });
+		const erinReset = await request(port, "/api/mininet/full_reset", { method: "POST", cookie: erin.cookie });
 		log("⑧ full_reset 双权限：只有读权限 → 403", erinReset.status === 403, `${erinReset.status}`);
 
 		const frank = await login(port, "frank");
-		const frankChannel = await request(port, "/api/lab/channel", { cookie: frank.cookie });
+		const frankChannel = await request(port, "/api/mininet/channel", { cookie: frank.cookie });
 		log("⑧ lab_terminal 只拿到 terminal 位（writeEnabled=false）", frankChannel.json?.data?.capabilities?.terminal === true && frankChannel.json?.data?.capabilities?.operate === false && frankChannel.json?.data?.writeEnabled === false, describe(frankChannel.json?.data?.capabilities));
 
-		const frankSniffer = await request(port, "/api/lab/sniffer/start", { method: "POST", cookie: frank.cookie });
+		const frankSniffer = await request(port, "/api/mininet/sniffer/start", { method: "POST", cookie: frank.cookie });
 		log("⑧ lab_terminal 不能启抓包（需 lab:sniffer）→ 403", frankSniffer.status === 403, `${frankSniffer.status}`);
 
-		const failed = await request(port, "/api/lab/reset", { method: "POST", cookie: auth.cookie });
+		const failed = await request(port, "/api/mininet/reset", { method: "POST", cookie: auth.cookie });
 		const failedEntries = readAuditEntries(auditFile).filter((entry) => entry.action === "post /reset");
 		log("⑧ 上游失败仍留 failed 审计", failed.status === 500 && failedEntries.some((entry) => entry.result === "failed"), `${failed.status} ${describe(failedEntries.map((item) => item.result))}`);
 	});
@@ -1028,7 +1249,7 @@ try {
 	}), async (port) => {
 		const auth = await login(port);
 		const hits = mininet.log.length;
-		const denied = await request(port, "/api/lab/stop", { method: "POST", cookie: auth.cookie });
+		const denied = await request(port, "/api/mininet/stop", { method: "POST", cookie: auth.cookie });
 
 		log("⑨ 审计写盘失败 → 503 audit_unavailable", denied.status === 503 && denied.json?.message === "audit_unavailable", `${denied.status} ${describe(denied.json?.message)}`);
 		log("⑨ 审计失败时不触达上游", mininet.log.length === hits, `hits=${mininet.log.length - hits}`);
@@ -1048,22 +1269,22 @@ try {
 		 * 一旦被 `ApiResponse` 包成 `data: "{\"hosts\":...}"`，浏览器另存的文件是
 		 * 一个字符串而不是拓扑，`wget` 下来也不能再导入。
 		 */
-		const exported = await request(port, "/api/lab/export/json", { cookie: auth.cookie });
+		const exported = await request(port, "/api/mininet/export/json", { cookie: auth.cookie });
 		log("⑩ 导出 JSON 直出文本（不套 JSON 信封）", exported.status === 200 && exported.text.trimStart().startsWith("{") && exported.json?.hosts !== undefined, `${exported.status} ${describe(exported.text.slice(0, 24))}`);
 		log("⑩ 导出 content-type 为 text/plain", (exported.headers.get("content-type") ?? "").startsWith("text/plain"), describe(exported.headers.get("content-type")));
 
 		const disposition = exported.headers.get("content-disposition") ?? "";
 		log("⑩ 文件名由 BFF 生成，不信任上游", /^attachment; filename="lab-net_scoped-\d{8}T\d{6}Z\.json"$/.test(disposition), describe(disposition));
 
-		const script = await request(port, "/api/lab/export/script", { cookie: auth.cookie });
+		const script = await request(port, "/api/mininet/export/script", { cookie: auth.cookie });
 		log("⑩ 导出脚本直出 Python 源码（扩展名 .py）", script.status === 200 && script.text.startsWith("from mininet.topo import Topo") && (script.headers.get("content-disposition") ?? "").endsWith(".py\""), `${script.status} ${describe(script.text.slice(0, 24))}`);
 
-		const unknownExport = await request(port, "/api/lab/export/xml", { cookie: auth.cookie });
+		const unknownExport = await request(port, "/api/mininet/export/xml", { cookie: auth.cookie });
 		log("⑩ 未登记导出种类 → 400 bff_path_invalid", unknownExport.status === 400 && unknownExport.json?.message === "bff_path_invalid", `${unknownExport.status} ${describe(unknownExport.json?.message)}`);
 
 		const importHitsBefore = mininet.log.length;
 		// 导入的正文就是 `export_json` 的产物（台账形状），这样才能原样回灌
-		const imported = await request(port, "/api/lab/import_json", {
+		const imported = await request(port, "/api/mininet/import_json", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: auth.cookie,
@@ -1081,16 +1302,16 @@ try {
 		log("⑩ 导入按 multipart 出站（上游只收 `file` 字段）", importType.startsWith("multipart/form-data; boundary="), describe(importType));
 		log("⑩ 出站文件正文是原样拓扑 JSON", typeof importHit?.body === "string" && importHit.body.includes("name=\"file\"") && importHit.body.includes("\"h4\""), describe(typeof importHit?.body === "string" ? importHit.body.slice(0, 48) : importHit?.body));
 
-		const hostsAfter = await request(port, "/api/lab/hosts", { cookie: auth.cookie });
+		const hostsAfter = await request(port, "/api/mininet/hosts", { cookie: auth.cookie });
 		const hostNamesAfter = (hostsAfter.json?.data ?? []).map((item) => item.name);
 		log("⑩ 导入的节点进清单且既有节点不丢（并集收敛）", hostNamesAfter.includes("h4") && hostNamesAfter.includes("h1"), describe(hostNamesAfter));
 
-		const switchesAfter = await request(port, "/api/lab/switches", { cookie: auth.cookie });
+		const switchesAfter = await request(port, "/api/mininet/switches", { cookie: auth.cookie });
 		log("⑩ 导入的交换机也进清单", !!switchesAfter.json?.data?.sw9, discoverKeys(switchesAfter.json?.data));
 
 		// 控制器与交换机的连线不是链路：它只让两端节点进清单，链路键不登记
-		const importedLink = await request(port, "/api/lab/links/stats/h4/sw9", { cookie: auth.cookie });
-		const controllerEdge = await request(port, "/api/lab/links/stats/sw9/ctl1", { cookie: auth.cookie });
+		const importedLink = await request(port, "/api/mininet/links/stats/h4/sw9", { cookie: auth.cookie });
+		const controllerEdge = await request(port, "/api/mininet/links/stats/sw9/ctl1", { cookie: auth.cookie });
 		log("⑩ 导入的链路进清单、controller 关联线不算链路", importedLink.status === 200 && controllerEdge.status === 404 && controllerEdge.json?.message === "lab_resource_not_found", `link=${importedLink.status} ctlEdge=${controllerEdge.status}`);
 	});
 
@@ -1106,28 +1327,28 @@ try {
 		 */
 		const admin = await login(port);
 		const adminHits = mininet.log.length;
-		const adminPcap = await request(port, "/api/lab/export/pcap", { cookie: admin.cookie });
+		const adminPcap = await request(port, "/api/mininet/export/pcap", { cookie: admin.cookie });
 		log("⑪ 无 lab:sniffer 导出 pcap → 403 且不触达上游", adminPcap.status === 403 && adminPcap.json?.message === "lab_permission_denied" && mininet.log.length === adminHits, `${adminPcap.status} hits=${mininet.log.length - adminHits}`);
 
 		const grace = await login(port, "grace");
-		const graceChannel = await request(port, "/api/lab/channel", { cookie: grace.cookie });
+		const graceChannel = await request(port, "/api/mininet/channel", { cookie: grace.cookie });
 		const graceCaps = graceChannel.json?.data?.capabilities;
 		log("⑪ lab_sniffer 只拿 sniffer 位（operate=false / writeEnabled=true）", graceCaps?.sniffer === true && graceCaps?.operate === false && graceChannel.json?.data?.writeEnabled === true, describe(graceCaps));
 
-		const state = await request(port, "/api/lab/sniffer/state", { cookie: grace.cookie });
+		const state = await request(port, "/api/mininet/sniffer/state", { cookie: grace.cookie });
 		log("⑪ 抓包态读数回 { active }（只读权限即可）", state.status === 200 && state.json?.data?.active === false, `${state.status} ${describe(state.json?.data)}`);
 
-		const started = await request(port, "/api/lab/sniffer/start", { method: "POST", cookie: grace.cookie });
+		const started = await request(port, "/api/mininet/sniffer/start", { method: "POST", cookie: grace.cookie });
 		const startHit = mininet.log.at(-1);
 		log("⑪ 开始抓包 → 200 { active: true } 且出站路径为 sniffer/start", started.status === 200 && started.json?.data?.active === true && startHit?.method === "POST" && startHit?.path === "/api/mininet/sniffer/start", `${started.status} ${startHit?.method} ${startHit?.path}`);
 
-		const pcap = await requestBytes(port, "/api/lab/export/pcap", { cookie: grace.cookie });
+		const pcap = await requestBytes(port, "/api/mininet/export/pcap", { cookie: grace.cookie });
 		const pcapDisposition = pcap.headers.get("content-disposition") ?? "";
 		log("⑪ pcap 以二进制直出（魔数 d4c3b2a1 原样穿过）", pcap.status === 200 && pcap.bytes.subarray(0, 4).equals(Buffer.from([0xD4, 0xC3, 0xB2, 0xA1])), `${pcap.status} ${pcap.bytes.subarray(0, 4).toString("hex")}`);
 		log("⑪ pcap 的 content-type 是 application/vnd.tcpdump.pcap", (pcap.headers.get("content-type") ?? "").startsWith("application/vnd.tcpdump.pcap"), describe(pcap.headers.get("content-type")));
 		log("⑪ pcap 文件名由 BFF 生成（.pcap）", /^attachment; filename="lab-net_scoped-\d{8}T\d{6}Z\.pcap"$/.test(pcapDisposition), describe(pcapDisposition));
 
-		const stopped = await request(port, "/api/lab/sniffer/stop", { method: "POST", cookie: grace.cookie });
+		const stopped = await request(port, "/api/mininet/sniffer/stop", { method: "POST", cookie: grace.cookie });
 		log("⑪ 停止抓包 → 200 { active: false }", stopped.status === 200 && stopped.json?.data?.active === false, `${stopped.status} ${describe(stopped.json?.data)}`);
 
 		/*
@@ -1135,7 +1356,7 @@ try {
 		 * 且不触达上游 —— 意图不明确的删除不能「先做后报错」。
 		 */
 		const hitsBeforeReset = mininet.log.length;
-		const unconfirmed = await request(port, "/api/lab/full_reset", {
+		const unconfirmed = await request(port, "/api/mininet/full_reset", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: admin.cookie,
@@ -1143,7 +1364,7 @@ try {
 		});
 		log("⑪ full_reset 缺 confirm → 400 lab_confirm_required 且不触达上游", unconfirmed.status === 400 && unconfirmed.json?.message === "lab_confirm_required" && mininet.log.length === hitsBeforeReset, `${unconfirmed.status} hits=${mininet.log.length - hitsBeforeReset}`);
 
-		const wrongConfirm = await request(port, "/api/lab/full_reset", {
+		const wrongConfirm = await request(port, "/api/mininet/full_reset", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: admin.cookie,
@@ -1151,7 +1372,7 @@ try {
 		});
 		log("⑪ confirm 与台账 network_id 不符 → 400（不是「带什么值都行」）", wrongConfirm.status === 400 && wrongConfirm.json?.message === "lab_confirm_required", `${wrongConfirm.status}`);
 
-		const reset = await request(port, "/api/lab/full_reset", {
+		const reset = await request(port, "/api/mininet/full_reset", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: admin.cookie,
@@ -1160,8 +1381,8 @@ try {
 		log("⑪ 带正确 confirm → 200 且触达上游 full_reset", reset.status === 200 && mininet.log.at(-1)?.path === "/api/mininet/full_reset", `${reset.status} ${mininet.log.at(-1)?.path}`);
 
 		// 清单整体清空：上游已无节点，且台账不再放行任何登记过的节点 id
-		const hostsAfterReset = await request(port, "/api/lab/hosts", { cookie: admin.cookie });
-		const statsAfterReset = await request(port, "/api/lab/stats/h1", { cookie: admin.cookie });
+		const hostsAfterReset = await request(port, "/api/mininet/hosts", { cookie: admin.cookie });
+		const statsAfterReset = await request(port, "/api/mininet/stats/h1", { cookie: admin.cookie });
 		log("⑪ 重建后清单清空（GET /hosts 为空、旧节点不再属于本网）", hostsAfterReset.status === 200 && Array.isArray(hostsAfterReset.json?.data) && hostsAfterReset.json.data.length === 0 && statsAfterReset.status === 404 && statsAfterReset.json?.message === "lab_resource_not_found", `hosts=${describe(hostsAfterReset.json?.data)} stats=${statsAfterReset.status}`);
 	});
 
@@ -1173,7 +1394,7 @@ try {
 	}), async (port) => {
 		const admin = await login(port);
 		const adminHits = mininet.log.length;
-		const adminTicket = await request(port, "/api/lab/ws-ticket", {
+		const adminTicket = await request(port, "/api/mininet/ws-ticket", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: admin.cookie,
@@ -1182,7 +1403,7 @@ try {
 		log("⑫ 无 lab:sniffer 签票 → 403 且不触达上游", adminTicket.status === 403 && adminTicket.json?.message === "lab_permission_denied" && mininet.log.length === adminHits, `${adminTicket.status} hits=${mininet.log.length - adminHits}`);
 
 		const grace = await login(port, "grace");
-		const ticketRequest = (body) => request(port, "/api/lab/ws-ticket", {
+		const ticketRequest = (body) => request(port, "/api/mininet/ws-ticket", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie: grace.cookie,
@@ -1197,14 +1418,14 @@ try {
 
 		const issued = await ticketRequest({ kind: "sniffer", target: "net_scoped" });
 		const ticket = issued.json?.data;
-		const expectedUrl = `/lab-ws/sniffer?${new URLSearchParams({ ticket: String(ticket?.ticket ?? ""), target: "net_scoped" })}`;
+		const expectedUrl = `/mininet-ws/sniffer?${new URLSearchParams({ ticket: String(ticket?.ticket ?? ""), target: "net_scoped" })}`;
 		const ttlSeconds = (Date.parse(String(ticket?.expiresAt ?? "")) - Date.now()) / 1000;
 		log("⑫ 签票成功：同源 url + 60 秒 TTL + 不含上游地址", issued.status === 200 && typeof ticket?.ticket === "string" && ticket.ticket.split(".").length === 2 && ticket?.kind === "sniffer" && ticket?.url === expectedUrl && ttlSeconds > 0 && ttlSeconds <= 60 && !JSON.stringify(ticket).includes(mininetBase), `${issued.status} ttl=${ttlSeconds.toFixed(1)}s`);
 
-		const noTicket = await upgradeAttempt(port, "/lab-ws/sniffer");
+		const noTicket = await upgradeAttempt(port, "/mininet-ws/sniffer");
 		log("⑫ 无票升级 → 401 lab_ws_ticket_invalid（不建连、不触达上游）", noTicket.status === 401 && noTicket.body.includes("lab_ws_ticket_invalid"), `${noTicket.status} ${describe(noTicket.body.slice(0, 48))}`);
 
-		const tampered = await upgradeAttempt(port, `/lab-ws/sniffer?${new URLSearchParams({ ticket: `${ticket?.ticket ?? ""}x`, target: "net_scoped" })}`);
+		const tampered = await upgradeAttempt(port, `/mininet-ws/sniffer?${new URLSearchParams({ ticket: `${ticket?.ticket ?? ""}x`, target: "net_scoped" })}`);
 		log("⑫ 签名不符 → 401（升级不靠查询串里的 sub / tid）", tampered.status === 401 && tampered.body.includes("lab_ws_ticket_invalid"), `${tampered.status}`);
 
 		const socketsBefore = mininet.snifferSocketLog.length;
@@ -1220,7 +1441,7 @@ try {
 		log("⑫ 有效票连上实时流：帧按上游原文透传（TCP → ICMP）", stream.messages.length === MININET_SNIFFER_LIVE.length && packets[0]?.proto === "TCP" && packets[0]?.src === "10.0.0.1" && packets[1]?.proto === "ICMP", `${stream.messages.length}${stream.timedOut ? " timedOut" : ""} ${describe(packets.map((item) => item.proto))}`);
 		log("⑫ BFF 向上游建连 /api/mininet/sniffer 且出站不带 cookie / authorization", mininet.snifferSocketLog.length === socketsBefore + 1 && upstreamSocket?.path === "/api/mininet/sniffer" && !upstreamSocket?.headers.authorization && !upstreamSocket?.headers.cookie, `${upstreamSocket?.path} auth=${!!upstreamSocket?.headers.authorization} cookie=${!!upstreamSocket?.headers.cookie}`);
 
-		const replay = await upgradeAttempt(port, ticket?.url ?? "/lab-ws/sniffer");
+		const replay = await upgradeAttempt(port, ticket?.url ?? "/mininet-ws/sniffer");
 		log("⑫ 同一张票重放 → 401（一次性）", replay.status === 401 && replay.body.includes("lab_ws_ticket_invalid"), `${replay.status}`);
 
 		// 会话审计是异步写的（关闭后才落 `succeeded`），给一拍再读
@@ -1247,7 +1468,7 @@ try {
 		const admin = await login(port);
 		const reader = await login(port, "erin");
 		const frank = await login(port, "frank");
-		const ticket = (cookie, body) => request(port, "/api/lab/ws-ticket", {
+		const ticket = (cookie, body) => request(port, "/api/mininet/ws-ticket", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie,
@@ -1269,7 +1490,7 @@ try {
 		// 终端：签票 → 连流 → 问候帧 + 上行命令回显。只有这条通道有浏览器 → 上游方向
 		const terminalTicket = await ticket(frank.cookie, { kind: "terminal", target: "h1" });
 		const terminalUrl = terminalTicket.json?.data?.url;
-		const terminalExpectedUrl = `/lab-ws/terminal?${new URLSearchParams({ ticket: String(terminalTicket.json?.data?.ticket ?? ""), target: "h1" })}`;
+		const terminalExpectedUrl = `/mininet-ws/terminal?${new URLSearchParams({ ticket: String(terminalTicket.json?.data?.ticket ?? ""), target: "h1" })}`;
 		const socketsBeforeTerminal = mininet.snifferSocketLog.length;
 		// 假 PTY 的形状：问候帧 + 逐字节回显 + 换行 + `echo:<line>`（4 帧，见 `bff-harness`）
 		const terminalStream = await readSocketMessages(`ws://${HOST}:${port}${terminalUrl ?? ""}`, 4, "ls\n");
@@ -1308,7 +1529,7 @@ try {
 	});
 
 	/*
-	 * ⑭ 台账对账（NMCPS-ADR-0023）：`POST /api/lab/networks/{id}/sync`
+	 * ⑭ 台账对账（NMCPS-ADR-0023）：`POST /api/mininet/networks/{id}/sync`
 	 *
 	 * 这条路由只改台账，不转发任何上游写 —— 它读上游五类节点与链路，把 `resources`
 	 * **整体重写**成上游此刻的事实。断言钉四件事：
@@ -1354,7 +1575,7 @@ try {
 		const admin = await login(port);
 		const reader = await login(port, "erin");
 
-		const sync = (cookie, id, body) => request(port, `/api/lab/networks/${id}/sync`, {
+		const sync = (cookie, id, body) => request(port, `/api/mininet/networks/${id}/sync`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			cookie,
@@ -1362,7 +1583,7 @@ try {
 		});
 
 		const readCounts = async () => {
-			const listed = await request(port, "/api/lab/networks", { cookie: admin.cookie });
+			const listed = await request(port, "/api/mininet/networks", { cookie: admin.cookie });
 			const record = (listed.json?.data ?? []).find((item) => item.id === "net_reconcile");
 			return { nodeCount: record?.node_count, linkCount: record?.link_count };
 		};
@@ -1401,9 +1622,9 @@ try {
 		log("⑭ 新清单落盘（列表计数 = 上游事实）", afterSync.nodeCount === 6 && afterSync.linkCount === 3, `nodes=${afterSync.nodeCount} links=${afterSync.linkCount}`);
 
 		// 出口过滤按新清单判可见性：清单外节点现在看得见，幽灵 id 不再出现在路径里
-		const hostsAfter = await request(port, "/api/lab/hosts", { cookie: admin.cookie });
+		const hostsAfter = await request(port, "/api/mininet/hosts", { cookie: admin.cookie });
 		const hostNames = (hostsAfter.json?.data ?? []).map((item) => item.name);
-		const ghostStats = await request(port, "/api/lab/stats/ghost", { cookie: admin.cookie });
+		const ghostStats = await request(port, "/api/mininet/stats/ghost", { cookie: admin.cookie });
 		log("⑭ 出口按重写后的清单收敛（清单外节点可见 / 幽灵 id → 404）", hostNames.includes("h4") && ghostStats.status === 404 && ghostStats.json?.message === "lab_resource_not_found", `hosts=${describe(hostNames)} ghost=${ghostStats.status}`);
 		// ③ 上游读取失败：原样回错，台账一个字节都不动
 		factTopology.fail.add("links");
@@ -1416,7 +1637,7 @@ try {
 
 		// ④ 审计：先 allowed，再 succeeded / failed；不复制资源载荷
 		const audit = readAuditEntries(`.data/check-lab-audit-${process.pid}/lab-audit.jsonl`)
-			.filter((entry) => entry.action === "post /api/lab/networks/{id}/sync");
+			.filter((entry) => entry.action === "post /api/mininet/networks/{id}/sync");
 		const allowed = audit.filter((entry) => entry.result === "allowed");
 		const succeeded = audit.filter((entry) => entry.result === "succeeded");
 		const failedEntry = audit.find((entry) => entry.result === "failed");
@@ -1466,7 +1687,7 @@ try {
 		}), async (port) => {
 			const auth = await login(port);
 
-			const slowWrite = await request(port, "/api/lab/hosts", {
+			const slowWrite = await request(port, "/api/mininet/hosts", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				cookie: auth.cookie,
@@ -1474,13 +1695,13 @@ try {
 			});
 			log("⑮ 非长时端点仍用短预算：上游慢 2 秒、预算 1.2 秒 → 504 mininet_timeout", slowWrite.status === 504 && slowWrite.json?.message === "mininet_timeout", `${slowWrite.status} ${describe(slowWrite.json?.message)}`);
 
-			const pingall = await request(port, "/api/lab/pingall", { method: "POST", cookie: auth.cookie });
+			const pingall = await request(port, "/api/mininet/pingall", { method: "POST", cookie: auth.cookie });
 			log("⑮ /pingall 走长时预算：同一份 2 秒延迟、预算 3 秒 → 200（不把「还在跑」判成超时）", pingall.status === 200, `${pingall.status} ${describe(pingall.json?.message)}`);
 
 			// iperf 与 pingall 同属长时清单（NMCPS-ADR-0026 D1）：漏登记就会在真网里被 15 秒预算
 			// 误杀成 504，而吞吐测试其实还在跑 —— 页面只看到假失败，用户再点一次就是 409。
 			const iperfBody = { client: "h1", server: "h2", seconds: 1 };
-			const postIperf = () => request(port, "/api/lab/iperf", {
+			const postIperf = () => request(port, "/api/mininet/iperf", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				cookie: auth.cookie,
@@ -1505,7 +1726,7 @@ try {
 			mininet.iperf.reply = null;
 
 			const before = mininet.log.filter((entry) => entry.method === "GET" && entry.path === "/api/mininet/start").length;
-			const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
+			const networks = await request(port, "/api/mininet/networks", { cookie: auth.cookie });
 			const record = (networks.json?.data ?? [])[0];
 			const after = mininet.log.filter((entry) => entry.method === "GET" && entry.path === "/api/mininet/start").length;
 			log("⑮ 台账 running + 上游 false → 列表回 stopped（一次列表只读一次上游运行态）", networks.status === 200 && record?.state === "stopped" && after === before + 1, `state=${describe(record?.state)} reads=${after - before}`);
@@ -1524,7 +1745,7 @@ try {
 			NUXT_LAB_LEDGER_SEED: JSON.stringify([{ ...DEFAULT_LEDGER[0], id: "net_unknown", state: "running" }])
 		}), async (port) => {
 			const auth = await login(port);
-			const networks = await request(port, "/api/lab/networks", { cookie: auth.cookie });
+			const networks = await request(port, "/api/mininet/networks", { cookie: auth.cookie });
 			const record = (networks.json?.data ?? [])[0];
 			log("⑮ 上游运行态读不到 → 保持原值（「未知」不是「已停止」）", networks.status === 200 && record?.state === "running", `state=${describe(record?.state)}`);
 
@@ -1537,6 +1758,130 @@ try {
 		mininet.runState.fail = false;
 		mininet.iperf.reply = null;
 	}
+
+	// ⑯ 2.0 会话入口（NMCPS-DESIGN-008 M1）：白名单分档 / 台账绑定 / 归属 404
+	//
+	// 只测 BFF 自己的判定：假上游只回显会话形状，证明的是「BFF 把 session_id 写回台账、
+	// 只放行绑定的那一个、写端点进审计」，不是「引擎能建网」（那在 `check:simulation`）。
+	const sessionLedgerFile = `.data/check-lab-bff-m1-${process.pid}.json`;
+	const sessionAuditFile = `.data/check-lab-audit-m1-${process.pid}/lab-audit.jsonl`;
+	rmSync(sessionLedgerFile, { force: true });
+	rmSync(path.dirname(sessionAuditFile), { recursive: true, force: true });
+
+	const whitelist = readMininetWhitelist();
+	const sessionRoutes = whitelist.filter((entry) => entry.template === "/sessions" || entry.template.startsWith("/sessions/"));
+	const permissionOf = (method, template) => whitelist.find((entry) => entry.method === method && entry.template === template)?.permissions ?? [];
+	log(
+		"⑯ 12 条会话端点登记，权限位按写能力分档",
+		sessionRoutes.length === 12
+		&& permissionOf("POST", "/sessions").join() === "lab:create"
+		&& permissionOf("POST", "/sessions/{session_id}/nodes").join() === "lab:create"
+		&& permissionOf("DELETE", "/sessions/{session_id}/nodes/{node_id}").join() === "lab:delete"
+		&& permissionOf("POST", "/sessions/{session_id}/stop").join() === "lab:operate"
+		&& permissionOf("GET", "/sessions/{session_id}/links").join() === "lab:read",
+		`count=${sessionRoutes.length}`
+	);
+
+	// 同一台实例上别人的会话：列表与路径都不得把它透出去
+	mininet.simulation.sessions.set("sim_9999", {
+		id: "sim_9999",
+		engine: "wired",
+		name: "other-network",
+		state: "created",
+		metadata: { network_id: "net_other" },
+		nodes: [],
+		links: []
+	});
+
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+		NUXT_LAB_LEDGER_FILE: sessionLedgerFile,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify([{ ...DEFAULT_LEDGER[0], id: "net_m1", resources: { nodes: [], links: [] } }]),
+		NUXT_LAB_AUDIT_FILE: sessionAuditFile
+	}), async (port) => {
+		const auth = await login(port);
+		const before = mininet.log.length;
+
+		const created = await request(port, "/api/mininet/sessions", {
+			cookie: auth.cookie,
+			method: "POST",
+			body: JSON.stringify({ engine: "wired", name: "m1" })
+		});
+		const createHit = mininet.log.slice(before).find((entry) => entry.method === "POST" && entry.path === "/api/simulation/sessions");
+		const upstreamBody = createHit?.body ? JSON.parse(createHit.body) : undefined;
+		log(
+			"⑯ POST /sessions → 201，出站 /api/simulation/sessions",
+			created.status === 201 && created.json?.data?.id === "sim_0001" && !!createHit,
+			`${created.status} ${createHit?.path} id=${describe(created.json?.data?.id)}`
+		);
+		log(
+			"⑯ 会话 metadata 由 BFF 写（network_id / tenant_id / actor_id），客户端伪造无效",
+			upstreamBody?.metadata?.network_id === "net_m1"
+			&& upstreamBody?.metadata?.tenant_id === LAB_TENANT
+			&& upstreamBody?.metadata?.actor_id === "u_lab",
+			describe(upstreamBody?.metadata)
+		);
+
+		const bound = ledgerRecordOf(sessionLedgerFile, "net_m1");
+		log("⑯ 会话 id 写回台账（session_id）", bound?.session_id === "sim_0001", `session_id=${describe(bound?.session_id)}`);
+
+		const again = await request(port, "/api/mininet/sessions", { cookie: auth.cookie, method: "POST", body: JSON.stringify({}) });
+		const creates = mininet.log.slice(before).filter((entry) => entry.method === "POST" && entry.path === "/api/simulation/sessions").length;
+		log(
+			"⑯ 已绑定时再建会话 → 409 lab_session_exists 且零上游写",
+			again.status === 409 && again.json?.message === "lab_session_exists" && creates === 1,
+			`${again.status} posts=${creates}`
+		);
+
+		const node = await request(port, "/api/mininet/sessions/sim_0001/nodes", {
+			cookie: auth.cookie,
+			method: "POST",
+			body: JSON.stringify({ id: "h9", type: "host", attributes: { ip: "10.0.0.9", mac: "00:00:00:00:00:09" } })
+		});
+		const nodeHit = mininet.log.slice(before).find((entry) => entry.method === "POST" && entry.path === "/api/simulation/sessions/sim_0001/nodes");
+		const converged = ledgerRecordOf(sessionLedgerFile, "net_m1");
+		log(
+			"⑯ 建节点走会话端点，且台账清单收敛（新节点不再被判成清单外）",
+			node.status === 201 && !!nodeHit && converged?.resources?.nodes?.includes("h9") === true,
+			`${node.status} nodes=${describe(converged?.resources?.nodes)}`
+		);
+
+		const list = await request(port, "/api/mininet/sessions", { cookie: auth.cookie });
+		const listed = (list.json?.data?.sessions ?? []).map((item) => item.id);
+		log(
+			"⑯ GET /sessions 只回绑定的那一条（同实例别人的会话不透出）",
+			list.status === 200 && list.json?.data?.total === 1 && listed.join() === "sim_0001",
+			describe(listed)
+		);
+
+		const foreignBefore = mininet.log.length;
+		const foreign = await request(port, "/api/mininet/sessions/sim_9999/nodes", {
+			cookie: auth.cookie,
+			method: "POST",
+			body: JSON.stringify({ id: "h8", type: "host", attributes: {} })
+		});
+		const touched = mininet.log.length - foreignBefore;
+		log(
+			"⑯ 未绑定的会话路径 → 404 lab_resource_not_found 且零上游请求",
+			foreign.status === 404 && foreign.json?.message === "lab_resource_not_found" && touched === 0,
+			`${foreign.status} upstream=${touched}`
+		);
+
+		const start = await request(port, "/api/mininet/sessions/sim_0001/start", { cookie: auth.cookie, method: "POST" });
+		const running = ledgerRecordOf(sessionLedgerFile, "net_m1");
+		log(
+			"⑯ 会话 start → 上游 live.started=true 且台账 state=running",
+			start.status === 200 && start.json?.data?.live?.started === true && running?.state === "running",
+			`${start.status} state=${describe(running?.state)}`
+		);
+
+		const audit = readAuditEntries(sessionAuditFile).filter((entry) => entry.action === "post /sessions");
+		log(
+			"⑯ 会话写端点进审计（post /sessions 有 allowed + succeeded）",
+			audit.some((entry) => entry.result === "allowed") && audit.some((entry) => entry.result === "succeeded"),
+			`entries=${audit.length}`
+		);
+	});
 
 	const passed = results.filter((item) => item.ok).length;
 	console.log(`\n${passed}/${results.length} 项通过`);

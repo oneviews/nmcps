@@ -17,12 +17,16 @@ import { getMininetConfig } from "./mininetConfig";
  * 后者会把 `nmcps_at` 转成 `Bearer` 并参与单飞刷新；Mininet 后端没有鉴权能力，
  * 复用等于把访问令牌发给一个不需要也不应该看到它的上游。
  *
- * 本文件出站头只有 `accept` / `user-agent` / `x-request-id`：没有 authorization，
- * 不读任何 cookie，也不转发客户端请求体（白名单只有 GET）。
+ * 本文件出站头只有 `accept` / `user-agent` / `x-request-id` / `x-lab-token`：没有 authorization，
+ * 不读任何 cookie，也不转发客户端请求体（白名单只有 GET）。`x-lab-token` 来自服务端配置
+ * （`NUXT_MININET_TOKEN`），不是客户端凭据 —— 值不会回传、也不会出现在响应里。
  */
 
 /** 允许透传给 Mininet 的客户端请求头（白名单式） */
 const FORWARDED_REQUEST_HEADERS = ["accept", "user-agent", "x-request-id"];
+
+/** 入口凭据头（后端 `LAB_API_TOKEN` 生效时必带；未配置时后端只信任回环） */
+const LAB_TOKEN_HEADER = "x-lab-token";
 
 function now(): string {
 	return new Date().toISOString();
@@ -136,7 +140,7 @@ function buildMininetUrl(event: H3Event, baseUrl: string, match: MininetMatch): 
 	return url.toString();
 }
 
-function buildMininetHeaders(event: H3Event, hasBody = false): Headers {
+function buildMininetHeaders(event: H3Event, config: MininetConfig, hasBody = false): Headers {
 	const headers = new Headers();
 
 	for (const name of FORWARDED_REQUEST_HEADERS) {
@@ -148,6 +152,11 @@ function buildMininetHeaders(event: H3Event, hasBody = false): Headers {
 
 	if (!headers.has("accept")) {
 		headers.set("accept", "application/json");
+	}
+
+	// 入口凭据只由服务端配置提供：客户端既不能覆盖，也不能通过它探测 token 是否存在
+	if (config.token) {
+		headers.set(LAB_TOKEN_HEADER, config.token);
 	}
 
 	// 只声明我们自己转发的 JSON；不转发客户端原始 content-type（避免把表单 / multipart 带出去）
@@ -236,7 +245,7 @@ export async function proxyToMininet<T = unknown>(
 	const budgetMs = isLongOperationRoute(match.route) ? config.longTimeoutMs : config.timeoutMs;
 	const timer = setTimeout(() => controller.abort(), budgetMs);
 	const jsonBody = options.body !== undefined && method !== "GET" && options.upload === undefined;
-	const headers = buildMininetHeaders(event, jsonBody);
+	const headers = buildMininetHeaders(event, config, jsonBody);
 	const outgoing = options.upload
 		? uploadFormDataOf(options.upload)
 		: jsonBody ? options.body : undefined;
@@ -328,7 +337,7 @@ export async function fetchMininetBinary(
 	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
 	try {
-		const headers = buildMininetHeaders(event);
+		const headers = buildMininetHeaders(event, config);
 		headers.set("accept", "application/octet-stream");
 		const response = await fetch(url, {
 			method: "GET",
@@ -395,7 +404,7 @@ export async function fetchMininetText(
 	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
 	try {
-		const headers = buildMininetHeaders(event);
+		const headers = buildMininetHeaders(event, config);
 		headers.set("accept", "text/plain");
 		const response = await fetch(url, {
 			method: "GET",
@@ -463,7 +472,7 @@ export async function fetchMininetJson(
 	const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
 	try {
-		const headers = buildMininetHeaders(event);
+		const headers = buildMininetHeaders(event, config);
 		headers.set("accept", "application/json");
 		const response = await fetch(url, {
 			method: "GET",

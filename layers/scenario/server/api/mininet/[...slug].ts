@@ -4,18 +4,18 @@ import type { ApiResponse } from "~~/shared/types/api";
 import type { LabNetworkRecord, LabNetworkState } from "~~/shared/types/lab";
 import type { LabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
 import type { MininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
-import type { MininetMatch } from "#layers/scenario/shared/constants/mininetRoutes";
+import type { MininetMatch, MininetRoute } from "#layers/scenario/shared/constants/mininetRoutes";
 import { defineEventHandler, readRawBody, setResponseHeader, setResponseStatus } from "h3";
 import { respondAuth } from "~~/server/utils/bff/auth";
 import { hasLabPermissions } from "~~/shared/constants/labPermissions";
 import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { appendLabAudit, labClientIp, labRequestId } from "#layers/scenario/server/utils/bff/labAudit";
 import { authorizeLabSession } from "#layers/scenario/server/utils/bff/labGuard";
-import { getActiveLabNetwork, isLabResourceAllowed, listLabNetworks, markLabNetworkState, recordLabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
+import { bindLabNetworkSession, getActiveLabNetwork, isLabResourceAllowed, listLabNetworks, markLabNetworkState, recordLabResourceChange } from "#layers/scenario/server/utils/bff/labLedger";
 import { acquireLabOperation } from "#layers/scenario/server/utils/bff/labLocks";
 import { proxyToMininet } from "#layers/scenario/server/utils/bff/mininet";
 import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
-import { isWriteRoute, resolveMininetRoute } from "#layers/scenario/shared/constants/mininetRoutes";
+import { isSimulationRoute, isWriteRoute, resolveMininetRoute } from "#layers/scenario/shared/constants/mininetRoutes";
 import { parseLabImportBody } from "#layers/scenario/shared/types/labImport";
 
 /** 服务探针不属于租户网络：没有台账也必须能判断“实验床在不在” */
@@ -25,10 +25,10 @@ const NETWORK_FREE_ROUTES = new Set(["/health", "/version", "/ryu/apps"]);
 const WRITE_BODY_LIMIT = 1024 * 1024;
 
 /** 会改变「有没有网」的端点：命中时先检查同租户是否已有运行中网络 */
-const NETWORK_CREATING_ROUTES = new Set(["/start", "/import_json"]);
+const NETWORK_CREATING_ROUTES = new Set(["/start", "/import_json", "/sessions/{session_id}/start"]);
 
 /**
- * Mininet 实验通道：`/api/lab/**` → 第三上游（默认 `127.0.0.1:8000`）。
+ * Mininet 实验通道：`/api/mininet/**` → 第三上游（默认 `127.0.0.1:8000`）。
  *
  * 与 `server/api/[...slug].ts`（主网关）和 `server/api/sim/**`（仿真平台）并列、互不重叠：
  * - 路径先过 `MININET_ROUTES` 逐端点白名单（模板匹配，非前缀放行）→ 未命中 404、动词不符 405；
@@ -86,12 +86,51 @@ export default defineEventHandler(async (event): Promise<ApiResponse<unknown>> =
 		return respondAuth<never>(event, 404, MININET_MESSAGES.resourceNotFound);
 	}
 
+	// 2.0 会话入口（NMCPS-DESIGN-008 M1）：会话归属由台账的 `session_id` 判定。
+	// - 创建会话：一张网只绑一个会话（要换就先 DELETE），已绑定直接 409、不触达上游；
+	// - 其余会话路径：`{session_id}` 必须是绑定的那一个，不一致一律 404（与「不存在」同口径，
+	//   不泄露别人的会话 id）；未绑定（`undefined`）时同样 404 —— 没绑过就没有会话可操作。
+	if (isSimulationRoute(route)) {
+		if (route.template === "/sessions" && route.method === "POST" && network.session_id) {
+			return respondAuth<never>(event, 409, MININET_MESSAGES.sessionExists);
+		}
+		if (route.template !== "/sessions" && network.session_id !== resolution.params.session_id) {
+			return respondAuth<never>(event, 404, MININET_MESSAGES.resourceNotFound);
+		}
+	}
+
 	if (!isWriteRoute(route)) {
-		return await proxyToMininet<unknown>(event, resolution, config, { network });
+		const result = await proxyToMininet<unknown>(event, resolution, config, { network });
+		// 会话列表是实例级读数：只回本网绑定的那一条，不把同实例别人的会话透出去
+		return isSimulationRoute(route) ? scopeSessionList(result, route, network) : result;
 	}
 
 	return await handleWrite(event, resolution, config, network, principal, tenantId);
 });
+
+/**
+ * `GET /api/mininet/sessions` 的出口过滤：上游回的是整台实例的会话表，只保留台账绑定的那一条。
+ *
+ * 不套 `filterLabPayload()`：会话对象里没有 `id/name/type` 那种节点形状，硬套会被
+ * `isNodeMap()` 当成未知结构原样放行 —— 那等于把同实例别人的会话 id 透给页面。
+ */
+function scopeSessionList<T>(
+	body: ApiResponse<T>,
+	route: MininetRoute,
+	network: LabNetworkRecord
+): ApiResponse<T> {
+	if (body.code !== 0 || route.template !== "/sessions" || route.method !== "GET") {
+		return body;
+	}
+
+	const data = body.data as { sessions?: unknown, total?: unknown } | undefined;
+	if (!data || !Array.isArray(data.sessions)) {
+		return body;
+	}
+
+	const sessions = (data.sessions as Array<Record<string, unknown>>).filter((item) => item?.id === network.session_id);
+	return { ...body, data: { ...data, sessions, total: sessions.length } as T };
+}
 
 /**
  * 会往台账清单里**加节点**的端点：请求体的 `id` / `name` 就是节点 id
@@ -140,6 +179,32 @@ function isFullResetConfirmed(rawBody: string | undefined, networkId: string): b
 function labResourceChangeOf(match: MininetMatch, rawBody: string | undefined): LabResourceChange | undefined {
 	const { route, params } = match;
 	const payload = jsonRecordOf(rawBody);
+
+	// 2.0 会话入口的节点 / 链路（NMCPS-DESIGN-008 M1）：语义与下面那四条一致，
+	// 只是路径里多一层 `{session_id}`、链路用 `src`/`dst`（统一模型）而不是 `from`/`to`
+	if (isSimulationRoute(route)) {
+		if (route.method === "POST" && route.template === "/sessions/{session_id}/nodes") {
+			const id = stringFieldOf(payload, "id") ?? stringFieldOf(payload, "name");
+			return id ? { addNodes: [id] } : undefined;
+		}
+
+		if (route.method === "DELETE" && route.template === "/sessions/{session_id}/nodes/{node_id}") {
+			return params.node_id ? { removeNodes: [params.node_id] } : undefined;
+		}
+
+		if (route.method === "POST" && route.template === "/sessions/{session_id}/links") {
+			const source = stringFieldOf(payload, "src");
+			const target = stringFieldOf(payload, "dst");
+			return source && target ? { addLinks: [{ source, target }] } : undefined;
+		}
+
+		if (route.method === "DELETE" && route.template === "/sessions/{session_id}/links/{link_id}") {
+			const [source, target] = (params.link_id ?? "").split("--");
+			return source && target ? { removeLinks: [{ source, target }] } : undefined;
+		}
+
+		return undefined;
+	}
 
 	if (route.method === "POST" && NODE_CREATE_ROUTES.has(route.template)) {
 		const id = stringFieldOf(payload, "id") ?? stringFieldOf(payload, "name");
@@ -193,12 +258,63 @@ function labResourceChangeOf(match: MininetMatch, rawBody: string | undefined): 
  * 顺手写 `running` 只会让台账更假。
  */
 function labNetworkStateAfterWrite(template: string): LabNetworkState | undefined {
-	if (template === "/start") {
+	if (template === "/start" || template === "/sessions/{session_id}/start") {
 		return "running";
 	}
-	if (template === "/stop" || template === "/full_reset") {
+	// 删会话等于这张网没了（引擎里会话被销毁），台账不能继续写 running
+	if (
+		template === "/stop"
+		|| template === "/full_reset"
+		|| template === "/sessions/{session_id}/stop"
+		|| template === "/sessions/{session_id}"
+	) {
 		return "stopped";
 	}
+	return undefined;
+}
+
+/**
+ * `POST /api/mininet/sessions` 的出站请求体（NMCPS-DESIGN-008 M1）。
+ *
+ * 客户端只能选引擎（缺省 `wired`）和名字；`metadata` 由 BFF 写：它把会话绑到**当前租户的
+ * 台账网络**上（`network_id`），并记下操作者。上游把 `metadata` 原样存进会话记录，
+ * 排障时能回答「这个 sim_xxx 是谁在哪张网上建的」。
+ */
+function sessionCreateBodyOf(
+	rawBody: string | undefined,
+	network: LabNetworkRecord,
+	tenantId: string,
+	principal: LabPrincipal
+): Record<string, unknown> {
+	const payload = jsonRecordOf(rawBody);
+	const engine = stringFieldOf(payload, "engine") ?? "wired";
+	const name = stringFieldOf(payload, "name");
+	return {
+		engine,
+		...(name ? { name } : {}),
+		metadata: { network_id: network.id, tenant_id: tenantId, actor_id: principal.subjectId }
+	};
+}
+
+/**
+ * 会话写成功后要落进台账的绑定：新建 → 会话 id；删除 → `null`（解绑）。
+ *
+ * 其余会话写（起停、增删节点 / 链路）不动绑定 —— 它们改的是这张网的内容，不是归属。
+ */
+function sessionBindingOf(route: MininetRoute, result: ApiResponse<unknown>): string | null | undefined {
+	if (!isSimulationRoute(route) || result.code !== 0) {
+		return undefined;
+	}
+
+	if (route.template === "/sessions" && route.method === "POST") {
+		const data = result.data as { id?: unknown } | undefined;
+		return typeof data?.id === "string" && data.id.trim() ? data.id.trim() : undefined;
+	}
+
+	if (route.method === "DELETE" && route.template === "/sessions/{session_id}") {
+		return null;
+	}
+
 	return undefined;
 }
 
@@ -298,6 +414,12 @@ async function handleWrite(
 			return respondAuth<never>(event, 400, MININET_MESSAGES.confirmRequired);
 		}
 
+		// 2.0 会话创建（NMCPS-DESIGN-008 M1）：`metadata` 只能由 BFF 写 ——
+		// 它记录「这会话是哪张台账网络的」，让客户端自填等于让它选一个归属。
+		const outboundBody = route.template === "/sessions" && route.method === "POST"
+			? JSON.stringify(sessionCreateBodyOf(body, network, tenantId, principal))
+			: body;
+
 		const result = await proxyToMininet<unknown>(event, match, config, {
 			network,
 			// 写响应对应的是**刚被改动的对象**：新节点按定义还不在写前那份清单里，
@@ -307,7 +429,7 @@ async function handleWrite(
 			// 重新封装成文件再出站，否则 FastAPI 会判 422（NMCPS-ADR-0022 §五）
 			...(route.template === "/import_json" && body !== undefined
 				? { upload: { filename: "topology.json", content: body } }
-				: body === undefined ? {} : { body })
+				: outboundBody === undefined ? {} : { body: outboundBody })
 		});
 
 		// 清单收敛放在上游成功之后：失败时台账仍描述“改之前”的事实，不会凭空多出一个不存在的节点
@@ -331,6 +453,17 @@ async function handleWrite(
 				} catch (error) {
 					// 同上：上游已切换，台账落后只影响展示（页面还会读 `GET /start`）
 					console.warn("[lab] network state not updated", network.id, error);
+				}
+			}
+
+			// 会话归属（M1）：新会话写进台账、删掉的会话解绑。写不进去只留痕 ——
+			// 上游已经建好 / 删掉了，回滚一次成功的写比台账落后更难查
+			const sessionId = sessionBindingOf(route, result);
+			if (sessionId !== undefined) {
+				try {
+					await bindLabNetworkSession(event, network.id, sessionId);
+				} catch (error) {
+					console.warn("[lab] session binding not updated", network.id, error);
 				}
 			}
 		}

@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from mininet_gui_backend.sniffer import SnifferManager
 import pyshark.ek_field_mapping as ek_field_mapping
 from pyshark.tshark.output_parser.tshark_ek import TsharkEkJsonParser
-from typing import Tuple, Union, Optional, Set, Dict, List
+from typing import Any, Tuple, Union, Optional, Set, Dict, List
 from contextlib import asynccontextmanager
 import pkgutil
 
@@ -45,6 +45,15 @@ from fastapi.responses import PlainTextResponse, Response
 
 from mininet_gui_backend.export import build_addressing_plan, export_net_to_script, export_net_to_json
 from mininet_gui_backend.cli import CLISession
+from mininet_gui_backend.auth import install_lab_auth
+from mininet_gui_backend.engines import (
+    EngineError,
+    LinkSpec,
+    NodeSpec,
+    engine_catalog,
+    register_builtin_engines,
+)
+from mininet_gui_backend.sessions import SessionStore
 from mininet_gui_backend.schema import Switch, Host, Controller, Nat, Router
 from mininet_gui_backend.flow_rules import FlowRuleCreate, FlowRuleDelete, build_flow, build_flow_match
 from mininet_gui_backend.utils import (
@@ -152,10 +161,43 @@ class IperfRequest(BaseModel):
     seconds: Optional[int] = 5
     port: Optional[int] = None
 
+# 启动 / 关闭时的 `mn -c`。非 root 下它会对每个残留进程 `pkill` 失败并重试，
+# 启动就卡在这里（实测 2026-11-24，`uvicorn` 永远不 ready）。`dryrun` 引擎与
+# `pnpm check:simulation` 都不需要清理真实网络，用 `LAB_SKIP_STARTUP_CLEANUP=1` 跳过。
+# 只影响进程生命周期的这两次调用：`stop_network()` / `full_reset_network()` 里的清理照旧。
+def _startup_cleanup() -> None:
+    if os.environ.get("LAB_SKIP_STARTUP_CLEANUP", "").strip().lower() in ("1", "true", "yes"):
+        return
+    mn_cleanup()
+
+
+def is_root() -> bool:
+    geteuid = getattr(os, "geteuid", None)
+    return bool(geteuid) and geteuid() == 0
+
+
+def _build_network() -> Optional[Mininet]:
+    """建一张空网。非 root 时 **不建**：`Mininet.__init__` 会 `ensureRoot()` → `exit(1)`，
+    整个 API 连启动都做不到。
+
+    `dryrun` 引擎与 `/api/simulation/**` 不需要真网；缺 root 时让它们照常工作，
+    `/api/mininet/**` 的写端点自然失败（没有网可操作），比「进程起不来」好排查。
+    """
+    if not is_root():
+        logging.getLogger(__name__).warning(
+            "not running as root: /api/mininet/** is unavailable; dryrun sessions still work"
+        )
+        return None
+    net = Mininet(autoSetMacs=True, topo=Topo())
+    net.is_started = False
+    return net
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # start
-    mn_cleanup()
+    _startup_cleanup()
     setup_log_file()
     app.controllers = dict()
     app.switches = dict()
@@ -169,14 +211,18 @@ async def lifespan(app: FastAPI):
     app.sniffer_manager = SnifferManager(list_mininet_interfaces, start_sniffer_process)
     app.pingall_running = False
     app.iperf_running = False
+    # 引擎注册表与会话层（M0）：1.0 的 `/api/mininet/**` 在会话层之上继续工作，
+    # 会话是**新增**入口，不替换旧路径（路径迁移在 M1，见 docs/ai/simulation-parity.md §5）。
+    register_builtin_engines()
+    app.sessions = SessionStore()
     setLogLevel("debug")
-    app.net = Mininet(autoSetMacs=True, topo=Topo())
-    app.net.is_started = False
+    app.net = _build_network()
     yield
     # stop
-    mn_cleanup()
+    _startup_cleanup()
 
 from mininet_gui_backend import __version__ as BACKEND_VERSION
+from mininet_gui_backend import LAB_API_CONTRACT
 try:
     from mininet.net import VERSION as MININET_VERSION
 except Exception:
@@ -201,14 +247,25 @@ app = FastAPI(
 )
 
 
+# 入口鉴权（M0 远程化）：`LAB_API_TOKEN` 已设置时要求 `x-lab-token`，未设置时只接受回环客户端。
+# WebSocket 用 HMAC 签名查询串（Node 内置 WebSocket 不能设请求头），见 auth.py。
+install_lab_auth(app)
+
+
 # 不装 CORSMiddleware（NMCPS-ADR-0022 D9 / W6）：旧 Vite 前端退役后，浏览器只经 Nitro BFF
-# 的 `/api/lab/**` 与 `/lab-ws/*` 访问本服务，服务端调用不需要 CORS 头。原先的
+# 的 `/api/mininet/**` 与 `/mininet-ws/*` 访问本服务（前缀与本服务同形、靠主机 / 端口区分，
+# 见 ADR-0022 D11），服务端调用不需要 CORS 头。原先的
 # `allow_origins=["*"] + allow_credentials=True` 是唯一允许跨源直连 `:8000` 的入口 ——
 # 一旦放开就等于把无登录态的特权后端暴露给任意网页；本服务只应经反代 / 回环访问。
 
 @app.get("/api/version")
 def get_version():
-    return {"version": app.version, "mininet_version": MININET_VERSION}
+    return {
+        "version": app.version,
+        "mininet_version": MININET_VERSION,
+        # BFF 握手比对用（`GET /api/mininet/version`）；改契约标记就是改 API 面
+        "api_contract": LAB_API_CONTRACT,
+    }
 
 @app.get("/api/health")
 def get_health():
@@ -847,7 +904,8 @@ def list_edges():
 
 @app.get("/api/mininet/start")
 def get_network_started():
-    return app.net.is_started
+    net = getattr(app, "net", None)
+    return bool(getattr(net, "is_started", False))
 
 @app.post("/api/mininet/start")
 def start_network():
@@ -2158,8 +2216,157 @@ async def sniffer_stop():
 @app.get("/api/mininet/sniffer/export")
 async def sniffer_export():
     pcap_data = await app.sniffer_manager.get_pcap()
+
     return Response(
         content=pcap_data,
         media_type="application/vnd.tcpdump.pcap",
         headers={"Content-Disposition": "attachment; filename=sniffer.pcap"},
     )
+# —— 仿真引擎与会话（M0，docs/ai/simulation-parity.md §五）——
+#
+# 与 `/api/mininet/**` 的关系：那套是 1.0 的全局单例 API，M0 不动它；这里是 2.0 的
+# 会话入口，`engine=wired` 的会话内部就是那张全局网（单实例约束由 WiredEngine 兜住），
+# `engine=dryrun` 是纯内存实现 —— 无 root 的机器（CI）也能验证整条链路。
+
+
+def _engine_http_error(exc: EngineError) -> HTTPException:
+    """引擎错误 → HTTP 状态码 + 稳定 reason（页面按 reason 分支，不猜 500）。"""
+    return HTTPException(status_code=exc.status_code, detail=exc.detail())
+
+
+class SessionCreate(BaseModel):
+    engine: str = "wired"
+    name: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class SessionNodeCreate(BaseModel):
+    id: str
+    type: str
+    name: Optional[str] = None
+    x: float = 0.0
+    y: float = 0.0
+    attributes: Optional[Dict[str, Any]] = None
+
+
+class SessionLinkCreate(BaseModel):
+    id: str
+    src: str
+    dst: str
+    options: Optional[Dict[str, Any]] = None
+
+
+@app.get("/api/simulation/engines")
+def list_simulation_engines():
+    return {"engines": engine_catalog()}
+
+
+@app.get("/api/simulation/sessions")
+def list_simulation_sessions():
+    sessions = [record.as_dict() for record in app.sessions.list()]
+    return {"sessions": sessions, "total": len(sessions)}
+
+
+@app.post("/api/simulation/sessions", status_code=201)
+async def create_simulation_session(payload: SessionCreate):
+    try:
+        record = await app.sessions.create(payload.engine, payload.name, payload.metadata)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+    return record.as_dict()
+
+
+@app.get("/api/simulation/sessions/{session_id}")
+def get_simulation_session(session_id: str):
+    try:
+        return app.sessions.status(session_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.delete("/api/simulation/sessions/{session_id}")
+async def delete_simulation_session(session_id: str):
+    try:
+        record = await app.sessions.delete(session_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+    return {"status": "deleted", "id": record.id}
+
+
+@app.post("/api/simulation/sessions/{session_id}/start")
+async def start_simulation_session(session_id: str):
+    try:
+        await app.sessions.start(session_id)
+        # 起停都回**带 live 事实**的完整状态：页面不必再发一次 GET 才知道引擎真的起来了
+        return app.sessions.status(session_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.post("/api/simulation/sessions/{session_id}/stop")
+async def stop_simulation_session(session_id: str):
+    try:
+        await app.sessions.stop(session_id)
+        return app.sessions.status(session_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+
+@app.get("/api/simulation/sessions/{session_id}/nodes")
+def list_simulation_nodes(session_id: str):
+    try:
+        return app.sessions.list_nodes(session_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.post("/api/simulation/sessions/{session_id}/nodes", status_code=201)
+def create_simulation_node(session_id: str, payload: SessionNodeCreate):
+    node = NodeSpec(
+        id=payload.id,
+        type=payload.type,
+        name=payload.name or payload.id,
+        x=payload.x,
+        y=payload.y,
+        attributes=dict(payload.attributes or {}),
+    )
+    try:
+        return app.sessions.add_node(session_id, node)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.delete("/api/simulation/sessions/{session_id}/nodes/{node_id}")
+def delete_simulation_node(session_id: str, node_id: str):
+    try:
+        app.sessions.remove_node(session_id, node_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+    return {"status": "deleted", "id": node_id}
+
+
+@app.get("/api/simulation/sessions/{session_id}/links")
+def list_simulation_links(session_id: str):
+    try:
+        return app.sessions.list_links(session_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.post("/api/simulation/sessions/{session_id}/links", status_code=201)
+def create_simulation_link(session_id: str, payload: SessionLinkCreate):
+    link = LinkSpec(id=payload.id, src=payload.src, dst=payload.dst, options=dict(payload.options or {}))
+    try:
+        return app.sessions.add_link(session_id, link)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.delete("/api/simulation/sessions/{session_id}/links/{link_id}")
+def delete_simulation_link(session_id: str, link_id: str):
+    try:
+        app.sessions.remove_link(session_id, link_id)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+    return {"status": "deleted", "id": link_id}

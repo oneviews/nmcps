@@ -4981,7 +4981,7 @@ if (upstreamPort) {
 }
 
 // 11.3 实验网只读页（NMCPS-ADR-0021 P2 / NMCPS-ADR-0020）：`/scenario/simulator`
-// 的数据源是 `/api/lab/networks` + 五类节点 + 链路。这里分三个 BFF：
+// 的数据源是 `/api/mininet/networks` + 五类节点 + 链路。这里分三个 BFF：
 //   ① 空台账：页面必须明确说「暂无仿真网络」，而不是画一张空画布；
 //   ② 有台账：节点 / 链路真的投影到画布，选中节点与链路时右侧详情跟着切换；
 //   ③ 有资源清单：清单外的节点 / 链路不得进入画布。
@@ -5061,7 +5061,7 @@ if (upstreamPort) {
 		// 失败分支：不改 BFF / 台账文件，直接在浏览器侧把列表请求换成 503 / 403。
 		// 断言三件事：错误卡出现、上游原话逐字保留、撤掉故障后点刷新能恢复画布。
 		let labNetworksFailure = { status: 503, message: "tenant_runtime_unavailable" };
-		await labPage.route("**/api/lab/networks", async (route) => {
+		await labPage.route("**/api/mininet/networks", async (route) => {
 			if (!labNetworksFailure) {
 				await route.continue();
 				return;
@@ -5090,7 +5090,7 @@ if (upstreamPort) {
 			};
 		});
 		log(
-			"11.3 /api/lab/networks 503 时显示错误卡并保留上游原话",
+			"11.3 /api/mininet/networks 503 时显示错误卡并保留上游原话",
 			failureProbe.error && !failureProbe.canvas && failureProbe.text.includes("tenant_runtime_unavailable"),
 			`error=${failureProbe.error} canvas=${failureProbe.canvas} 文案=「${failureProbe.text.slice(0, 120)}」`
 		);
@@ -5107,7 +5107,7 @@ if (upstreamPort) {
 			};
 		});
 		log(
-			"11.3 /api/lab/networks 403 时错误卡展示权限拒绝原话",
+			"11.3 /api/mininet/networks 403 时错误卡展示权限拒绝原话",
 			deniedProbe.error && !deniedProbe.canvas && deniedProbe.text.includes("lab_permission_denied"),
 			`error=${deniedProbe.error} canvas=${deniedProbe.canvas} 文案=「${deniedProbe.text.slice(0, 120)}」`
 		);
@@ -5291,7 +5291,7 @@ if (upstreamPort) {
 			modal: !!document.querySelector("[data-testid='lab-node-name']")
 		}));
 		log(
-			"11.4 新增主机走 POST /api/lab/hosts，请求体带名称 / IP / 坐标且画布随之多一个节点",
+			"11.4 新增主机走 POST /api/mininet/hosts，请求体带名称 / IP / 坐标且画布随之多一个节点",
 			submitted
 			&& !!createdWrite
 			&& createdWrite.body?.name === "h3"
@@ -5384,7 +5384,7 @@ if (upstreamPort) {
 		await labPage.waitForTimeout(1200);
 		const movedWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/node_position");
 		log(
-			"11.4 拖动节点把增量落成绝对值（POST /api/lab/node_position）",
+			"11.4 拖动节点把增量落成绝对值（POST /api/mininet/node_position）",
 			!!nodeBox
 			&& movedWrite?.body?.node_id === "h1"
 			&& Array.isArray(movedWrite.body.position)
@@ -5410,12 +5410,12 @@ if (upstreamPort) {
 		const deletedWrite = upstreamServer.mininetLog.find((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/delete_node/h3");
 		const afterRemove = await labPage.evaluate(() => document.querySelectorAll("[data-testid='topology-node']").length);
 		log(
-			"11.4 删除确认写明节点 id，确认后 DELETE /api/lab/delete_node/h3 并从画布消失",
+			"11.4 删除确认写明节点 id，确认后 DELETE /api/mininet/delete_node/h3 并从画布消失",
 			confirmed && confirmText.includes("h3") && !!deletedWrite && afterRemove === nodesBeforeRemove - 1,
 			`确认文案含 h3=${confirmText.includes("h3")} 请求=${deletedWrite ? deletedWrite.path : "无"} 节点=${nodesBeforeRemove}→${afterRemove}`
 		);
 
-		// 流表：选中交换机后读 `GET /api/lab/flows/sw1`，原文逐字上屏（不做解析）
+		// 流表：选中交换机后读 `GET /api/mininet/flows/sw1`，原文逐字上屏（不做解析）
 		await labPage.evaluate(() => {
 			document.querySelector("[data-testid='topology-node'][data-node-id='sw1']")
 				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -5425,12 +5425,12 @@ if (upstreamPort) {
 			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
 		);
 		log(
-			"11.4 选中交换机读出流表原文（GET /api/lab/flows/sw1）",
+			"11.4 选中交换机读出流表原文（GET /api/mininet/flows/sw1）",
 			flowText.includes("actions=CONTROLLER") && flowText.includes("priority=0"),
 			flowText.trim().slice(0, 120) || "流表为空"
 		);
 
-		// 流表写入（W2b）：填匹配域 / 动作 / 优先级 → `POST /api/lab/flows`，
+		// 流表写入（W2b）：填匹配域 / 动作 / 优先级 → `POST /api/mininet/flows`，
 		// 上游收到的就是这三段；重读后新行必须出现在同一块原文里。
 		// 注意 `UInput type="number"` 会把 v-model 交成 number —— 曾经让 `priority.trim()`
 		// 抛 TypeError、点击静默不写，这是自检真正抓到的那一处。
@@ -5447,7 +5447,7 @@ if (upstreamPort) {
 			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
 		);
 		log(
-			"11.4 加流走 POST /api/lab/flows，请求体带匹配域 / 动作 / 优先级且流表立即回显",
+			"11.4 加流走 POST /api/mininet/flows，请求体带匹配域 / 动作 / 优先级且流表立即回显",
 			flowSubmitted
 			&& flowWrite?.body?.switch === "sw1"
 			&& flowWrite.body.match === "ip,nw_dst=10.0.0.9"
@@ -5457,7 +5457,7 @@ if (upstreamPort) {
 			`表单=${flowForm} 提交=${flowSubmitted} 请求=${flowWrite ? JSON.stringify(flowWrite.body) : "无"} 流表含新行=${flowAfterAdd.includes("nw_dst=10.0.0.9")}`
 		);
 
-		// 删单条流：第一行的删除按钮 ⇒ `DELETE /api/lab/flows/sw1/1`（1 基序号按 dump 行序），
+		// 删单条流：第一行的删除按钮 ⇒ `DELETE /api/mininet/flows/sw1/1`（1 基序号按 dump 行序），
 		// 删掉的必须是 CONTROLLER 那条，刚加的 output:2 仍在。
 		const flowRemoveClicked = await clickIfPresent("[data-testid='mininet-flow-remove']");
 		await labPage.waitForTimeout(1200);
@@ -5466,7 +5466,7 @@ if (upstreamPort) {
 			document.querySelector("[data-testid='mininet-flows']")?.textContent ?? ""
 		);
 		log(
-			"11.4 删单条流走 DELETE /api/lab/flows/sw1/1，行号与上游 dump 序一致",
+			"11.4 删单条流走 DELETE /api/mininet/flows/sw1/1，行号与上游 dump 序一致",
 			flowRemoveClicked
 			&& !!flowDeleteWrite
 			&& !flowAfterRemove.includes("CONTROLLER") && flowAfterRemove.includes("nw_dst=10.0.0.9"),
@@ -5568,7 +5568,7 @@ if (upstreamPort) {
 			`按钮可用=${clearEnabled} 弹窗=${clearInvalid.open} 报错=${JSON.stringify(clearInvalid.errors)} 批量删除请求=${flowBulkDeleteCount()}（基线 ${clearBaseline}）`
 		);
 
-		// 清空整表：匹配域清空后确认 ⇒ `DELETE /api/lab/flows` 只带 `switch`（不带 `match`），
+		// 清空整表：匹配域清空后确认 ⇒ `DELETE /api/mininet/flows` 只带 `switch`（不带 `match`），
 		// 上游按 `del-flows <sw>` 清空，重读后流表块消失、空态文案出现。
 		if (clearInvalid.open)
 			await labPage.locator("[data-testid='lab-flow-clear-match']").fill("");
@@ -5582,7 +5582,7 @@ if (upstreamPort) {
 			(document.querySelector("[data-testid='mininet-flow-empty']")?.textContent ?? "").trim()
 		);
 		log(
-			"11.4 清空整表走 DELETE /api/lab/flows，请求体只有 switch，流表清空并显示空态",
+			"11.4 清空整表走 DELETE /api/mininet/flows，请求体只有 switch，流表清空并显示空态",
 			flowBulkDeleteCount() === clearBaseline + 1
 			&& clearWrite?.body?.switch === "sw1"
 			&& !Object.hasOwn(clearWrite?.body ?? {}, "match")
@@ -5627,7 +5627,7 @@ if (upstreamPort) {
 		);
 
 		// ── 11.4 运行控制（NMCPS-ADR-0022 W3）：start / stop / pingall / iperf ──
-		// 运行态读 `GET /api/lab/start`（上游裸布尔）。三态是刻意的：读不到 ≠ 已停止，
+		// 运行态读 `GET /api/mininet/start`（上游裸布尔）。三态是刻意的：读不到 ≠ 已停止，
 		// 所以「已停止」只有真的读到 `false` 才出现；按钮可用性跟着它走，
 		// 否则「没启动却点了探测」会以 400 的形式被当成「功能坏了」。
 		//
@@ -5681,7 +5681,7 @@ if (upstreamPort) {
 		const runReadout = await labPage.evaluate(() =>
 			(document.querySelector("[data-testid='mininet-run-state']")?.textContent ?? "").trim());
 		log(
-			"11.4 运行控制读 GET /api/lab/start：初始已停止，启动可点而停止 / 重启 / 探测禁用",
+			"11.4 运行控制读 GET /api/mininet/start：初始已停止，启动可点而停止 / 重启 / 探测禁用",
 			connectivityOpened && runReadout === "已停止"
 			&& runBefore.state === "已停止"
 			&& runBefore.present.start && runBefore.present.stop && runBefore.present.restart
@@ -5698,7 +5698,7 @@ if (upstreamPort) {
 		const runRunning = await runMenuProbe();
 		const networkRunningStat = await networkStatText();
 		log(
-			"11.4 启动走 POST /api/lab/start，徽章变为运行中且停止 / 重启 / 探测转为可用",
+			"11.4 启动走 POST /api/mininet/start，徽章变为运行中且停止 / 重启 / 探测转为可用",
 			startClicked && !!startWrite
 			&& runRunning.state === "运行中"
 			&& networkRunningStat.includes("运行中")
@@ -5713,7 +5713,7 @@ if (upstreamPort) {
 			(document.querySelector("[data-testid='mininet-run-ping-output']")?.textContent ?? "").trim()
 		);
 		log(
-			"11.4 连通性走 POST /api/lab/pingall，上游文本逐行上屏",
+			"11.4 连通性走 POST /api/mininet/pingall，上游文本逐行上屏",
 			pingClicked && !!pingWrite
 			&& pingText.includes("h1->h2") && pingText.includes("rtt min/avg/max/mdev"),
 			`请求=${pingWrite ? pingWrite.path : "无"} 输出=${JSON.stringify(pingText.slice(0, 80))}`
@@ -5761,7 +5761,7 @@ if (upstreamPort) {
 			document.querySelector("[data-testid='mininet-iperf-server-output']")?.textContent ?? ""
 		].join(" | ").trim());
 		log(
-			"11.4 吞吐测试走 POST /api/lab/iperf：请求体带两端 / 协议 / 秒数，两侧输出上屏",
+			"11.4 吞吐测试走 POST /api/mininet/iperf：请求体带两端 / 协议 / 秒数，两侧输出上屏",
 			serverPicked && iperfSubmitted
 			&& iperfWrite?.body?.client === "h1" && iperfWrite?.body?.server === "h2"
 			&& iperfWrite?.body?.l4_type === "TCP" && iperfWrite?.body?.seconds === 3
@@ -5778,7 +5778,7 @@ if (upstreamPort) {
 		const runStopped = await runMenuProbe();
 		const networkStoppedStat = await networkStatText();
 		log(
-			"11.4 停止需确认（弹窗写明后果），确认后 POST /api/lab/stop 且徽章与台账都回到已停止",
+			"11.4 停止需确认（弹窗写明后果），确认后 POST /api/mininet/stop 且徽章与台账都回到已停止",
 			stopOpened && stopModalText.includes("停止会终止全部节点进程")
 			&& stopConfirmed && !!stopWrite
 			&& runStopped.state === "已停止" && networkStoppedStat.includes("已停止")
@@ -6007,7 +6007,7 @@ if (upstreamPort) {
 		);
 
 		/*
-		 * 11.5c 导出地址规划（W9 第 2 项）：走 `GET /api/lab/addressing_plan`（`lab:read`），
+		 * 11.5c 导出地址规划（W9 第 2 项）：走 `GET /api/mininet/addressing_plan`（`lab:read`），
 		 * 正文是上游原文 `{ generated_at, nodes: [...] }`，由页面落成 JSON 下载 ——
 		 * 不是 BFF 的导出通道（没有 `content-disposition`），所以文件名由页面给。
 		 * 假上游在未启动时按真实上游回 400：这条用例能过，就等于证明「读的是正在跑的网络」。
@@ -6025,7 +6025,7 @@ if (upstreamPort) {
 			}
 		})();
 		log(
-			"11.5c 导出地址规划：读 GET /api/lab/addressing_plan，正文是上游原文（不套信封）",
+			"11.5c 导出地址规划：读 GET /api/mininet/addressing_plan，正文是上游原文（不套信封）",
 			/^lab-addressing-\d{8}T\d{6}Z\.json$/.test(exportedPlan.name)
 			&& planReads.length === 1
 			&& Array.isArray(planBody?.nodes) && planBody.nodes.length > 0
@@ -6125,7 +6125,7 @@ if (upstreamPort) {
 			.filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/sniffer/start")
 			.length;
 		log(
-			"11.6 开始抓包走 POST /api/lab/sniffer/start，读数变为抓包中",
+			"11.6 开始抓包走 POST /api/mininet/sniffer/start，读数变为抓包中",
 			sniffStartPicked && snifferStartsAfter === snifferStartsBefore + 1 && snifferRunning.includes("抓包中"),
 			`读数=${snifferRunning}`
 		);
@@ -6152,7 +6152,7 @@ if (upstreamPort) {
 		await labPage.waitForTimeout(1500);
 		const snifferStopped = await snifferReadout();
 		log(
-			"11.6 停止抓包走 POST /api/lab/sniffer/stop，读数回到未抓包",
+			"11.6 停止抓包走 POST /api/mininet/sniffer/stop，读数回到未抓包",
 			sniffStopPicked
 			&& upstreamServer.mininetLog.some((entry) => entry.method === "POST" && entry.path === "/api/mininet/sniffer/stop")
 			&& snifferStopped.includes("未抓包"),
@@ -6160,7 +6160,7 @@ if (upstreamPort) {
 		);
 
 		/*
-		 * 破坏性重建（W5）：`POST /api/lab/full_reset` 要逐字输入网络 ID。
+		 * 破坏性重建（W5）：`POST /api/mininet/full_reset` 要逐字输入网络 ID。
 		 * 断言拆成三步 —— 弹窗开着、输错不给点、输对才发请求且请求体带 confirm。
 		 */
 		const resetPicked = await runPick("mininet-reset-network");
@@ -6185,7 +6185,7 @@ if (upstreamPort) {
 		const canvasAfterReset = await canvasProbe();
 		const bodyAfterReset = await labPage.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " ").trim());
 		log(
-			"11.6 重建网络：输错网络 ID 不放行，输对后 POST /api/lab/full_reset 带 confirm 且画布清空",
+			"11.6 重建网络：输错网络 ID 不放行，输对后 POST /api/mininet/full_reset 带 confirm 且画布清空",
 			resetPicked && resetModalProbe.input && resetModalProbe.confirmDisabled
 			&& wrongStillDisabled && resetConfirmed
 			&& resetWrite?.body?.confirm === "net_ui"
@@ -6292,7 +6292,7 @@ if (upstreamPort) {
 		Object.assign(upstreamServer.mininetState, structuredClone(stateBeforeReset));
 
 		/*
-		 * 11.6b 台账对账（NMCPS-ADR-0023）：`POST /api/lab/networks/{id}/sync`
+		 * 11.6b 台账对账（NMCPS-ADR-0023）：`POST /api/mininet/networks/{id}/sync`
 		 *
 		 * 旧前端 / 运维直连上游加出来的节点在台账里没有痕迹，出口过滤会把它们藏起来。
 		 * 对账是**显式**动作：双权限位 + 逐字输入网络 id；BFF 只读上游、只重写清单，
@@ -6389,7 +6389,7 @@ if (upstreamPort) {
 		/*
 		 * 11.7 抓包实时流（NMCPS-ADR-0022 D6 / W5 剩余部分）
 		 *
-		 * 页面不直连上游：先 `POST /api/lab/ws-ticket` 换一次性票，再连同源 `/lab-ws/sniffer`，
+		 * 页面不直连上游：先 `POST /api/mininet/ws-ticket` 换一次性票，再连同源 `/mininet-ws/sniffer`，
 		 * BFF 以票里的 `sub` / `tid` 建上游连接。断言三段 —— 未抓包只回填历史、
 		 * 抓包中实时帧进列表（且上游连接不带 cookie / authorization）、停止后断流但保留已收到的包。
 		 */
@@ -6432,7 +6432,7 @@ if (upstreamPort) {
 		const liveStreamState = await snifferStreamState();
 		const upstreamSocket = upstreamServer.mininetSocketLog.at(-1);
 		log(
-			"11.7 开始抓包后换票连 /lab-ws/sniffer：实时帧进列表，出站不带 cookie / authorization",
+			"11.7 开始抓包后换票连 /mininet-ws/sniffer：实时帧进列表，出站不带 cookie / authorization",
 			liveRows.length === 3
 			&& liveRows.some((row) => row.includes("TCP"))
 			&& liveRows.some((row) => row.includes("ICMP"))
@@ -6495,7 +6495,7 @@ if (upstreamPort) {
 		const logsText = await waitForText("mininet-logs-output", (text) => text.includes("mininet starting") && text.includes("link up"));
 		const logsUpstream = upstreamServer.mininetSocketLog.at(-1);
 		log(
-			"11.8 日志页自动换票连 /lab-ws/logs：两行原文进面板，上游不带 cookie / authorization",
+			"11.8 日志页自动换票连 /mininet-ws/logs：两行原文进面板，上游不带 cookie / authorization",
 			logsText.includes("mininet starting")
 			&& logsText.includes("link up")
 			&& upstreamServer.mininetSocketLog.length === logSocketsBefore + 1
@@ -6513,7 +6513,7 @@ if (upstreamPort) {
 		const bannerText = await waitForText("mininet-terminal-output", (text) => text.includes("root@"));
 		const terminalUpstream = upstreamServer.mininetSocketLog.at(-1);
 		log(
-			"11.8 Webshell 连 `/lab-ws/terminal/<node>`：问候帧进面板，上游路径带节点段",
+			"11.8 Webshell 连 `/mininet-ws/terminal/<node>`：问候帧进面板，上游路径带节点段",
 			bannerText.includes("root@")
 			&& upstreamServer.mininetSocketLog.length === terminalSocketsBefore + 1
 			&& /^\/api\/mininet\/terminal\/[^/]+$/.test(terminalUpstream?.path ?? "")
@@ -6720,7 +6720,7 @@ if (upstreamPort) {
 
 		// ── 右键菜单与双击详情（NMCPS-ADR-0022 W12 / W13）──
 		// 先铺一台主机和一条链路：前面几组用例（删节点 / 重置 / 生成）会改变共享状态，这里自己
-		// 建一份，不依赖「上一组留下谁」。**必须走 `/api/lab/**` 写路径** —— 页面读的是台账（出口
+		// 建一份，不依赖「上一组留下谁」。**必须走 `/api/mininet/**` 写路径** —— 页面读的是台账（出口
 		// 只放行登记过的资源），直接往假上游的 `mininetState` 里塞，画布根本看不见它。
 		// 写请求由**页面自己**发（同源 fetch，带上会话 cookie）：`page.request` 走的是另一套
 		// 请求上下文，实测拿到 503 `bff_auth_not_configured`，铺不成路。
@@ -6733,7 +6733,7 @@ if (upstreamPort) {
 			});
 			return { status: response.status, text: await response.text() };
 		}, { path, payload });
-		const detailHostSeed = await seedThroughPage("/api/lab/hosts", {
+		const detailHostSeed = await seedThroughPage("/api/mininet/hosts", {
 			id: "h_detail",
 			type: "host",
 			name: "h_detail",
@@ -6743,7 +6743,7 @@ if (upstreamPort) {
 			x: 420,
 			y: 260
 		});
-		const detailLinkSeed = await seedThroughPage("/api/lab/links", { src: "h_detail", dst: detailSwitch });
+		const detailLinkSeed = await seedThroughPage("/api/mininet/links", { src: "h_detail", dst: detailSwitch });
 		const detailSeedOk = detailHostSeed.status === 200 && detailLinkSeed.status === 200;
 		await labPage.reload({ waitUntil: "networkidle" });
 		await labPage.waitForSelector("[data-testid='topology-node'][data-node-id='h_detail']", { timeout: 20000 }).catch(() => {});
@@ -6851,11 +6851,11 @@ if (upstreamPort) {
 		// 两种形态各一条：只读会话（实验台操作员）与只有 `lab:operate` 的会话（租户管理员）。
 		// 两者都不含 `lab:terminal`，所以 Webshell 一律不出现 —— 这是「终端不由 operate 推导」的
 		// 可见证据；只读会话连「连通」也不出现，因为探测 / 测速 / 抓包读数都要写位。
-		// 假上游固定给 alice 全能力位（其余用例靠它），这里直接改写 `GET /api/lab/channel` 的
+		// 假上游固定给 alice 全能力位（其余用例靠它），这里直接改写 `GET /api/mininet/channel` 的
 		// 能力位来覆盖裁剪分支，而不是去动共用角色表。
 		const overrideChannel = async (capabilities) => {
-			await labPage.unroute("**/api/lab/channel");
-			await labPage.route("**/api/lab/channel", async (route) => {
+			await labPage.unroute("**/api/mininet/channel");
+			await labPage.route("**/api/mininet/channel", async (route) => {
 				const response = await route.fetch();
 				const body = await response.json();
 				const writeEnabled = capabilities.create || capabilities.operate || capabilities.delete || capabilities.sniffer;
@@ -6951,10 +6951,10 @@ if (upstreamPort) {
 
 		/*
 		 * 对账入口的负半：只有 create 没有 delete 时「台账对账」必须禁用。
-		 * 页面能力位来自 `GET /api/lab/channel`，这里只改这一条响应（BFF 侧守卫不变），
+		 * 页面能力位来自 `GET /api/mininet/channel`，这里只改这一条响应（BFF 侧守卫不变），
 		 * 断言的是「客户端不给出注定 403 的入口」这一层，与 BFF 的 403 用例互补。
 		 */
-		await manifestPage.route("**/api/lab/channel", async (route) => {
+		await manifestPage.route("**/api/mininet/channel", async (route) => {
 			const response = await route.fetch();
 			const payload = await response.json();
 			const capabilities = payload?.data?.capabilities ?? {};

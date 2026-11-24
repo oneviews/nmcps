@@ -32,7 +32,7 @@ function confirmValueOf(raw: string | undefined): string | undefined {
 }
 
 /**
- * 台账清单 ← 上游事实的对账（NMCPS-ADR-0023）：`POST /api/lab/networks/{id}/sync`。
+ * 台账清单 ← 上游事实的对账（NMCPS-ADR-0023）：`POST /api/mininet/networks/{id}/sync`。
  *
  * 这条路由**只改台账**：读上游五类节点与链路，把 `resources` 整体重写成上游此刻的事实
  * （并集收敛会永久留下上游已删掉的幽灵 id）。因此它不在 `MININET_ROUTES` 里，也不转发
@@ -69,7 +69,7 @@ export default defineEventHandler(async (event): Promise<ApiResponse<LabNetworkS
 		);
 	}
 
-	const action = "post /api/lab/networks/{id}/sync";
+	const action = "post /api/mininet/networks/{id}/sync";
 	const requestId = labRequestId(event);
 	const auditBase = {
 		tenant_id: tenantId,
@@ -78,7 +78,7 @@ export default defineEventHandler(async (event): Promise<ApiResponse<LabNetworkS
 		network_id: network.id,
 		permission: [LAB_PERMISSIONS.CREATE, LAB_PERMISSIONS.DELETE].join(","),
 		method: "POST",
-		path: "/api/lab/networks/{id}/sync",
+		path: "/api/mininet/networks/{id}/sync",
 		request_id: requestId,
 		client_ip: labClientIp(event)
 	};

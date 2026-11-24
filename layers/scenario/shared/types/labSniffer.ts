@@ -1,5 +1,5 @@
 // layers/scenario/shared/types/labSniffer.ts
-// 抓包状态的**纯函数**（NMCPS-ADR-0022 W5）：把 `GET /api/lab/sniffer/state` 的响应归一成三态。
+// 抓包状态的**纯函数**（NMCPS-ADR-0022 W5）：把 `GET /api/mininet/sniffer/state` 的响应归一成三态。
 //
 // 事实源：`services/mininet-api/mininet_gui_backend/api.py` 的
 // `sniffer_state / sniffer_start / sniffer_stop`（都回 `{ active: bool }`）。

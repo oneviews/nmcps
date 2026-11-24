@@ -1,6 +1,6 @@
 <template>
 	<!--
-		台账对账确认（NMCPS-ADR-0023）：`POST /api/lab/networks/{id}/sync` 的唯一入口。
+		台账对账确认（NMCPS-ADR-0023）：`POST /api/mininet/networks/{id}/sync` 的唯一入口。
 
 		这条不改上游，只把台账清单整体重写成上游此刻的事实 —— 清单外冒出来的节点会被
 		「接管」进租户边界，上游已删掉的 id 会被清掉。与破坏性重建同档：双权限位 +

@@ -13,7 +13,7 @@
 // 门禁：默认**不跑**（脚本会建 h1 / h2 与一条链路、起停一个真网络），必须显式开门：
 //   CHECK_REAL_MININET=1 pnpm check:lab-real
 //   CHECK_REAL_IAM=1 另加一节真 IAM 能力位验收：登录真实 IAM 的 alice，断言
-//   `/api/lab/channel` = `terminal + sniffer` 且 `create/operate/delete` 全 false，
+//   `/api/mininet/channel` = `terminal + sniffer` 且 `create/operate/delete` 全 false，
 //   再跑一轮抓包启停并断言 `pingall` 回 403；IAM 地址用 `REAL_IAM_BASE` 覆盖
 //   （默认 http://192.168.1.55:8888，需该实例已有 alice 且两个实验室角色都已分配）。
 // 真后端地址默认 http://127.0.0.1:8000（`pnpm dev:lab-api` 的本机口径），可用 `REAL_MININET_BASE`
@@ -167,7 +167,7 @@ const port = await freePort();
 const bff = await startBff(port, {
 	NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
 	NUXT_BFF_SESSION_SECRET: "check-lab-real-secret-0123456789",
-	// 单租户实例：BFF 的每个 `/api/lab/**` 都落到这台真后端
+	// 单租户实例：BFF 的每个 `/api/mininet/**` 都落到这台真后端
 	NUXT_MININET_INSTANCES: JSON.stringify({ [TENANT]: { baseUrl: REAL_BASE } }),
 	NUXT_LAB_LEDGER_FILE: LEDGER_FILE,
 	// 台账先登记本网的节点清单：ws-ticket 的 `target` 只放行清单内节点，
@@ -239,7 +239,7 @@ try {
 	// ── 实验台：运行态经 BFF 读真后端（`true` 才给探测 / 停止） ──
 	await page.goto(`${BASE}/scenario/simulator`, { waitUntil: "networkidle" });
 	await page.waitForSelector("[data-testid='mininet-side-tabs']", { timeout: 20000 });
-	const runState = await page.evaluate(async () => (await fetch("/api/lab/start")).json());
+	const runState = await page.evaluate(async () => (await fetch("/api/mininet/start")).json());
 	log("BFF 把运行态指向真后端（已启动的网）", runState?.data === true, JSON.stringify(runState?.data));
 
 	/** 右栏是五标签面板：运行读数 / 抓包观察窗在「连通」，观测三块在各自的标签 */
@@ -651,7 +651,7 @@ try {
 				return { status: response.status, json };
 			};
 
-			const channel = await iamRequest("GET", "/api/lab/channel");
+			const channel = await iamRequest("GET", "/api/mininet/channel");
 			const caps = channel.json?.data?.capabilities ?? {};
 			log(
 				"真 IAM：alice 的能力位 = terminal + sniffer，且 create / operate / delete 全为 false",
@@ -660,13 +660,13 @@ try {
 				JSON.stringify(caps)
 			);
 
-			const probe = await iamRequest("POST", "/api/lab/pingall");
+			const probe = await iamRequest("POST", "/api/mininet/pingall");
 			log("真 IAM：没有 lab:operate → pingall 403 lab_permission_denied", probe.status === 403 && probe.json?.message === "lab_permission_denied", `${probe.status} ${probe.json?.message}`);
 
-			const start = await iamRequest("POST", "/api/lab/sniffer/start");
+			const start = await iamRequest("POST", "/api/mininet/sniffer/start");
 			log("真 IAM：lab:sniffer 可以开始抓包（active=true）", start.status === 200 && start.json?.data?.active === true, `${start.status} ${JSON.stringify(start.json?.data)}`);
 
-			const stop = await iamRequest("POST", "/api/lab/sniffer/stop");
+			const stop = await iamRequest("POST", "/api/mininet/sniffer/stop");
 			log("真 IAM：停止抓包回到 active=false", stop.status === 200 && stop.json?.data?.active === false, `${stop.status} ${JSON.stringify(stop.json?.data)}`);
 		} catch (error) {
 			log(`真 IAM 能力位段异常：${error.message}`, false, error.stack?.split("\n")[1]?.trim());

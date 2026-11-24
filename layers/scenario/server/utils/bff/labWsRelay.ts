@@ -1,8 +1,8 @@
 // layers/scenario/server/utils/bff/labWsRelay.ts
-// `/lab-ws/<kind>` 的通用中继：验票 → 连上游 → 双向 / 单向透传 → 记会话时长。
+// `/mininet-ws/<kind>` 的通用中继：验票 → 连上游 → 双向 / 单向透传 → 记会话时长。
 //
 // 为什么只有一份实现：四条通道（抓包 / 终端 / 日志 / 监控）的危险动作全在**签票前**
-// （会话 + 权限位 + 台账 + 审计，见 `POST /api/lab/ws-ticket`）。升级之后能做的只剩
+// （会话 + 权限位 + 台账 + 审计，见 `POST /api/mininet/ws-ticket`）。升级之后能做的只剩
 // 「拿票里的 `kind` / `target` 去连上游」—— 把这段复制四份，只会让四条通道的校验各自漂移。
 // 每条通道的差异全部集中在 `LAB_WS_UPSTREAMS`（上游路径 / 权限位 / target 语义）与
 // `labWsUpstreamPath()`（终端拼路径段、监控拼查询串）。
@@ -16,6 +16,7 @@ import { defineWebSocketHandler } from "h3";
 import { getBffConfig } from "~~/server/utils/bff/config";
 import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 import { appendLabAudit } from "#layers/scenario/server/utils/bff/labAudit";
+import { signedLabWsPath } from "#layers/scenario/server/utils/bff/labWsAuth";
 import { consumeLabWsTicket } from "#layers/scenario/server/utils/bff/labWsTickets";
 import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
 import {
@@ -137,7 +138,10 @@ export function createLabWsRelay(kind: LabWsKind) {
 				return;
 			}
 
-			const socket = new WebSocket(toUpstreamSocketUrl(config.baseUrl, labWsUpstreamPath(kind, claims.target)));
+			// 上游入口凭据（M0 远程化）：token 已配置时带 HMAC 签名查询串；
+			// Node 的 WebSocket 不能设请求头，这与后端 `auth.py` 是同一套方案。
+			const upstreamPath = signedLabWsPath(labWsUpstreamPath(kind, claims.target), config.token);
+			const socket = new WebSocket(toUpstreamSocketUrl(config.baseUrl, upstreamPath));
 			const session: LabWsSession = { claims, requestId, startedAt: Date.now(), socket, closed: false, pending: [] };
 			sessions.set(peer, session);
 

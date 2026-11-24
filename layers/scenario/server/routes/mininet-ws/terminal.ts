@@ -1,7 +1,7 @@
 import { createLabWsRelay } from "#layers/scenario/server/utils/bff/labWsRelay";
 
 /**
- * Webshell：`/lab-ws/terminal?ticket=…&target=<node>`（NMCPS-ADR-0022 D6）。
+ * Webshell：`/mininet-ws/terminal?ticket=…&target=<node>`（NMCPS-ADR-0022 D6）。
  *
  * 与其余三条通道的唯一差别是**上行**：终端要把浏览器敲的键转发给上游 PTY
  * （`clientToUpstream: true`）。上游是 `ws /api/mininet/terminal/{node_id}`，

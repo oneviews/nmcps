@@ -87,6 +87,8 @@ export const MININET_MESSAGES = {
 	confirmRequired: "lab_confirm_required",
 	/** 台账写盘失败：对账已读到上游事实，但清单没能落库（NMCPS-ADR-0023） */
 	ledgerWriteFailed: "lab_ledger_write_failed",
+	/** 申请到的会话已经绑定在这张台账网络上（重新创建前先 DELETE 旧会话） */
+	sessionExists: "lab_session_exists",
 	/** 申请的 WebSocket 种类未登记 / 尚未实现（NMCPS-ADR-0022 D6） */
 	wsKindInvalid: "lab_ws_kind_invalid",
 	/** WebSocket 票过期 / 重放 / 绑定不符 / 签名不符（NMCPS-ADR-0022 D6） */

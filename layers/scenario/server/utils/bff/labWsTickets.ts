@@ -1,5 +1,5 @@
 // layers/scenario/server/utils/bff/labWsTickets.ts
-// `/lab-ws/*` 的一次性短时票（NMCPS-ADR-0022 D6）。
+// `/mininet-ws/*` 的一次性短时票（NMCPS-ADR-0022 D6）。
 //
 // 票面 = `base64url("v1|kind|target|sub|tid|exp|jti") + "." + base64url(HMAC-SHA256(secret, "lab-ws." + body))`
 //

@@ -1,7 +1,7 @@
 import { createLabWsRelay } from "#layers/scenario/server/utils/bff/labWsRelay";
 
 /**
- * 单接口速率监控：`/lab-ws/monitor?ticket=…&target=<node>:<intf>`（NMCPS-ADR-0022 D6）。
+ * 单接口速率监控：`/mininet-ws/monitor?ticket=…&target=<node>:<intf>`（NMCPS-ADR-0022 D6）。
  *
  * 票面 `target` 是 `node:intf` 两段：节点 id 进必填校验，接口名在 `labWsTargetError()`
  * 里只判形状（`:` 恰好一次、无 `/` `\` `|` 与空白）。上游是

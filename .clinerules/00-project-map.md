@@ -11,7 +11,8 @@
 
 ## 硬约束
 
-- 浏览器不得直连 Mininet `:8000`；必须经 BFF `/api/lab/**` 与 `/lab-ws/*`。
+- 浏览器不得直连 Mininet `:8000`；必须经 BFF `/api/mininet/**` 与 `/mininet-ws/*`。BFF 前缀与上游同形
+  （`NMCPS-ADR-0022` D11）：不带主机的 `/api/mininet/**` 指 BFF，带 `:8000` 的是上游直连（只允许自检脚本）。
 - 改 Mininet 路由或 schema 后必须跑 `pnpm contracts:gen`。
 - 旧 Vite 前端按 `NMCPS-ADR-0022` 退役：只按能力位重写行为，不复制源码、不复用其样式体系、不双写；复刻验收后删除，`services/mininet-api` 只留纯后端。
 - 生产拓扑模型与实验拓扑模型不混用。

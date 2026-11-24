@@ -173,7 +173,7 @@ function isSecureRequest(event: H3Event): boolean {
  * 登录 / 刷新时落签名会话。
  *
  * 缺少密钥或用户 ID 时返回 `false`，**不抛错**：登录本身不应因为实验通道未配置而失败；
- * `/api/lab/**` 随后会用 `503 bff_auth_not_configured` 明确拒绝。
+ * `/api/mininet/**` 随后会用 `503 bff_auth_not_configured` 明确拒绝。
  */
 export function issueLabSessionCookie(
 	event: H3Event,

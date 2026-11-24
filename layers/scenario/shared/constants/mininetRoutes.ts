@@ -29,7 +29,7 @@ export type MininetPermission
 export interface MininetRoute {
 	/** 上游动词 */
 	method: MininetMethod
-	/** BFF 路径模板（`/api/lab` 之后的段，例：`/hosts`） */
+	/** BFF 路径模板（`/api/mininet` 之后的段，例：`/hosts`） */
 	template: string
 	/** Mininet 后端路径模板（例：`/api/mininet/hosts`） */
 	upstream: string
@@ -55,7 +55,9 @@ export const MININET_LONG_OPERATION_TEMPLATES: readonly string[] = [
 	"POST /full_reset",
 	"POST /import_json",
 	"POST /pingall",
-	"POST /iperf"
+	"POST /iperf",
+	"POST /sessions/{session_id}/start",
+	"POST /sessions/{session_id}/stop"
 ];
 
 /** 浏览器侧与 BFF 同口径的长时预算（毫秒）：`useApi` 的默认 20 秒在这里必须让位 */
@@ -67,15 +69,15 @@ export function isLongOperationRoute(route: Pick<MininetRoute, "method" | "templ
 }
 
 /**
- * 白名单本体（20 条查询 + 28 条写端点）。
+ * 白名单本体（21 条查询 + 36 条写端点，其中 12 条是 2.0 会话入口）。
  *
  * 刻意**不登记**：
  * - `export_json` / `export_script` / `sniffer/export`：响应是文本 / pcap 二进制，
- *   走独立下载通道 `/api/lab/export/*`（NMCPS-ADR-0022 D7）；
- * - 四个 WebSocket：终端 / 日志 / 抓包 / 监控走 `/lab-ws/*` + 短时票（NMCPS-ADR-0022 D6）。
+ *   走独立下载通道 `/api/mininet/export/*`（NMCPS-ADR-0022 D7）；
+ * - 四个 WebSocket：终端 / 日志 / 抓包 / 监控走 `/mininet-ws/*` + 短时票（NMCPS-ADR-0022 D6）。
  */
 export const MININET_ROUTES: readonly MininetRoute[] = [
-	// ── 服务探针（不属于 /api/mininet 前缀） ──
+	// ── 服务探针（BFF 侧仍挂在 `/api/mininet` 下，上游映射到 `/api/*`） ──
 	{ method: "GET", template: "/health", upstream: "/api/health", permissions: ["lab:read"] },
 	{ method: "GET", template: "/version", upstream: "/api/version", permissions: ["lab:read"] },
 	{ method: "GET", template: "/ryu/apps", upstream: "/api/ryu/apps", permissions: ["lab:read"] },
@@ -136,8 +138,39 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 
 	// ── 抓包启停（lab:sniffer，独立授权） ──
 	{ method: "POST", template: "/sniffer/start", upstream: "/api/mininet/sniffer/start", permissions: ["lab:sniffer"] },
-	{ method: "POST", template: "/sniffer/stop", upstream: "/api/mininet/sniffer/stop", permissions: ["lab:sniffer"] }
+	{ method: "POST", template: "/sniffer/stop", upstream: "/api/mininet/sniffer/stop", permissions: ["lab:sniffer"] },
+
+	// ── 2.0 会话入口（`/api/simulation/**`，NMCPS-DESIGN-008 M1） ──
+	// 与上面那批的差别只有两点：上游前缀不同（`upstream` 以 `/api/simulation` 开头，
+	// `isSimulationRoute()` 据此分辨），以及路径里的 `{session_id}` 必须是台账
+	// `session_id` 绑定的那一个（见 `[...slug].ts`），否则 404。
+	{ method: "GET", template: "/sessions", upstream: "/api/simulation/sessions", permissions: ["lab:read"] },
+	{ method: "POST", template: "/sessions", upstream: "/api/simulation/sessions", permissions: ["lab:create"] },
+	{ method: "GET", template: "/sessions/{session_id}", upstream: "/api/simulation/sessions/{session_id}", permissions: ["lab:read"] },
+	{ method: "DELETE", template: "/sessions/{session_id}", upstream: "/api/simulation/sessions/{session_id}", permissions: ["lab:delete"] },
+	{ method: "POST", template: "/sessions/{session_id}/start", upstream: "/api/simulation/sessions/{session_id}/start", permissions: ["lab:create"] },
+	{ method: "POST", template: "/sessions/{session_id}/stop", upstream: "/api/simulation/sessions/{session_id}/stop", permissions: ["lab:operate"] },
+	{ method: "GET", template: "/sessions/{session_id}/nodes", upstream: "/api/simulation/sessions/{session_id}/nodes", permissions: ["lab:read"] },
+	{ method: "POST", template: "/sessions/{session_id}/nodes", upstream: "/api/simulation/sessions/{session_id}/nodes", permissions: ["lab:create"] },
+	{ method: "DELETE", template: "/sessions/{session_id}/nodes/{node_id}", upstream: "/api/simulation/sessions/{session_id}/nodes/{node_id}", permissions: ["lab:delete"] },
+	{ method: "GET", template: "/sessions/{session_id}/links", upstream: "/api/simulation/sessions/{session_id}/links", permissions: ["lab:read"] },
+	{ method: "POST", template: "/sessions/{session_id}/links", upstream: "/api/simulation/sessions/{session_id}/links", permissions: ["lab:create"] },
+	{ method: "DELETE", template: "/sessions/{session_id}/links/{link_id}", upstream: "/api/simulation/sessions/{session_id}/links/{link_id}", permissions: ["lab:operate"] }
 ] as const;
+
+/** 2.0 会话入口的上游前缀：白名单里靠它区分「1.x 全局 API」与「会话 API」 */
+export const SIMULATION_UPSTREAM_PREFIX = "/api/simulation";
+
+/**
+ * 这条白名单条目是不是 2.0 会话入口。
+ *
+ * 用 `upstream` 前缀推导而不是另加一个 `sessionScoped` 字段：白名单每行只有
+ * `{ method, template, upstream, permissions }` 四个键，脚本按这一行的形状解析源码
+ * （`check-lab-bff.mjs` 的 `readMininetWhitelist()`），多一个键就会让解析静默返回空表。
+ */
+export function isSimulationRoute(route: Pick<MininetRoute, "upstream">): boolean {
+	return route.upstream === SIMULATION_UPSTREAM_PREFIX || route.upstream.startsWith(`${SIMULATION_UPSTREAM_PREFIX}/`);
+}
 
 /**
  * 导出通道的上游表（NMCPS-ADR-0022 §五 / W5）：**非 JSON 信封**的响应不进 `MININET_ROUTES`。
@@ -145,7 +178,7 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
  * 为什么单开一张表：白名单里的每条都会经 `proxyToMininet()` 包成 `ApiResponse` JSON，
  * 而 `export_json` / `export_script` 回的是纯文本（导出脚本还要能被浏览器另存为 `.py`）、
  * `sniffer/export` 回的是 **pcap 二进制**。包一层字符串既破坏 `wget` 也丢
- * `Content-Disposition` —— 所以导出走 `GET /api/lab/export/{json|script|pcap}` 的独立
+ * `Content-Disposition` —— 所以导出走 `GET /api/mininet/export/{json|script|pcap}` 的独立
  * handler，这里登记上游路径、扩展名、BFF 该回的 `content-type`、以及**出站前要判的权限位**。
  *
  * `permission` 逐种类不同：拓扑导出与 Python 脚本只要 `lab:read`（不改变上游状态），
@@ -265,7 +298,7 @@ function matchTemplate(template: string, segments: string[]): Record<string, str
 }
 
 /**
- * 把 `/api/lab/**` 的 catch-all 段解析为白名单条目。
+ * 把 `/api/mininet/**` 的 catch-all 段解析为白名单条目。
  *
  * 判定顺序：空路径 400 → 穿越 400 → 模板未命中 404 → 动词不符 405。
  * 未登记端点不会因为“像是 Mininet 路径”而被放行。

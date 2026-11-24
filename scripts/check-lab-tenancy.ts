@@ -142,7 +142,7 @@ const matrixPermissions = Object.values(LAB_PERMISSIONS).sort();
 
 check("白名单权限位都来自权限矩阵，且 HTTP 端点不使用 lab:terminal", () => {
 	assert.equal(whitelistPermissions.every((permission) => matrixPermissions.includes(permission)), true);
-	// terminal 只由 `/lab-ws/*` 的票使用，没有任何 HTTP 端点可以只凭它放行
+	// terminal 只由 `/mininet-ws/*` 的票使用，没有任何 HTTP 端点可以只凭它放行
 	assert.equal(whitelistPermissions.includes(LAB_PERMISSIONS.TERMINAL), false);
 });
 
@@ -156,9 +156,9 @@ check("查询端点一律 lab:read，写端点一律不含 lab:read", () => {
 	}
 });
 
-check("写端点 28 条、查询端点 17 条（覆盖上游全部写动词）", () => {
-	assert.equal(MININET_ROUTES.filter((route) => route.method !== "GET").length, 28);
-	assert.equal(MININET_ROUTES.filter((route) => route.method === "GET").length, 17);
+check("写端点 36 条、查询端点 21 条（覆盖上游全部写动词）", () => {
+	assert.equal(MININET_ROUTES.filter((route) => route.method !== "GET").length, 36);
+	assert.equal(MININET_ROUTES.filter((route) => route.method === "GET").length, 21);
 });
 
 check("破坏性重建需要 lab:delete + lab:create 双权限", () => {

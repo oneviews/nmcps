@@ -1,7 +1,7 @@
 <template>
 	<!--
 		新增节点（NMCPS-ADR-0022 W2）：五类节点共用一张表单，字段由 `LAB_NODE_KINDS` 决定。
-		请求由页面发出（`POST /api/lab/<collection>`），本组件只做「校验 + 组装请求体」，
+		请求由页面发出（`POST /api/mininet/<collection>`），本组件只做「校验 + 组装请求体」，
 		失败原话回填在弹窗里 —— 404 / 409 / 503 的解释权在 BFF，不在表单。
 	-->
 	<UModal

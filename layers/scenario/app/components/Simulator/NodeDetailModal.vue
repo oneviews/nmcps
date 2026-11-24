@@ -3,7 +3,7 @@
 		节点详情 / 编辑（NMCPS-ADR-0022 W13，复刻旧 `NodeStats.vue` 的双击入口）。
 
 		「事实」来自页面手里的台账原样字段（`GET /hosts|switches|...`），不为了看一眼再发一遍读请求；
-		只有主机 / 路由器的默认路由、接口与 ARP 额外读 `GET /api/lab/stats/{id}`，读不到只降级那一块。
+		只有主机 / 路由器的默认路由、接口与 ARP 额外读 `GET /api/mininet/stats/{id}`，读不到只降级那一块。
 		编辑按能力位：主机 `PATCH /hosts/{id}`、路由器 `PATCH /routers/{id}`，校验与请求体在
 		`labDetails.ts` 的纯函数里 —— 组件只渲染与显示报错。
 	-->
@@ -335,7 +335,7 @@
 			return;
 		liveLoading.value = true;
 		try {
-			live.value = labNodeStatsOf(await api.get<unknown>(`/api/lab/stats/${encodeURIComponent(props.node.id)}`));
+			live.value = labNodeStatsOf(await api.get<unknown>(`/api/mininet/stats/${encodeURIComponent(props.node.id)}`));
 		} catch (caught) {
 			// 读不到是常态（网络没起 / 节点没有 pid）：降级成一行说明，不挡台账事实
 			liveError.value = caught instanceof Error ? caught.message : String(caught);

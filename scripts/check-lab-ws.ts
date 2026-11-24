@@ -1,5 +1,5 @@
 // scripts/check-lab-ws.ts
-// `/lab-ws/*` 纯函数自查（NMCPS-ADR-0022 D6 / W5）。
+// `/mininet-ws/*` 纯函数自查（NMCPS-ADR-0022 D6 / W5）。
 //
 // 运行：pnpm check:lab-ws
 // 只验证三份纯函数模块，不启动 Nitro、不访问上游、不开浏览器：
@@ -49,13 +49,13 @@ const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
 const BACKSPACE = String.fromCharCode(8);
 
-console.log("`/lab-ws/*` 纯函数（NMCPS-ADR-0022 D6）\n");
+console.log("`/mininet-ws/*` 纯函数（NMCPS-ADR-0022 D6）\n");
 
 check("登记表四条通道，`LAB_WS_PATHS` 与之逐键对齐（不多不少）", () => {
 	assert.deepEqual([...LAB_WS_KINDS].sort(), ["logs", "monitor", "sniffer", "terminal"]);
 	assert.deepEqual(Object.keys(LAB_WS_PATHS).sort(), [...LAB_WS_KINDS].sort());
 	for (const kind of LAB_WS_KINDS)
-		assert.equal(LAB_WS_PATHS[kind], `/lab-ws/${kind}`);
+		assert.equal(LAB_WS_PATHS[kind], `/mininet-ws/${kind}`);
 });
 
 check("每个通道的权限位都来自权限矩阵（不写裸字符串）", () => {
@@ -126,32 +126,32 @@ check("上游地址：终端拼路径段并编码，监控拼查询串，日志 
 });
 
 check("票的同源 url：无目标不带 `target`，有目标必须带上（升级钩子要逐字比对）", () => {
-	assert.equal(labWsTicketUrl("terminal", "tk"), "/lab-ws/terminal?ticket=tk");
+	assert.equal(labWsTicketUrl("terminal", "tk"), "/mininet-ws/terminal?ticket=tk");
 	assert.equal(
 		labWsTicketUrl("monitor", "tk", "sw1:sw1-eth0"),
-		"/lab-ws/monitor?ticket=tk&target=sw1%3Asw1-eth0"
+		"/mininet-ws/monitor?ticket=tk&target=sw1%3Asw1-eth0"
 	);
 	assert.ok(!labWsTicketUrl("terminal", "tk").includes("target="));
 });
 
 check("票响应归一：缺 `ticket` / `url` / `kind` 一律无效，`expiresAt` 缺省为空串", () => {
 	assert.deepEqual(
-		labWsTicketOf({ ticket: "tk", url: "/lab-ws/logs?ticket=tk", kind: "logs", expiresAt: "2026-11-17T10:00:00Z" }),
-		{ ticket: "tk", url: "/lab-ws/logs?ticket=tk", kind: "logs", expiresAt: "2026-11-17T10:00:00Z" }
+		labWsTicketOf({ ticket: "tk", url: "/mininet-ws/logs?ticket=tk", kind: "logs", expiresAt: "2026-11-17T10:00:00Z" }),
+		{ ticket: "tk", url: "/mininet-ws/logs?ticket=tk", kind: "logs", expiresAt: "2026-11-17T10:00:00Z" }
 	);
 	assert.deepEqual(
-		labWsTicketOf({ ticket: "tk", url: "/lab-ws/logs?ticket=tk", kind: "logs" }),
-		{ ticket: "tk", url: "/lab-ws/logs?ticket=tk", kind: "logs", expiresAt: "" }
+		labWsTicketOf({ ticket: "tk", url: "/mininet-ws/logs?ticket=tk", kind: "logs" }),
+		{ ticket: "tk", url: "/mininet-ws/logs?ticket=tk", kind: "logs", expiresAt: "" }
 	);
 	for (const payload of [
 		undefined,
 		null,
 		[],
 		"tk",
-		{ url: "/lab-ws/logs", kind: "logs" },
+		{ url: "/mininet-ws/logs", kind: "logs" },
 		{ ticket: "tk", kind: "logs" },
-		{ ticket: "tk", url: "/lab-ws/logs" },
-		{ ticket: "  ", url: "/lab-ws/logs", kind: "logs" }
+		{ ticket: "tk", url: "/mininet-ws/logs" },
+		{ ticket: "  ", url: "/mininet-ws/logs", kind: "logs" }
 	])
 		assert.equal(labWsTicketOf(payload), undefined, JSON.stringify(payload));
 });

@@ -92,7 +92,6 @@ function parseRecord(value: unknown): LabNetworkRecord | undefined {
 	const createdBy = nonEmptyString(record.created_by) ?? "unknown";
 	const createdAt = nonEmptyString(record.created_at);
 	const updatedAt = nonEmptyString(record.updated_at);
-
 	if (!id || !tenantId || !engine || !upstreamId || !state || !createdAt || !updatedAt) {
 		return undefined;
 	}
@@ -101,6 +100,7 @@ function parseRecord(value: unknown): LabNetworkRecord | undefined {
 	}
 
 	const resources = parseResources(record.resources);
+	const sessionId = nonEmptyString(record.session_id);
 	return {
 		id,
 		tenant_id: tenantId,
@@ -110,6 +110,7 @@ function parseRecord(value: unknown): LabNetworkRecord | undefined {
 		created_by: createdBy,
 		created_at: createdAt,
 		updated_at: updatedAt,
+		...(sessionId ? { session_id: sessionId } : {}),
 		...(resources ? { resources } : {})
 	};
 }
@@ -368,6 +369,48 @@ export async function recordLabResourceChange(
 	}
 
 	return await upsertLabNetwork(event, { ...network, resources: next, updated_at: new Date().toISOString() });
+}
+
+/**
+ * 会话绑定（NMCPS-DESIGN-008 M1）：`session_id` 是 BFF 记下的「这张网跑在哪个引擎会话里」。
+ *
+ * 与 `upstream_id` 分开：后者是实例键（一租户一实例），前者是实例里的网。会话路径
+ * （`/api/mininet/sessions/{id}/**`）必须与这条记录一致才放行 —— 不一致一律 404，
+ * 与「不存在」同口径，不泄露别人的会话 id。
+ *
+ * 传 `null` 表示解绑（删除会话之后）：留着旧 id 会让下一次 `POST /sessions` 永远 409。
+ * 写链与 `markLabNetworkState()` 相同：重读 → 改一条 → 落盘，调用方手里的旧快照不参与。
+ */
+export async function bindLabNetworkSession(
+	event: H3Event,
+	networkId: string,
+	sessionId: string | null
+): Promise<LabNetworkRecord | undefined> {
+	const config = configOf(event);
+	return await enqueueWrite(async () => {
+		const records = await loadRecords(event, config);
+		const index = records.findIndex((item) => item.id === networkId);
+		const current = records[index];
+		if (!current) {
+			return undefined;
+		}
+
+		const next: Record<string, unknown> = { ...current, updated_at: new Date().toISOString() };
+		if (sessionId) {
+			next.session_id = sessionId;
+		} else {
+			delete next.session_id;
+		}
+
+		const parsed = parseRecord(next);
+		if (!parsed) {
+			throw new TypeError("invalid_lab_network_record");
+		}
+
+		records[index] = parsed;
+		await writeRecords(config, records);
+		return parsed;
+	});
 }
 
 /**

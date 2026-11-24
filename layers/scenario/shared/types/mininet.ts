@@ -1,12 +1,12 @@
 // layers/scenario/shared/types/mininet.ts
-// Mininet 实验通道（BFF `/api/lab/**`）的能力位。
+// Mininet 实验通道（BFF `/api/mininet/**`）的能力位。
 //
 // 设计基准：NMCPS-ADR-0020（layers/content/collections/cn/records/adr/adr-0020.md）。
 // 这里只描述 BFF 自产的能力信息，不复制 Mininet 实体；实体类型随
 // `packages/mininet-client` 落地（阶段 B）。
 
 /**
- * `GET /api/lab/channel`：通道能力位（不是上游资源的透传）。
+ * `GET /api/mininet/channel`：通道能力位（不是上游资源的透传）。
  *
  * 页面按 `capabilities` 渲染：未授权的动作不出现，不依赖「先渲染再等 403」。
  */
@@ -35,4 +35,27 @@ export interface MininetChannelCapabilities {
 	delete: boolean
 	terminal: boolean
 	sniffer: boolean
+}
+
+/**
+ * `GET /api/mininet/version`：与实验后端的握手结果（M0 远程化）。
+ *
+ * 为什么不塞进 `/api/mininet/channel`：capability 探针刻意**不触达上游**（NMCPS-ADR-0020），
+ * 握手要发一次 `GET /api/version`。两件事分开，探针在没有上游时仍然能回能力位。
+ */
+export interface MininetVersionInfo {
+	/** 上游确实回了 `GET /api/version` */
+	reachable: boolean
+	/** 后端版本（`services/mininet-api` 的 `__version__`） */
+	version: string | null
+	/** 宿主 Mininet 版本（不可用时为 null） */
+	mininetVersion: string | null
+	/** 上游契约标记；旧后端没有这个字段时为 null */
+	apiContract: string | null
+	/** 主版本与 `LAB_API_CONTRACT` 一致 */
+	compatible: boolean
+	/** BFF 期望的契约（`LAB_API_CONTRACT`），排查时不必翻文档 */
+	expectedContract: string
+	/** 出站是否带入口凭据（token 由服务端配置，值不回传） */
+	tokenConfigured: boolean
 }

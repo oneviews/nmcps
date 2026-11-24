@@ -21,7 +21,7 @@ export default defineNuxtConfig({
 	],
 	ssr: false,
 	ignore: ["**/src-tauri/**"],
-	// `/lab-ws/*` 的升级需要 Nitro 的 WebSocket 支持（crossws，NMCPS-ADR-0022 D6）；
+	// `/mininet-ws/*` 的升级需要 Nitro 的 WebSocket 支持（crossws，NMCPS-ADR-0022 D6）；
 	// 关掉它的话 `defineWebSocketHandler` 的路由只会回 426 Upgrade Required。
 	nitro: {
 		experimental: {
@@ -79,13 +79,16 @@ export default defineNuxtConfig({
 			readinessPath: "/api/health"
 		},
 		// Mininet 实验后端（第三出站通道，NMCPS-ADR-0020）：
-		// baseUrl 为空＝通道未启用（`/api/lab/**` 回 503 mininet_not_configured）；
+		// baseUrl 为空＝通道未启用（`/api/mininet/**` 回 503 mininet_not_configured）；
 		// 白名单只有 GET，写操作 / 终端 / 抓包在后续决策前不开放。
 		mininet: {
 			baseUrl: "",
 			// 租户 → 实例注册表（JSON 字符串）：{"t_a":{"baseUrl":"http://127.0.0.1:8000"}}
 			// 配了注册表后，租户请求只查这里；未命中即 503 tenant_runtime_unavailable，绝不回退全局 baseUrl。
 			instances: "",
+			// 入口凭据（`LAB_API_TOKEN`，两边同值）：后端设置后 HTTP 要 `x-lab-token`、
+			// WebSocket 要 HMAC 签名查询串；为空＝后端只接受回环客户端（本机现状）。
+			token: "",
 			timeoutMs: 15000,
 			// 长时端点（`pingall` / `start` / `stop` …）的独立预算（NMCPS-ADR-0026 D1）：
 			// 一次 pingall 在 9 节点网上实测 42.6 秒，沿用读端点的 15 秒会被判成「超时」

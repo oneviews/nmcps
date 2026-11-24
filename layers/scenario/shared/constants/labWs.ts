@@ -1,14 +1,16 @@
 // layers/scenario/shared/constants/labWs.ts
-// `/lab-ws/*` 的通道登记表（NMCPS-ADR-0022 D6）。
+// `/mininet-ws/*` 的通道登记表（NMCPS-ADR-0022 D6）。
 //
 // 约束（与 `MININET_ROUTES` 同一条纪律）：
-// - 浏览器只能连**同源** `/lab-ws/<kind>`，上游地址永远不下发；
+// - 浏览器只能连**同源** `/mininet-ws/<kind>`，上游地址永远不下发；
+// - 通道表里的 `upstream` 是**上游**路径（拼在实例 `baseUrl` 之后），与浏览器面 `/mininet-ws/<kind>`
+//   同形但不同主机（NMCPS-ADR-0022 D11）：改浏览器面只改 `LAB_WS_PATHS`，不要动 `upstream`；
 // - 每种通道一个权限位，terminal / sniffer 不能由 `lab:read` 推导（NMCPS-ADR-0021 D3）；
 // - 未登记的种类一律 400 `lab_ws_kind_invalid`：票不能签给「还没实现的服务」。
 //
 // 当前已落地四条：`sniffer`（抓包实时流）、`terminal`（Webshell）、`logs`（上游日志）、
 // `monitor`（单接口速率）。四条共用同一张表：新增通道只需登记条目 + 一个
-// `server/routes/lab-ws/<kind>.ts`（一行 `createLabWsRelay(kind)`），票的签名 / 一次性 /
+// `server/routes/mininet-ws/<kind>.ts`（一行 `createLabWsRelay(kind)`），票的签名 / 一次性 /
 // 绑定逻辑不变。
 //
 // `target` 的语义按通道分档（`targetKind`）：
@@ -39,7 +41,7 @@ export interface LabWsUpstream {
 	clientToUpstream: boolean
 }
 
-/** 已实现的通道登记表（键＝`/lab-ws/<kind>` 的 `<kind>`） */
+/** 已实现的通道登记表（键＝`/mininet-ws/<kind>` 的 `<kind>`） */
 export const LAB_WS_UPSTREAMS = {
 	sniffer: {
 		upstream: "/api/mininet/sniffer",
@@ -77,10 +79,10 @@ export const LAB_WS_KINDS = Object.keys(LAB_WS_UPSTREAMS) as LabWsKind[];
 
 /** 同源浏览地址：票放查询串，`target` 不进 URL（它已绑定在票里） */
 export const LAB_WS_PATHS: Record<LabWsKind, string> = {
-	sniffer: "/lab-ws/sniffer",
-	terminal: "/lab-ws/terminal",
-	logs: "/lab-ws/logs",
-	monitor: "/lab-ws/monitor"
+	sniffer: "/mininet-ws/sniffer",
+	terminal: "/mininet-ws/terminal",
+	logs: "/mininet-ws/logs",
+	monitor: "/mininet-ws/monitor"
 };
 
 /** 票面 `target` 的解析结果：`node` 只有节点，`node-intf` 两段都有 */
@@ -167,7 +169,7 @@ export function isLabWsKind(value: unknown): value is LabWsKind {
 }
 
 /**
- * `POST /api/lab/ws-ticket` 回给页面的 `url`（相对同源，不含上游地址）。
+ * `POST /api/mininet/ws-ticket` 回给页面的 `url`（相对同源，不含上游地址）。
  *
  * 票面签了非空 `target` 时，URL 一并带上：升级钩子要求查询串里的 `target` 与票面一致，
  * 否则一张「给 net_a 的票」可以拿去连 net_b 的通道。

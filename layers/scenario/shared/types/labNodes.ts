@@ -16,11 +16,11 @@ export type LabNodeKind = (typeof LAB_NODE_KINDS)[number];
 
 /** 类型 → BFF 集合端点（`lab:create` 分档里的七条中与建节点相关的五条） */
 export const LAB_NODE_COLLECTIONS: Record<LabNodeKind, string> = {
-	host: "/api/lab/hosts",
-	switch: "/api/lab/switches",
-	router: "/api/lab/routers",
-	nat: "/api/lab/nats",
-	controller: "/api/lab/controllers"
+	host: "/api/mininet/hosts",
+	switch: "/api/mininet/switches",
+	router: "/api/mininet/routers",
+	nat: "/api/mininet/nats",
+	controller: "/api/mininet/controllers"
 };
 
 /** 上游 `Switch.switch_type` 的合法取值（`format_switch()` 的分支） */

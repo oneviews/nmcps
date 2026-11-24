@@ -7,7 +7,7 @@ import { hashAccessToken, readLabSession } from "~~/server/utils/bff/session";
 import { hasLabPermission, hasLabPermissions } from "~~/shared/constants/labPermissions";
 
 /**
- * `/api/lab/**` 的统一鉴权入口（NMCPS-ADR-0021 P1）。
+ * `/api/mininet/**` 的统一鉴权入口（NMCPS-ADR-0021 P1）。
  *
  * 判定顺序固定为：签名会话 → 访问令牌绑定 → IAM 角色 → 权限位。
  * 任何一步失败都不得继续出站；跨租户 / 无权限一律 403 `lab_permission_denied`

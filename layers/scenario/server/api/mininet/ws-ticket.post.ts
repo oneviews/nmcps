@@ -14,7 +14,7 @@ import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfi
 import { isLabWsKind, LAB_WS_UPSTREAMS, labWsTargetError, labWsTargetParts, labWsTicketUrl } from "#layers/scenario/shared/constants/labWs";
 
 /**
- * 换取一次性 WebSocket 票：`POST /api/lab/ws-ticket { kind, target? }`。
+ * 换取一次性 WebSocket 票：`POST /api/mininet/ws-ticket { kind, target? }`。
  *
  * 判定顺序固定为：会话（401/503）→ 请求体 / 种类（400）→ 权限位（403）→ 实例（503）→
  * 台账（404）→ 审计（503）→ 签票。
@@ -134,7 +134,7 @@ export default defineEventHandler(async (event): Promise<ApiResponse<LabWsTicket
 		result: "allowed",
 		permission: entry.permission,
 		method: "POST",
-		path: "/api/lab/ws-ticket",
+		path: "/api/mininet/ws-ticket",
 		reason: target || "network",
 		request_id: labRequestId(event),
 		client_ip: labClientIp(event)

@@ -8,7 +8,7 @@
 					2.0 把工具栏左区交回给页面，菜单栏因此落在刷新 / 新增**之前**。
 
 					「文件」= 导入拓扑 / 导出 JSON / 导出脚本，三项都有端点（W4 的
-					`POST /api/lab/import_json` 与 `GET /api/lab/export/{json|script}`），不是占位的灰项；
+					`POST /api/mininet/import_json` 与 `GET /api/mininet/export/{json|script}`），不是占位的灰项；
 					「工具」要 W5 的抓包端点（`lab:sniffer` 才渲染），「帮助」等文档锚点落地再补。
 
 					一个动作一个入口：显示类开关从工具栏独立开关收进「视图」；启动 / 停止 / 重启 /
@@ -54,7 +54,7 @@
 
 					只有 `lab:sniffer` 才渲染整个菜单 —— 抓包权限不能由 `lab:read` / `lab:operate`
 					推导（NMCPS-ADR-0021 D3），未授权时连入口都不出现，而不是点下去收 403。
-					下载走导出通道 `GET /api/lab/export/pcap`：那条通道的权限位同样是 `lab:sniffer`，
+					下载走导出通道 `GET /api/mininet/export/pcap`：那条通道的权限位同样是 `lab:sniffer`，
 					并且以 `arrayBuffer` 取原始字节，pcap 不会被当文本解码。
 				-->
 				<UDropdownMenu v-if="canSniff" :items="toolsMenuItems" :content="{ align: 'start' }">
@@ -636,7 +636,7 @@
 								<!--
 							运行控制（NMCPS-ADR-0022 W3）：`start` 要 `lab:create`，`stop` / `pingall` / `iperf` 要 `lab:operate`。
 
-							状态读 `GET /api/lab/start`（上游 `app.net.is_started`）：读不到就写「未知」，**不假设
+							状态读 `GET /api/mininet/start`（上游 `app.net.is_started`）：读不到就写「未知」，**不假设
 							「应该没启动」** —— 猜错会让启动按钮对着一个已在跑的网络发请求，再拿 400 当失败。
 							按钮的禁用条件跟着运行态走：已启动不给启动、没启动不给停 / 不给跑测试，
 							免得把「状态坏了」当成「操作失败」。
@@ -683,7 +683,7 @@
 									</p>
 
 									<!--
-								实时包列表（`/lab-ws/sniffer`，NMCPS-ADR-0022 D6）：抓包中自动连流，
+								实时包列表（`/mininet-ws/sniffer`，NMCPS-ADR-0022 D6）：抓包中自动连流，
 								未抓包时只展示 `sniffer/history` 回填的历史。载荷只在本机渲染，不入审计。
 							-->
 									<div v-if="canSniff" data-testid="mininet-sniffer-panel" class="mt-2 rounded-lg border border-(--ui-border)">
@@ -1044,7 +1044,7 @@
 	const selectedLinkKey = ref<string | null>(null);
 
 	/**
-	 * 会话能力位（`GET /api/lab/channel`，NMCPS-ADR-0022 D3）：
+	 * 会话能力位（`GET /api/mininet/channel`，NMCPS-ADR-0022 D3）：
 	 * 写动作**先读能力位再渲染**，不靠「先渲染、点下去再收 403/405」。
 	 * 读不到（通道未配置 / 主上游不可用）时保持只读 —— 失败关闭。
 	 */
@@ -1167,7 +1167,7 @@
 	/**
 	 * 抓包（NMCPS-ADR-0022 W5，「工具」菜单）：三态读数 + 在途动作。
 	 *
-	 * `snifferActive` 的 `null` 是**未知**（`GET /api/lab/sniffer/state` 读不到），
+	 * `snifferActive` 的 `null` 是**未知**（`GET /api/mininet/sniffer/state` 读不到），
 	 * 与运行态同一口径：未知时两个动作都禁用 —— 把「读不到」当「没在抓」，
 	 * 会让「开始抓包」对着已经在录的上游再发一次 start。
 	 */
@@ -1178,7 +1178,7 @@
 	const snifferBusy = computed(() => snifferAction.value !== null);
 
 	/**
-	 * 实时包列表（`/lab-ws/sniffer`，NMCPS-ADR-0022 D6）。
+	 * 实时包列表（`/mininet-ws/sniffer`，NMCPS-ADR-0022 D6）。
 	 *
 	 * 只有**抓包中**才建连：读数 `null`（读不到）与 `false` 都不连 —— 未知不等于在抓包。
 	 * 建连前先向 BFF 换一次性票（会话 + `lab:sniffer` + 台账都在 BFF 判），
@@ -1223,7 +1223,7 @@
 	/** 破坏性重建确认（`POST /full_reset`，W5）：网络 id 由弹窗逐字确认后回传 */
 	const resetOpen = ref(false);
 	const resetError = ref<string>();
-	/** 台账对账（`POST /api/lab/networks/{id}/sync`，NMCPS-ADR-0023） */
+	/** 台账对账（`POST /api/mininet/networks/{id}/sync`，NMCPS-ADR-0023） */
 	const reconcileOpen = ref(false);
 	const reconcileBusy = ref(false);
 	const reconcileError = ref<string>();
@@ -1420,7 +1420,7 @@
 	/**
 	 * 「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本。
 	 *
-	 * 导出走 `GET /api/lab/export/{json|script}`（`lab:read`，任何人可见）：它只读上游，
+	 * 导出走 `GET /api/mininet/export/{json|script}`（`lab:read`，任何人可见）：它只读上游，
 	 * 不改变拓扑；导入需要双权限。三项都是真端点 —— 没有「先占位、后接线」的灰项。
 	 */
 	const fileMenuItems = computed<DropdownMenuItem[][]>(() => [[
@@ -1451,7 +1451,7 @@
 		},
 		{
 			/*
-				导出地址规划（复刻旧「文件 → 导出地址规划」）：读 `GET /api/lab/addressing_plan`
+				导出地址规划（复刻旧「文件 → 导出地址规划」）：读 `GET /api/mininet/addressing_plan`
 				（`lab:read`）。旧版排成 PDF，2.0 不引入 PDF 依赖，改成同名 JSON 下载 ——
 				内容仍是「每台节点的接口 / MAC / IPv4 / IPv6」。
 			*/
@@ -1483,7 +1483,7 @@
 	}
 
 	/**
-	 * 选完文件 → 本地判形状 → `POST /api/lab/import_json`。
+	 * 选完文件 → 本地判形状 → `POST /api/mininet/import_json`。
 	 *
 	 * 形状判定放在请求之前（`parseLabImport()`）：空文件 / 不是 JSON / 既不是 `{nodes, edges}`
 	 * 也不是台账形状，都在这里就地报错、零请求 —— 不让用户拿上游的 422 当提示。
@@ -1511,7 +1511,7 @@
 
 		importBusy.value = true;
 		try {
-			await api.post("/api/lab/import_json", parsed.payload, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/mininet/import_json", parsed.payload, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			toast.add({
 				title: t("pages.scenario-simulator.import.ok"),
 				description: t("pages.scenario-simulator.import.okHint", {
@@ -1557,7 +1557,7 @@
 	 */
 	async function exportTopology(kind: "json" | "script"): Promise<void> {
 		try {
-			const { blob, filename } = await api.download(`/api/lab/export/${kind}`, {
+			const { blob, filename } = await api.download(`/api/mininet/export/${kind}`, {
 				fallbackFilename: `lab-topology.${kind === "json" ? "json" : "py"}`
 			});
 			saveBlob(blob, filename);
@@ -1571,7 +1571,7 @@
 	}
 
 	/**
-	 * 下载抓包文件（`GET /api/lab/export/pcap`，`lab:sniffer`）。
+	 * 下载抓包文件（`GET /api/mininet/export/pcap`，`lab:sniffer`）。
 	 *
 	 * 与拓扑导出同一条下载通道，但 `accept` 声明二进制：pcap 不能被当文本解，
 	 * BFF 侧同样以 `arrayBuffer` 取字节（`fetchMininetBinary`）。
@@ -1584,7 +1584,7 @@
 		snifferError.value = undefined;
 
 		try {
-			const { blob, filename } = await api.download("/api/lab/export/pcap", {
+			const { blob, filename } = await api.download("/api/mininet/export/pcap", {
 				fallbackFilename: LAB_CAPTURE_FALLBACK_FILENAME,
 				accept: "application/vnd.tcpdump.pcap"
 			});
@@ -1603,7 +1603,7 @@
 	}
 
 	/**
-	 * 开始抓包（`POST /api/lab/sniffer/start`）：上游对未启动的网络回 400，所以入口只在
+	 * 开始抓包（`POST /api/mininet/sniffer/start`）：上游对未启动的网络回 400，所以入口只在
 	 * `runState === true && snifferActive === false` 时可点。响应体是 `{ active }`，
 	 * 直接当新读数用 —— 不自己把状态改成 `true`，让上游说了算。
 	 */
@@ -1615,7 +1615,7 @@
 		snifferError.value = undefined;
 
 		try {
-			snifferActive.value = labSnifferActiveOf(await api.post<unknown>("/api/lab/sniffer/start"));
+			snifferActive.value = labSnifferActiveOf(await api.post<unknown>("/api/mininet/sniffer/start"));
 			toast.add({ title: t("pages.scenario-simulator.sniffer.started"), color: "success" });
 		} catch (caught) {
 			snifferError.value = messageOf(caught);
@@ -1629,7 +1629,7 @@
 		}
 	}
 
-	/** 停止抓包（`POST /api/lab/sniffer/stop`）：上游幂等，读数仍以响应为准 */
+	/** 停止抓包（`POST /api/mininet/sniffer/stop`）：上游幂等，读数仍以响应为准 */
 	async function stopSniffer(): Promise<void> {
 		if (!canSniff.value || snifferBusy.value)
 			return;
@@ -1638,7 +1638,7 @@
 		snifferError.value = undefined;
 
 		try {
-			snifferActive.value = labSnifferActiveOf(await api.post<unknown>("/api/lab/sniffer/stop"));
+			snifferActive.value = labSnifferActiveOf(await api.post<unknown>("/api/mininet/sniffer/stop"));
 			toast.add({ title: t("pages.scenario-simulator.sniffer.stopped"), color: "success" });
 		} catch (caught) {
 			snifferError.value = messageOf(caught);
@@ -1936,9 +1936,9 @@
 		try {
 			// 能力位、台账与运行态并行取：通道读不到（未配置 / 主上游故障）时降级为只读，不影响看拓扑
 			const [networkResult, channelResult, runResult] = await Promise.allSettled([
-				api.get<LabNetworkSummary[]>("/api/lab/networks"),
-				api.get<MininetChannelInfo>("/api/lab/channel"),
-				api.get<unknown>("/api/lab/start")
+				api.get<LabNetworkSummary[]>("/api/mininet/networks"),
+				api.get<MininetChannelInfo>("/api/mininet/channel"),
+				api.get<unknown>("/api/mininet/start")
 			]);
 
 			capabilities.value = channelResult.status === "fulfilled" ? channelResult.value.capabilities : null;
@@ -1948,12 +1948,12 @@
 			// 抓包态只在有 `lab:sniffer` 时读：没有权限时上游必回 403，白跑一趟还会在日志里留噪声。
 			// 读失败保持 `null`（未知），不回落成 `false`
 			snifferActive.value = canSniff.value
-				? await api.get<unknown>("/api/lab/sniffer/state")
+				? await api.get<unknown>("/api/mininet/sniffer/state")
 					.then((payload) => labSnifferActiveOf(payload))
 					.catch(() => null)
 				: null;
 
-			// 实时包列表先回填历史（`GET /api/lab/sniffer/history`，`lab:read`）：
+			// 实时包列表先回填历史（`GET /api/mininet/sniffer/history`，`lab:read`）：
 			// 读不到只让列表空着，不影响拓扑与运行态
 			if (canSniff.value)
 				await loadSnifferHistory();
@@ -1968,16 +1968,16 @@
 			}
 
 			const requests: Array<{ kind: NodeKind, path: string }> = [
-				{ kind: "host", path: "/api/lab/hosts" },
-				{ kind: "switch", path: "/api/lab/switches" },
-				{ kind: "router", path: "/api/lab/routers" },
-				{ kind: "nat", path: "/api/lab/nats" },
-				{ kind: "controller", path: "/api/lab/controllers" }
+				{ kind: "host", path: "/api/mininet/hosts" },
+				{ kind: "switch", path: "/api/mininet/switches" },
+				{ kind: "router", path: "/api/mininet/routers" },
+				{ kind: "nat", path: "/api/mininet/nats" },
+				{ kind: "controller", path: "/api/mininet/controllers" }
 			];
 
 			const [nodeResults, linkResult] = await Promise.all([
 				Promise.allSettled(requests.map((item) => api.get<unknown>(item.path))),
-				Promise.allSettled([api.get<unknown>("/api/lab/links")])
+				Promise.allSettled([api.get<unknown>("/api/mininet/links")])
 			]);
 
 			const rawNodes: RawMininetNode[] = [];
@@ -2081,7 +2081,7 @@
 		detailError.value = undefined;
 		try {
 			const collection = kind === "host" ? "hosts" : "routers";
-			await api.patch<unknown>(`/api/lab/${collection}/${encodeURIComponent(id)}`, payload);
+			await api.patch<unknown>(`/api/mininet/${collection}/${encodeURIComponent(id)}`, payload);
 			nodeDetailOpen.value = false;
 			toast.add({ title: t("pages.scenario-simulator.nodeDetail.saved"), color: "success" });
 			await load();
@@ -2099,7 +2099,7 @@
 		detailSubmitting.value = true;
 		detailError.value = undefined;
 		try {
-			await api.put<unknown>("/api/lab/links", payload);
+			await api.put<unknown>("/api/mininet/links", payload);
 			linkDetailOpen.value = false;
 			toast.add({ title: t("pages.scenario-simulator.linkDetail.saved"), color: "success" });
 			await load();
@@ -2133,7 +2133,7 @@
 	}
 
 	/* ── 写操作（NMCPS-ADR-0022 W2）──────────────────────────────────────────
-	 * 全部走 `/api/lab/**`：权限位、审计、串行化锁、台账归属都在 BFF，
+	 * 全部走 `/api/mininet/**`：权限位、审计、串行化锁、台账归属都在 BFF，
 	 * 页面只做「发什么 + 失败原话回显」。成功后统一 `load()`，让画布回到台账事实，
 	 * 不在前端自己算一份「应该长什么样」。
 	 */
@@ -2210,7 +2210,7 @@
 	}
 
 	/**
-	 * 投放：只到「打开表单」这一步 —— 节点仍然由用户确认后 `POST /api/lab/<collection>`，
+	 * 投放：只到「打开表单」这一步 —— 节点仍然由用户确认后 `POST /api/mininet/<collection>`，
 	 * 名称 / IP 校验与请求体组装仍走 `NodeFormModal` 那一条路径（不写第二份）。
 	 */
 	function onCanvasDrop(point: { x: number, y: number }): void {
@@ -2292,7 +2292,7 @@
 				createdNodes++;
 			}
 			for (const link of plan.links) {
-				await api.post("/api/lab/links", labGenerateLinkPayloadOf(link, linkOptions));
+				await api.post("/api/mininet/links", labGenerateLinkPayloadOf(link, linkOptions));
 				createdLinks++;
 			}
 
@@ -2379,14 +2379,14 @@
 	}
 
 	/**
-	 * 导出地址规划（`GET /api/lab/addressing_plan`，`lab:read`）。
+	 * 导出地址规划（`GET /api/mininet/addressing_plan`，`lab:read`）。
 	 *
 	 * 旧版用 jsPDF + autoTable 排成 PDF；2.0 不引入新的前端依赖，落成同名 JSON，
 	 * 字段仍是上游返回的原文（节点 / 接口 / MAC / IPv4 / IPv6），不在这里裁剪。
 	 */
 	async function exportAddressingPlan(): Promise<void> {
 		try {
-			const plan = await api.get<unknown>("/api/lab/addressing_plan");
+			const plan = await api.get<unknown>("/api/mininet/addressing_plan");
 			saveBlob(
 				new Blob([`${JSON.stringify(plan, null, 2)}\n`], { type: "application/json" }),
 				`lab-addressing-${exportStamp()}.json`
@@ -2426,9 +2426,9 @@
 
 		try {
 			if (target.kind === "link") {
-				await api.del(`/api/lab/delete_link/${encodeURIComponent(target.source ?? "")}/${encodeURIComponent(target.target ?? "")}`);
+				await api.del(`/api/mininet/delete_link/${encodeURIComponent(target.source ?? "")}/${encodeURIComponent(target.target ?? "")}`);
 			} else if (target.id) {
-				await api.del(`/api/lab/delete_node/${encodeURIComponent(target.id)}`);
+				await api.del(`/api/mininet/delete_node/${encodeURIComponent(target.id)}`);
 			}
 
 			removeOpen.value = false;
@@ -2452,7 +2452,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.post("/api/lab/links", labGenerateLinkPayloadOf(
+			await api.post("/api/mininet/links", labGenerateLinkPayloadOf(
 				{ src: source, dst: target },
 				labPreferencesLinkOptions(preferences.value)
 			));
@@ -2467,7 +2467,7 @@
 	}
 
 	/**
-	 * 拖动落点（`POST /api/lab/node_position`）。
+	 * 拖动落点（`POST /api/mininet/node_position`）。
 	 *
 	 * 画布给的是**相对几何坐标的累计增量**，上游存的是绝对值：把增量加回 `raw.x` / `raw.y`
 	 * 即可。画布展示坐标做过「减去 minX + 80」的平移，那是常量偏移，对增量不产生影响。
@@ -2484,7 +2484,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.post("/api/lab/node_position", { node_id: id, position: [x, y] });
+			await api.post("/api/mininet/node_position", { node_id: id, position: [x, y] });
 			await load();
 		} catch (caught) {
 			actionError.value = messageOf(caught);
@@ -2503,7 +2503,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.put(`/api/lab/switches/${encodeURIComponent(id)}/openflow`, { of_version: typeof value === "string" ? value : "auto" });
+			await api.put(`/api/mininet/switches/${encodeURIComponent(id)}/openflow`, { of_version: typeof value === "string" ? value : "auto" });
 			await load();
 		} catch (caught) {
 			actionError.value = messageOf(caught);
@@ -2526,7 +2526,7 @@
 	}
 
 	/**
-	 * 流表读数（`GET /api/lab/flows/{switch}`）：上游回 `ovs-ofctl dump-flows` 原文。
+	 * 流表读数（`GET /api/mininet/flows/{switch}`）：上游回 `ovs-ofctl dump-flows` 原文。
 	 * 未启动网络时上游回 400，原话照实显示 —— 「没启动」和「没有流」不是同一件事。
 	 */
 	async function loadFlows(id: string): Promise<void> {
@@ -2534,7 +2534,7 @@
 		flowLoading.value = true;
 
 		try {
-			const result = await api.get<{ switch?: string, flows?: string }>(`/api/lab/flows/${encodeURIComponent(id)}`);
+			const result = await api.get<{ switch?: string, flows?: string }>(`/api/mininet/flows/${encodeURIComponent(id)}`);
 			flowText.value = typeof result?.flows === "string" ? result.flows : "";
 		} catch (caught) {
 			flowError.value = messageOf(caught);
@@ -2551,7 +2551,7 @@
 	}
 
 	/**
-	 * 加流（`POST /api/lab/flows`，`lab:operate`）：校验在本地先拦一道，
+	 * 加流（`POST /api/mininet/flows`，`lab:operate`）：校验在本地先拦一道，
 	 * 真正的合法性交给上游 `ovs-ofctl add-flow`（失败回 400，原话照实显示）。
 	 */
 	async function addFlow(): Promise<void> {
@@ -2568,7 +2568,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.post("/api/lab/flows", labFlowPayloadOf(id, flowDraft.value));
+			await api.post("/api/mininet/flows", labFlowPayloadOf(id, flowDraft.value));
 			toast.add({ title: t("pages.scenario-simulator.flows.created", { id }), color: "success" });
 			await loadFlows(id);
 		} catch (caught) {
@@ -2579,7 +2579,7 @@
 	}
 
 	/**
-	 * 删单条流（`DELETE /api/lab/flows/{switch}/{flow_id}`，`lab:operate`）。
+	 * 删单条流（`DELETE /api/mininet/flows/{switch}/{flow_id}`，`lab:operate`）。
 	 * `flow_id` 是上游按「含 `actions=` 的行」数的 1 基序号 —— 见 `labFlowRowsOf()`。
 	 */
 	async function removeFlow(flowId: number): Promise<void> {
@@ -2591,7 +2591,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.del(`/api/lab/flows/${encodeURIComponent(id)}/${flowId}`);
+			await api.del(`/api/mininet/flows/${encodeURIComponent(id)}/${flowId}`);
 			toast.add({ title: t("pages.scenario-simulator.flows.removed", { id: flowId, switch: id }), color: "success" });
 			await loadFlows(id);
 		} catch (caught) {
@@ -2602,7 +2602,7 @@
 	}
 
 	/**
-	 * 清流（`DELETE /api/lab/flows`，`lab:operate`）：匹配域留空 = 清整表，
+	 * 清流（`DELETE /api/mininet/flows`，`lab:operate`）：匹配域留空 = 清整表，
 	 * 填了只删命中项（上游 `del-flows` 语义）。本地只拦「夹带 `actions=`」一条，
 	 * 其余判定交给上游 —— 失败原话照实显示在弹窗里。
 	 */
@@ -2634,7 +2634,7 @@
 		clearFlowsError.value = undefined;
 
 		try {
-			await api.del("/api/lab/flows", labFlowClearPayloadOf(id, match));
+			await api.del("/api/mininet/flows", labFlowClearPayloadOf(id, match));
 			clearFlowsOpen.value = false;
 			toast.add({
 				title: match
@@ -2657,7 +2657,7 @@
 	 * 重读台账与运行态 —— 运行态由上游说了算，页面不自己改 `runState`。
 	 */
 
-	/** 启动（`POST /api/lab/start`）：建网并启动全部节点；已在运行时上游回 400 */
+	/** 启动（`POST /api/mininet/start`）：建网并启动全部节点；已在运行时上游回 400 */
 	async function startNetwork(): Promise<void> {
 		if (!canCreate.value || runBusy.value)
 			return;
@@ -2666,7 +2666,7 @@
 		runError.value = undefined;
 
 		try {
-			await api.post("/api/lab/start", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/mininet/start", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			toast.add({ title: t("pages.scenario-simulator.run.started"), color: "success" });
 			await load();
 		} catch (caught) {
@@ -2709,7 +2709,7 @@
 	}
 
 	/**
-	 * 破坏性重建（`POST /api/lab/full_reset`，W5）：清空全部节点 / 链路 / 流表。
+	 * 破坏性重建（`POST /api/mininet/full_reset`，W5）：清空全部节点 / 链路 / 流表。
 	 *
 	 * `confirm` 由弹窗逐字输入后回传，BFF 用它和台账 `network_id` 比对（不符即 400
 	 * `lab_confirm_required`，不触达上游）。成功后重读台账 —— 画布必须回到「空网」这一
@@ -2724,7 +2724,7 @@
 		resetError.value = undefined;
 
 		try {
-			await api.post("/api/lab/full_reset", { confirm }, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/mininet/full_reset", { confirm }, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			resetOpen.value = false;
 			pingOutput.value = "";
 			iperfResult.value = null;
@@ -2750,7 +2750,7 @@
 	}
 
 	/**
-	 * 台账对账（`POST /api/lab/networks/{id}/sync`，NMCPS-ADR-0023）。
+	 * 台账对账（`POST /api/mininet/networks/{id}/sync`，NMCPS-ADR-0023）。
 	 *
 	 * BFF 读上游五类节点与链路后**整体重写**清单；成功后重读台账，画布随之显示上游事实
 	 * （清单外节点不再被出口过滤掉）。`adopted` / `dropped` 是两个差集，用来说明这次
@@ -2765,7 +2765,7 @@
 
 		try {
 			const result = await api.post<LabNetworkSyncResult>(
-				`/api/lab/networks/${encodeURIComponent(network.value.id)}/sync`,
+				`/api/mininet/networks/${encodeURIComponent(network.value.id)}/sync`,
 				{ confirm }
 			);
 			reconcileOpen.value = false;
@@ -2789,7 +2789,7 @@
 	}
 
 	/**
-	 * 停止（`POST /api/lab/stop`）：上游会终止节点进程、`mn -c`，再按台账重建未启动的拓扑。
+	 * 停止（`POST /api/mininet/stop`）：上游会终止节点进程、`mn -c`，再按台账重建未启动的拓扑。
 	 * 失败时弹窗不关：原话留在眼前，否则「点了没反应」和「停成功了」分不清。
 	 */
 	async function stopNetwork(): Promise<void> {
@@ -2801,7 +2801,7 @@
 		stopError.value = undefined;
 
 		try {
-			await api.post("/api/lab/stop", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/mininet/stop", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			stopOpen.value = false;
 			pingOutput.value = "";
 			iperfResult.value = null;
@@ -2818,7 +2818,7 @@
 	 * 重启 = 停止 + 启动（上游没有 `restart` 端点，1.0 版式也是这两步）。
 	 *
 	 * 弹窗只确认一次：用户点「重启」时已经看过「会终止全部节点进程」，启动不再二次确认。
-	 * 两步都走 `/api/lab/**` 的既有写端点，闸门与串行化由 BFF 负责；停止成功而启动失败时
+	 * 两步都走 `/api/mininet/**` 的既有写端点，闸门与串行化由 BFF 负责；停止成功而启动失败时
 	 * 停在「已停止」，失败原话留在弹窗里（状态不自己猜，下次刷新以 `GET /start` 为准）。
 	 */
 	async function restartNetwork(): Promise<void> {
@@ -2830,8 +2830,8 @@
 		stopError.value = undefined;
 
 		try {
-			await api.post("/api/lab/stop", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
-			await api.post("/api/lab/start", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/mininet/stop", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
+			await api.post("/api/mininet/start", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS });
 			stopOpen.value = false;
 			pingOutput.value = "";
 			iperfResult.value = null;
@@ -2845,7 +2845,7 @@
 	}
 
 	/**
-	 * 连通性（`POST /api/lab/pingall`）：上游回一整段文本，逐字显示。
+	 * 连通性（`POST /api/mininet/pingall`）：上游回一整段文本，逐字显示。
 	 * 探测会改写流表（控制器下发 / 学习），所以跑完顺手重读当前交换机的流表。
 	 */
 	async function runPingall(): Promise<void> {
@@ -2857,7 +2857,7 @@
 		pingOutput.value = "";
 
 		try {
-			pingOutput.value = labRunOutputOf(await api.post<unknown>("/api/lab/pingall", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS }));
+			pingOutput.value = labRunOutputOf(await api.post<unknown>("/api/mininet/pingall", undefined, { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS }));
 			toast.add({ title: t("pages.scenario-simulator.run.pinged"), color: "success" });
 			if (selectedNode.value?.kind === "switch")
 				await loadFlows(selectedNode.value.positioned.id);
@@ -2869,7 +2869,7 @@
 	}
 
 	/**
-	 * 吞吐测试（`POST /api/lab/iperf`）：本地先拦「没选 host / 选成同一台 / 秒数越界」，
+	 * 吞吐测试（`POST /api/mininet/iperf`）：本地先拦「没选 host / 选成同一台 / 秒数越界」，
 	 * 其余（host 不在运行网络里、在途互斥）交给上游，失败原话照实显示。
 	 */
 	async function runIperf(): Promise<void> {
@@ -2886,7 +2886,7 @@
 		iperfResult.value = null;
 
 		try {
-			iperfResult.value = labIperfResultOf(await api.post<unknown>("/api/lab/iperf", labIperfPayloadOf(iperfDraft.value), { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS }));
+			iperfResult.value = labIperfResultOf(await api.post<unknown>("/api/mininet/iperf", labIperfPayloadOf(iperfDraft.value), { timeoutMs: LAB_LONG_OPERATION_TIMEOUT_MS }));
 			toast.add({ title: t("pages.scenario-simulator.run.iperfDone"), color: "success" });
 		} catch (caught) {
 			runError.value = messageOf(caught);

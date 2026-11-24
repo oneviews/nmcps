@@ -7,12 +7,12 @@
 
 ## 1. 现象
 
-实验台按能力位渲染（`NMCPS-ADR-0021`）：页面先读 `GET /api/lab/channel` 的 `capabilities`，没有 `lab:terminal` 就不渲染 Webshell 标签。
+实验台按能力位渲染（`NMCPS-ADR-0021`）：页面先读 `GET /api/mininet/channel` 的 `capabilities`，没有 `lab:terminal` 就不渲染 Webshell 标签。
 
 真实账号 `alice`（subject `a6541d3f-7880-4bb9-8917-5338d78e6925`，租户 `tnt_default`）已通过 `POST /api/iam/subject-roles/AssignRole` 分配角色 `lab_terminal`，接口回 `success`，但：
 
 ```
-GET /api/lab/channel            → capabilities.terminal = false
+GET /api/mininet/channel            → capabilities.terminal = false
 GET /iam/subject-roles?subject_id=a6541d3f-…   → {"list": null, "total": 0}
 ```
 
@@ -123,7 +123,7 @@ GET  /iam/subject-roles?subject_id=<alice>          # total ≥ 1，且行内 te
 GET  /iam/subject-roles?subject_id=<alice>          # 用 alice 自己的 token，total ≥ 1
 
 # ③ BFF 能力位随之上浮
-GET  /api/lab/channel                               # capabilities.terminal = true
+GET  /api/mininet/channel                               # capabilities.terminal = true
 ```
 
 ## 7. 修复验证（2026-11-18，上游修复后复测）
@@ -150,7 +150,7 @@ GET /iam/subject-roles?page=1&page_size=200
 → total = 20，`tenant_id` 为空的行 = 0
 ```
 
-**② 主体自己的上下文也能读到**：alice 的 BFF 会话解析出 `lab_terminal`，`GET /api/lab/channel` 回
+**② 主体自己的上下文也能读到**：alice 的 BFF 会话解析出 `lab_terminal`，`GET /api/mininet/channel` 回
 `{"read":true,"create":false,"operate":false,"delete":false,"terminal":true,"sniffer":false}`。
 
 **③ 能力位随之上浮到页面**：右栏标签由 `["日志","监控","网络"]` 变成
@@ -164,9 +164,9 @@ GET /iam/subject-roles?page=1&page_size=200
 **④ 第二个能力位（`lab_sniffer`）同链路可用**：`POST /iam/roles` 建 `lab_sniffer`
 （`bcadd871-d4f2-40f5-9ac6-1c4ad28e096f`，落库 `tenant_id = tnt_default`）后 `AssignRole` 给 alice，
 `GET /iam/subject-roles?subject_id=a6541d3f-…` 回 `total: 2`，两行 `tenant_id` 都是 `tnt_default`。
-`/api/lab/channel` 变 `{"read":true,"terminal":true,"sniffer":true,其余 false}`，右栏 5 个标签
+`/api/mininet/channel` 变 `{"read":true,"terminal":true,"sniffer":true,其余 false}`，右栏 5 个标签
 （Webshell / 日志 / 监控 / 网络 / 连通）；「连通」里只有抓包读数，**探测按钮不出现**（要 `lab:operate`）。
-「工具 → 开始抓包」把 `/api/lab/sniffer/state` 推到 `{"active":true}`、实时流显示「实时」，
+「工具 → 开始抓包」把 `/api/mininet/sniffer/state` 推到 `{"active":true}`、实时流显示「实时」，
 「停止抓包」回到 `{"active":false}`。页面上首次点不动是 `runState` 尚未读回（`null`）导致菜单项
 `disabled`，约 1 秒后可用，与权限无关。
 

@@ -31,6 +31,14 @@ export interface LabNetworkRecord {
 	engine: LabEngine
 	/** 引擎内部 ID / 实例键（Mininet 后端没有网络 ID，用实例键；仿真平台用 sim id） */
 	upstream_id: string
+	/**
+	 * 2.0 引擎会话 id（`/api/simulation/sessions/{id}` 路径里那个）。
+	 *
+	 * 与 `upstream_id` 分开：`upstream_id` 标识「哪台实例」，会话标识「实例里的哪张网」。
+	 * 由 BFF 在 `POST /api/mininet/sessions` 成功后写回，用于回答「这个会话属于哪个租户的哪张网」——
+	 * 会话路径不匹配这条记录就是 404（与「不存在」同口径，不泄露别人的会话）。
+	 */
+	session_id?: string
 	state: LabNetworkState
 	created_by: string
 	created_at: string
@@ -38,7 +46,7 @@ export interface LabNetworkRecord {
 	resources?: LabNetworkResources
 }
 
-/** `GET /api/lab/networks` 的出参：不含 upstream_id / 资源明细 */
+/** `GET /api/mininet/networks` 的出参：不含 upstream_id / 资源明细 */
 export interface LabNetworkSummary {
 	id: string
 	engine: LabEngine
@@ -51,7 +59,7 @@ export interface LabNetworkSummary {
 }
 
 /**
- * `POST /api/lab/networks/{id}/sync` 的出参（NMCPS-ADR-0023）。
+ * `POST /api/mininet/networks/{id}/sync` 的出参（NMCPS-ADR-0023）。
  *
  * 对账把台账清单整体重写成上游事实；`adopted` / `dropped` 是两个差集，
  * 让页面能说清“这次多接管了什么、清掉了什么”，而不是只回 `{ ok: true }`。

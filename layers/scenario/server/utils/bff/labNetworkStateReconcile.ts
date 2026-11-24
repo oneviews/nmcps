@@ -5,7 +5,7 @@ import { fetchMininetJson } from "./mininet";
 import { getMininetConfig } from "./mininetConfig";
 
 /**
- * 台账运行态对账（NMCPS-ADR-0026 D4）：`GET /api/lab/networks` 出口前把 `state` 与
+ * 台账运行态对账（NMCPS-ADR-0026 D4）：`GET /api/mininet/networks` 出口前把 `state` 与
  * 上游 `GET /api/mininet/start` 的裸布尔对齐。
  *
  * 为什么必须在读路径上做：`markLabNetworkState()` 只在 `start` / `stop` / `full_reset`

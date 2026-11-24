@@ -7,7 +7,7 @@
 //
 // 三条纪律与其它通道相同：
 // 1. 组件不 `new WebSocket` —— 换票、建连、断流都在这里；
-// 2. 先换票再建连（`POST /api/lab/ws-ticket` 判会话 + `lab:terminal` + 台账并落审计），
+// 2. 先换票再建连（`POST /api/mininet/ws-ticket` 判会话 + `lab:terminal` + 台账并落审计），
 //    票一次性、60 秒，浏览器拿不到上游地址；
 // 3. 文本帧原样保留（PTY 输出可能不带换行），渲染前交给 `labTerminalTextOf()` 清洗。
 
@@ -100,7 +100,7 @@ export function useLabTerminalSessions() {
 
 		let ticket: ReturnType<typeof labWsTicketOf>;
 		try {
-			ticket = labWsTicketOf(await api.post<unknown>("/api/lab/ws-ticket", { kind: "terminal", target }));
+			ticket = labWsTicketOf(await api.post<unknown>("/api/mininet/ws-ticket", { kind: "terminal", target }));
 		} catch (caught) {
 			// 403 / 404 / 503 的原文照登：不把「没权限」说成「网络断了」
 			patch(target, { status: "error", error: messageOf(caught) });

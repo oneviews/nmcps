@@ -9,9 +9,9 @@ import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfi
 import { LAB_EXPORT_UPSTREAMS, labExportFilename, parseLabExportKind } from "#layers/scenario/shared/constants/mininetRoutes";
 
 /**
- * 导出通道：`GET /api/lab/export/{json|script|pcap}`（NMCPS-ADR-0022 §五 / W5）。
+ * 导出通道：`GET /api/mininet/export/{json|script|pcap}`（NMCPS-ADR-0022 §五 / W5）。
  *
- * 为什么不复用 `server/api/lab/[...slug].ts`：那条通道的出口恒为 `ApiResponse` JSON 信封，
+ * 为什么不复用 `server/api/mininet/[...slug].ts`：那条通道的出口恒为 `ApiResponse` JSON 信封，
  * 导出内容会被二次编码成一个字符串，`Content-Disposition` 也无处安放 —— 浏览器另存下来的
  * `.json` 里是 `{"code":0,"data":"{\"hosts\":[...]}"}`，`wget` 之后同样不可用；pcap 更糟，
  * 二进制过一遍 JSON 字符串就直接报废。
@@ -23,7 +23,7 @@ import { LAB_EXPORT_UPSTREAMS, labExportFilename, parseLabExportKind } from "#la
  * 3. 失败仍回 JSON 信封（页面按 `ApiError` 处理），不把错误文本存成文件；
  * 4. 文本与二进制分开取：pcap 走 `arrayBuffer`，不按 UTF-8 解码（见 `fetchMininetBinary`）。
  *
- * 静态路由优先于 `[...slug]` 的 catch-all（与 `/api/lab/channel` 同一条机制）。
+ * 静态路由优先于 `[...slug]` 的 catch-all（与 `/api/mininet/channel` 同一条机制）。
  */
 export default defineEventHandler(async (event): Promise<string | Uint8Array | ApiResponse<never>> => {
 	const kind = parseLabExportKind(event.context.params?.kind);
