@@ -34,7 +34,8 @@ paths:
   脚本按这一行的形状解析源码，多一个键会让解析静默变成空表。
 - 入口凭据：`LAB_API_TOKEN` 设置后 HTTP 要 `x-lab-token`、WebSocket 要 `lab_ts` + `lab_sig` 签名
   （Node 内置 WebSocket 不能设头）；BFF 侧是同值的 `NUXT_MININET_TOKEN`，握手走 `GET /api/mininet/version`。
-  token 不进查询串、不进日志、不回传。
+  token 不进查询串、不进日志、不回传。监听面 / 特权 / 凭据 / 重启语义的完整基准见 `NMCPS-ARCH-007`
+  （`layers/content/collections/cn/architecture/1.architecture/lab-deployment-architecture.md`）。
 - 非 root 时 `app.net` 为 `None`（`Mininet()` 会 `exit(1)`），只有 `dryrun` 可用；自检带
   `LAB_SKIP_STARTUP_CLEANUP=1`，否则启动时的 `mn -c` 会反复 `pkill` 失败并卡住启动。
   `pnpm check:engines` 零依赖，`pnpm check:simulation` 需 uvicorn + mininet，两者都无 root。

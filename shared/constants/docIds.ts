@@ -47,6 +47,7 @@ export const DOC_PATHS = {
 	"NMCPS-ARCH-004": "layers/content/collections/cn/architecture/1.architecture/content-center-architecture.md",
 	"NMCPS-ARCH-005": "layers/content/collections/cn/architecture/1.architecture/platform-architecture.md",
 	"NMCPS-ARCH-006": "layers/content/collections/cn/architecture/1.architecture/ui-architecture.md",
+	"NMCPS-ARCH-007": "layers/content/collections/cn/architecture/1.architecture/lab-deployment-architecture.md",
 	"NMCPS-DESIGN-001": "layers/content/collections/cn/architecture/2.domain/topology.md",
 	"NMCPS-DESIGN-002": "layers/content/collections/cn/architecture/2.domain/spectrum.md",
 	"NMCPS-DESIGN-003": "layers/content/collections/cn/architecture/2.domain/transmission.md",

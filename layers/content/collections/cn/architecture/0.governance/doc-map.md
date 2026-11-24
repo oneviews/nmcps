@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.60.0
+version: 0.61.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -76,6 +76,7 @@ tags:
 | `arch.content` | 1 | NMCPS-ARCH-004 | baseline |
 | `arch.platform` | 1 | NMCPS-ARCH-005 | baseline |
 | `arch.ui` | 1 | NMCPS-ARCH-006 | baseline |
+| `arch.lab-deploy` | 1 | NMCPS-ARCH-007 | baseline |
 | `domain.topology` | 2 | NMCPS-DESIGN-001 | baseline |
 | `domain.spectrum` | 2 | NMCPS-DESIGN-002 | baseline |
 | `domain.transmission` | 2 | NMCPS-DESIGN-003 | baseline |
@@ -134,6 +135,7 @@ tags:
 | NMCPS-ARCH-004 | 内容中心架构 | 1 | normative | arch.content | baseline | architecture/1.architecture/content-center-architecture.md |
 | NMCPS-ARCH-005 | 平台能力架构 | 1 | normative | arch.platform | baseline | architecture/1.architecture/platform-architecture.md |
 | NMCPS-ARCH-006 | UI 交互架构 | 1 | normative | arch.ui | baseline | architecture/1.architecture/ui-architecture.md |
+| NMCPS-ARCH-007 | 实验面部署与运行架构 | 1 | normative | arch.lab-deploy | baseline | architecture/1.architecture/lab-deployment-architecture.md |
 | NMCPS-DESIGN-001 | 拓扑监控领域基准 | 2 | normative | domain.topology | baseline | architecture/2.domain/topology.md |
 | NMCPS-DESIGN-002 | 频谱管控领域基准 | 2 | normative | domain.spectrum | baseline | architecture/2.domain/spectrum.md |
 | NMCPS-DESIGN-003 | 传输管控领域基准 | 2 | normative | domain.transmission | baseline | architecture/2.domain/transmission.md |
@@ -256,3 +258,5 @@ tags:
 | 2026-11-23 | 0.58.1 | **iperf 守卫补全到 §5 的全部不变量，BFF 侧补 iperf 用例**。源码守卫原来只钉「不许 `Net.iperf()` + 必须有 `Popen` / `subprocess.run` / 复位」，但把就绪探测换回 `waitListening()` 会把同一条死循环诱因带回来。`check_iperf_guard()` 现在同时钉：`ss` 就绪探测（`-ltn` / `-lun`，源码里不许出现 `waitListening`）、两段命令都走 `_iperf_namespace_command()`（节点自己的 netns）、客户端超时 `504` 且正文是输出尾部、`finally` 里 `_drain_iperf_process(server_process)` 收进程。组数仍是 3 组，`ci.yml` 调用点 / `lab-api` 期望正则与样本都不变。`layers/scenario/scripts/check-lab-bff.mjs` 的假上游新增 iperf 应答（成功 `{ client, server }`、可切 504 / 409），⑮ 增五条：`POST /iperf` 走长时预算（2 秒延迟 / 3 秒预算 → 200）、请求体原样到达上游、上游 504 / 409 连同原话透传；自检项数 135 → 140，全绿实测 `140/140 项通过`。负例已验：把 `"-lun"` 改成 `"-lunX"` 即 `--source-only` 退出码 1 并打出 `UDP 就绪探测不是 ss -lun`。 |
 | 2026-11-24 | 0.59.0 | **BFF 前缀改名：`/api/lab/**` → `/api/mininet/**`，WebSocket `/lab-ws/*` → `/mininet-ws/*`（ADR-0022 D11，M1.1）**。一次改净、**不留别名**：`layers/scenario/server/api/lab/**` → `server/api/mininet/**`、`server/routes/lab-ws/**` → `server/routes/mininet-ws/**`；调用侧（`scenario/simulator` 页面、`useLab{WsChannel,TerminalSessions,SnifferStream}`、五个 `Simulator/*` 组件、`check-lab-bff` / `check-ui` / `check-lab-real` / `check-lab-ws` / `check-lab-tenancy`）与 `docs/ai/*`、`.clinerules` 同步。`lab:*` 权限位、`lab_*` 错误码与 `LAB_*` 常量保持原名（能力域命名，不随路径走）。隔离不再靠前缀差异：浏览器只拿同源相对路径，上游基址只在 Nitro 运行时配置，`proxyToMininet()` / `createLabWsRelay()` 仍是唯一出站点；`mininet` 不在 `GATEWAY_RESOURCES`，更具体的静态前缀遮住主网关 catch-all。判「有没有触达上游」只认自检里的上游命中表 —— `check-lab-bff` 的假上游因此加了注释，避免把「浏览器路径 === 上游路径」当证据。 |
 | 2026-11-25 | 0.60.0 | 登记 NMCPS-DESIGN-008「仿真引擎面领域基准」（Tier 2，normative，scope `domain.simulation`）：会话为资源根（进程内表、上限 32、`metadata` 只由 BFF 写、1.x 等价默认会话）、引擎按名登记且不回落（`wired` / `wireless` / `dryrun`，`ap` / `station` 到 M3）、统一节点投影只在 `unified_nodes()` 一处（`GET /api/mininet/nodes` 不判会话绑定，会话侧先 `_bound()` 再复用）、对外通道与能力位（`lab:read` / `create` / `operate` / `delete`，终端与抓包不由读写推导）、台账运行态只由 start / stop / `full_reset` 写回并在读路径对账、M0–M5 阶段边界与「不承载」清单。补齐 `.clinerules` 与 BFF 白名单注释里长期悬空的引用；同步 DESIGN-006 升 0.1.1（§四「不承载」指向本文）；`NMCPS-DESIGN-006` → 0.1.1；`NMCPS-DESIGN-008` → 0.1.0。顺带清掉本变更记录表内历史遗留的空行（空行会把表格截断成段落）。 |
+| 2026-11-25 | 0.61.0 | 登记 S1 架构层：ARCH-007「实验面部署与运行架构」（`arch.lab-deploy`，Tier 1，normative）—— 监听面与端口归属（上游 `:8000` / BFF `:3000` / SNMP `:161`，含「本机 `127.0.0.1:8000` 可能被 nginx 缺省 server 占着、回 400」的判据）、特权模型（`Mininet()` / `mn -c` / 主机 netns 的 `tc` 要 root，容器要显式给能力，无 root 自检带 `LAB_SKIP_STARTUP_CLEANUP`）与起停不变量（进程还在而无人 bind）、入口凭据（HTTP `x-lab-token`；WS 用 `lab_ts` + `lab_sig` 对 `<path>\n<ts>` 签名、120 秒且绑定路径；未设时只信任回环；口令不进查询串与日志）以及「非回环监听必须同时设 token」、租户实例注册表与 fail-closed、台账与审计分片的存放及重启丢失面、待裁决项（systemd 还是 root 直启 / 专用镜像 / SNMP `:161` 与宿主 `snmpd` / 每租户编排）、各验收命令的证明边界；闭合 `docs/ai/simulation-parity.md` §七第 2 条的待登记项；`NMCPS-ARCH-007` → 0.1.0。 |
+
