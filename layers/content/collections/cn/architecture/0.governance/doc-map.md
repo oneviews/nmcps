@@ -15,7 +15,7 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.61.0
+version: 0.62.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -124,6 +124,7 @@ tags:
 | NMCPS-ADR-0024 | 无控制器的交换机默认 standalone | 5 | informative | rec.adr.0024 | baseline | records/adr/adr-0024.md |
 | NMCPS-ADR-0025 | Webshell 的渲染边界（暂不引入终端模拟器） | 5 | informative | rec.adr.0025 | baseline | records/adr/adr-0025.md |
 | NMCPS-ADR-0026 | 长时操作的出站预算与台账运行态对账 | 5 | informative | rec.adr.0026 | baseline | records/adr/adr-0026.md |
+| NMCPS-ADR-0027 | 引擎面定位与不复刻清单 | 5 | informative | rec.adr.0027 | baseline | records/adr/adr-0027.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -259,4 +260,6 @@ tags:
 | 2026-11-24 | 0.59.0 | **BFF 前缀改名：`/api/lab/**` → `/api/mininet/**`，WebSocket `/lab-ws/*` → `/mininet-ws/*`（ADR-0022 D11，M1.1）**。一次改净、**不留别名**：`layers/scenario/server/api/lab/**` → `server/api/mininet/**`、`server/routes/lab-ws/**` → `server/routes/mininet-ws/**`；调用侧（`scenario/simulator` 页面、`useLab{WsChannel,TerminalSessions,SnifferStream}`、五个 `Simulator/*` 组件、`check-lab-bff` / `check-ui` / `check-lab-real` / `check-lab-ws` / `check-lab-tenancy`）与 `docs/ai/*`、`.clinerules` 同步。`lab:*` 权限位、`lab_*` 错误码与 `LAB_*` 常量保持原名（能力域命名，不随路径走）。隔离不再靠前缀差异：浏览器只拿同源相对路径，上游基址只在 Nitro 运行时配置，`proxyToMininet()` / `createLabWsRelay()` 仍是唯一出站点；`mininet` 不在 `GATEWAY_RESOURCES`，更具体的静态前缀遮住主网关 catch-all。判「有没有触达上游」只认自检里的上游命中表 —— `check-lab-bff` 的假上游因此加了注释，避免把「浏览器路径 === 上游路径」当证据。 |
 | 2026-11-25 | 0.60.0 | 登记 NMCPS-DESIGN-008「仿真引擎面领域基准」（Tier 2，normative，scope `domain.simulation`）：会话为资源根（进程内表、上限 32、`metadata` 只由 BFF 写、1.x 等价默认会话）、引擎按名登记且不回落（`wired` / `wireless` / `dryrun`，`ap` / `station` 到 M3）、统一节点投影只在 `unified_nodes()` 一处（`GET /api/mininet/nodes` 不判会话绑定，会话侧先 `_bound()` 再复用）、对外通道与能力位（`lab:read` / `create` / `operate` / `delete`，终端与抓包不由读写推导）、台账运行态只由 start / stop / `full_reset` 写回并在读路径对账、M0–M5 阶段边界与「不承载」清单。补齐 `.clinerules` 与 BFF 白名单注释里长期悬空的引用；同步 DESIGN-006 升 0.1.1（§四「不承载」指向本文）；`NMCPS-DESIGN-006` → 0.1.1；`NMCPS-DESIGN-008` → 0.1.0。顺带清掉本变更记录表内历史遗留的空行（空行会把表格截断成段落）。 |
 | 2026-11-25 | 0.61.0 | 登记 S1 架构层：ARCH-007「实验面部署与运行架构」（`arch.lab-deploy`，Tier 1，normative）—— 监听面与端口归属（上游 `:8000` / BFF `:3000` / SNMP `:161`，含「本机 `127.0.0.1:8000` 可能被 nginx 缺省 server 占着、回 400」的判据）、特权模型（`Mininet()` / `mn -c` / 主机 netns 的 `tc` 要 root，容器要显式给能力，无 root 自检带 `LAB_SKIP_STARTUP_CLEANUP`）与起停不变量（进程还在而无人 bind）、入口凭据（HTTP `x-lab-token`；WS 用 `lab_ts` + `lab_sig` 对 `<path>\n<ts>` 签名、120 秒且绑定路径；未设时只信任回环；口令不进查询串与日志）以及「非回环监听必须同时设 token」、租户实例注册表与 fail-closed、台账与审计分片的存放及重启丢失面、待裁决项（systemd 还是 root 直启 / 专用镜像 / SNMP `:161` 与宿主 `snmpd` / 每租户编排）、各验收命令的证明边界；闭合 `docs/ai/simulation-parity.md` §七第 2 条的待登记项；`NMCPS-ARCH-007` → 0.1.0。 |
+
+| 2026-11-25 | 0.62.0 | 登记记录层：`NMCPS-ADR-0027`「引擎面定位与不复刻清单」（`rec.adr.0027`，Tier 5，informative）。**D1–D7 冻结引擎面定位**：唯一引擎面是本仓 `services/mininet-api`，参考侧 `:8001` 退役为只读参考（`_reference/netsim` 只取行为，不复用代码/契约）；统一 `NodeSpec{type}`（七种 type，五张分表只做兼容只读视图，统一投影只有 `engines/wired.py` 的 `unified_nodes()` 一份）；会话是资源根（否决 parity §4.1 的 S-B 隐式会话双路径）；引擎注册表未登记即 `EngineNotFound`、不回落，`dryrun` 保留为无 root CI 的唯一验证路径；能力位不随参考侧 131 个端点扩张（SNMP 写面要新开 `lab:snmp`，不由 `lab:operate` 推导）；一宿主一实例、租户→实例注册表 fail closed；移植门禁（不复制参考侧代码与 21 个 MIB 文本）。**R1–R8 固化退役与不复刻清单**：R1–R7 与 `shared/constants/simulatorRoutes.ts` 的 `SIMULATOR_EXCLUDED_PREFIXES` 七条按序逐条对应（节点内任意命令 `execute`、无头浏览器 `browser`、完整性巡检 `integrity/watch`、设备库 `devices/clear`、`test/*`、`snmp/onboard` 改为 M2 以 `lab:snmp` 重建、`nms/vmagent`），R8 是 `/api/sim/**` 直通 `:8001` 的通道退役；同时写明现状面（23 条白名单含 18 条写、生产拓扑监控页仍消费 `/api/sim/**`）、「读 → 写 → 能力位 → 删」的迁移顺序与完成判据（`grep -rn "/api/sim"` 无命中、`check-bff` ⑨-6 退场、`simulator` 配置段消失）。闭合 `docs/ai/simulation-parity.md` §七第 1 条的待登记项；`services/mininet-api/mininet_gui_backend/engines/base.py` 对 `NMCPS-ADR-0027 D2` 的前向引用从此有效。 |
 
