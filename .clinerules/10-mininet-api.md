@@ -16,6 +16,9 @@ paths:
   冻结了 5 个 legacy 文件（`api.py`/`export.py`/`schema.py`/`nodes.py`/`cli.py`），搬走一个就更新名单，
   不许新增。无线依赖只用 `find_spec("mn_wifi")` 探测 —— 顶层 import 会让无无线依赖的机器起不来后端。
 - 会话与引擎：`/api/simulation/**` 是 2.0 入口（`sessions.py` + `engines/`），1.x 的 `/api/mininet/**` 仍在用。
+  `GET /api/mininet/nodes` 是五类分表的统一投影（M1.1）：与 `/sessions/{id}/nodes` 同形（`id/type/name/x/y` +
+  `attributes`），但**不判会话绑定**（1.x 等价「默认会话」，只读会话也能读）；投影本身只有
+  `engines/wired.py` 的 `unified_nodes()` 一份，会话侧在 `_bound()` 之后复用它，别在 `api.py` 里另写一份。
   `wired` 引擎自 M1 起接管会话起停**与统一节点 / 链路 CRUD**（`list_nodes` / `add_node` / `remove_node` /
   `list_links` / `add_link` / `remove_link`）：统一 `NodeSpec{type,...}` ↔ legacy `api.Host` 等模型 +
   `create_*` handler，错误按 `status_code` 归一成引擎错误（`engine_invalid_request` /

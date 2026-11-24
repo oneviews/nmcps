@@ -1791,31 +1791,33 @@
 		return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 	}
 
-	function rawNodesOf(payload: unknown, kind: NodeKind): RawMininetNode[] {
-		const list: RawMininetNode[] = [];
-		if (Array.isArray(payload)) {
-			for (const item of payload) {
-				const record = asRecord(item);
-				if (record)
-					list.push({ ...record as RawMininetNode, type: kind });
-			}
-			return list;
-		}
-
-		const record = asRecord(payload);
-		if (!record)
-			return list;
-		for (const [key, item] of Object.entries(record)) {
-			const value = asRecord(item);
-			if (!value)
-				continue;
-			list.push({
-				...value as RawMininetNode,
-				name: typeof value.name === "string" ? value.name : key,
-				type: kind
-			});
-		}
-		return list;
+	/**
+	 * 统一节点投影 → 画布事实（M1.1）：`GET /api/mininet/nodes` 把 `id` / `type` / `name` /
+	 * `x` / `y` 放顶层，其余字段（`ip` / `mac` / `ports` / `of_version`…）放 `attributes`，
+	 * 与 2.0 会话侧的 `/sessions/{id}/nodes` 同形（`engines/wired.py` 的 `unified_nodes()`）。
+	 * 只认画布支持的五个 kind：`ap` / `station`（M3 无线）还没进 `NODE_KIND_ICONS`，
+	 * 不该被当成未知类型画上去。
+	 */
+	function rawUnifiedNodesOf(payload: unknown): RawMininetNode[] {
+		if (!Array.isArray(payload))
+			return [];
+		return payload.flatMap((item) => {
+			const record = asRecord(item);
+			if (!record)
+				return [];
+			const type = typeof record.type === "string" ? record.type : "";
+			if (!(type in NODE_KIND_ICONS))
+				return [];
+			const attributes = asRecord(record.attributes) ?? {};
+			return [{
+				...attributes as RawMininetNode,
+				id: typeof record.id === "string" ? record.id : undefined,
+				name: typeof record.name === "string" ? record.name : undefined,
+				x: record.x,
+				y: record.y,
+				type
+			}];
+		});
 	}
 
 	function rawLinksOf(payload: unknown): TopologyGraphLink[] {
@@ -1967,27 +1969,20 @@
 				return;
 			}
 
-			const requests: Array<{ kind: NodeKind, path: string }> = [
-				{ kind: "host", path: "/api/mininet/hosts" },
-				{ kind: "switch", path: "/api/mininet/switches" },
-				{ kind: "router", path: "/api/mininet/routers" },
-				{ kind: "nat", path: "/api/mininet/nats" },
-				{ kind: "controller", path: "/api/mininet/controllers" }
-			];
-
+			// 拓扑只打两条读（M1.1）：统一节点投影 + 链路。此前是五张分表并发 ——
+			// 页面多四次往返，且五张表并不来自同一时刻；统一投影与 2.0 会话侧同形。
 			const [nodeResults, linkResult] = await Promise.all([
-				Promise.allSettled(requests.map((item) => api.get<unknown>(item.path))),
+				Promise.allSettled([api.get<unknown>("/api/mininet/nodes")]),
 				Promise.allSettled([api.get<unknown>("/api/mininet/links")])
 			]);
 
 			const rawNodes: RawMininetNode[] = [];
 			const failures: unknown[] = [];
-			for (const [index, result] of nodeResults.entries()) {
-				if (result.status === "fulfilled")
-					rawNodes.push(...rawNodesOf(result.value, requests[index]!.kind));
-				else
-					failures.push(result.reason);
-			}
+			const nodeOutcome = nodeResults[0]!;
+			if (nodeOutcome.status === "fulfilled")
+				rawNodes.push(...rawUnifiedNodesOf(nodeOutcome.value));
+			else
+				failures.push(nodeOutcome.reason);
 
 			const linkOutcome = linkResult[0]!;
 			if (linkOutcome.status === "rejected")

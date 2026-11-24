@@ -882,6 +882,20 @@ def list_nats():
 def list_routers():
     return app.routers
 
+@app.get("/api/mininet/nodes")
+def list_unified_nodes():
+    """统一节点读（M1.1）：五类分表的投影，形状与 `/api/simulation/sessions/{id}/nodes` 一致。
+
+    1.x 的 `/api/mininet/**` 等价于「默认会话」（`sessions.py` 模块注释），因此这条不需要
+    `session_id`；会话侧那条在 `WiredEngine.list_nodes()` 里先过 `_bound()`，两条共用
+    `wired.unified_nodes()` 的投影。页面读拓扑只打一条，不再并发拉五张分表。
+    """
+    # 局部 import：`engines.wired` 反过来在调用期才 `_legacy()` 拿本模块，顶层互导会成环
+    from mininet_gui_backend.engines.wired import unified_nodes
+
+    return unified_nodes()
+
+
 @app.get("/api/mininet/links")
 def list_edges():
     edges = []

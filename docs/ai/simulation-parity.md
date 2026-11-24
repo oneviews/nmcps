@@ -252,7 +252,7 @@
 | 引擎抽象 | `mininet_gui_backend/engines/{base,registry,dryrun,wired,wireless}.py`；`NODE_TYPES` 含 `ap`/`station`，为 M3 预留 | `pnpm check:engines` 7/7 |
 | 会话层 | `sessions.py` + `/api/simulation/**` 13 个操作（engines 1、sessions 6、nodes 3、links 3，9 条路径） | `pnpm check:simulation` 17/17（无 root） |
 | 入口鉴权 | `auth.py`：`LAB_API_TOKEN` ⇒ HTTP 要 `x-lab-token`；WS 用 `HMAC-SHA256(token, path 与 ts 两行拼接)` 查询串（120 秒、绑定路径）；未设置时只信任回环 | `check:simulation` 401 用例 + `check:engines` 签名用例 |
-| BFF 远程化 | `runtimeConfig.mininet.token`、出站 `x-lab-token`（`mininet.ts`）、`GET /api/mininet/version` 握手、`signedLabWsPath()`（`labWsAuth.ts`） | `pnpm check:lab-bff` 156/156，其中 ①b 六条 |
+| BFF 远程化 | `runtimeConfig.mininet.token`、出站 `x-lab-token`（`mininet.ts`）、`GET /api/mininet/version` 握手、`signedLabWsPath()`（`labWsAuth.ts`） | `pnpm check:lab-bff` 157/157，其中 ①b 六条 |
 | 静态守卫 | `scripts/check-engines.mjs`：`import mininet` 只允许 `engines/` 与**冻结的 5 个 legacy 文件**（`api.py`/`export.py`/`schema.py`/`nodes.py`/`cli.py`），名单漂移即红 | 同上 |
 
 **M0 的已知边界（不是缺陷，是后续阶段的入口）**
@@ -269,7 +269,7 @@
 | 项 | 位置 | 验收 |
 |---|---|---|
 | 统一节点 / 链路 | `engines/wired.py`：`list_nodes` / `add_node` / `remove_node` / `list_links` / `add_link` / `remove_link` 全部接管；模型类从 `api` 模块按名取（`api.Host`），建网逻辑仍走 legacy `create_*`，错误按 `status_code` 归一成 `EngineInvalidRequest` / `EngineResourceNotFound` | `pnpm check:engines` 7/7（第 7 条跑 `scripts/check-wired-adapter.py`：桩 `api`，无 root / 无 mininet / 无 fastapi） |
-| 会话入口 | 白名单新增 12 条 `/sessions/**` → `/api/simulation/**`（`mininetRoutes.ts`，靠 `isSimulationRoute()` 与 1.x 区分）；查询 4 + 写 8，总计 **21 查询 + 36 写 = 57** | `pnpm check:lab-bff` ⑯ 十条 + ⓪ 计数断言 |
+| 会话入口 | 白名单新增 12 条 `/sessions/**` → `/api/simulation/**`（`mininetRoutes.ts`，靠 `isSimulationRoute()` 与 1.x 区分）；查询 4 + 写 8，总计 **22 查询 + 36 写 = 58**（M1.1 之后查询多一条 `/nodes`） | `pnpm check:lab-bff` ⑯ 十条 + ⓪ 计数断言 |
 | 归属 | 台账新增 `session_id`（`shared/types/lab.ts` / `labLedger.parseRecord`）；`POST /sessions` 成功即写回、`DELETE` 解绑（`bindLabNetworkSession()`）；会话路径与台账不一致一律 404（与「不存在」同口径），已绑定时再建 → 409 `lab_session_exists` 且不触达上游 | ⑯「写回台账」「已绑定 409」「未绑定路径 404 零上游请求」 |
 | 写路径复用 | 会话写与 1.x 写共用 `handleWrite()`：审计先行、同网络在途写 409、成功后清单收敛与 `state` 写回（`start` → running、`stop` / 删会话 → stopped） | ⑯「清单收敛」「start → running」「审计 allowed + succeeded」 |
 | 会话归属由 BFF 写 | `sessionCreateBodyOf()`：客户端只能选 `engine` / `name`，`metadata`（`network_id` / `tenant_id` / `actor_id`）由 BFF 填，客户端伪造无效 | ⑯「metadata 由 BFF 写」 |
@@ -279,11 +279,25 @@
 - **更新类操作仍走 1.x**：拖动落点、改 IP / 默认路由、OpenFlow 版本、流表、统计、抓包、导出都在
   `/api/mininet/**`。统一模型的「更新」语义（哪些 `attributes` 可写、位置能否与属性同请求改）还没冻结，
   先不发明一套；`Engine` 协议里也刻意没有 `update_node`。
-- **前端未迁移**：页面仍调 `/api/mininet/<collection>`。会话路径是可用的、有自检的入口，但页面切过去
-  要同时改拓扑台账的读路径（`/api/mininet/hosts` 等五类分表 → 统一 `/nodes`），那是 M1.1 的独立改动 ——
-  一个动作仍然只有一个入口，不做双写。
+- ~~**前端未迁移**~~ → **M1.1 已收敛读路径**（见下）：页面拓扑只读 `GET /api/mininet/nodes` + `/links`，
+  不再并发拉五张分表；会话通道仍未被页面使用（更新类动作仍走 1.x，一个动作只有一个入口，不做双写）。
 - **`ap` / `station`**：`NODE_TYPES` 已收，但 `wired` 建它们回 501；无线在 M3。
 - **`check:engines` / `check:simulation` 仍未进 `ci.yml`**（要同步 `ci-summary` 期望表与 ⑱/⑳ 断言）。
+
+**M1.1 已落地（统一节点读路径，2026-11-25）**
+
+| 项 | 位置 | 验收 |
+|---|---|---|
+| 上游统一读 | `api.py` 的 `GET /api/mininet/nodes` → `engines/wired.py` 的 `unified_nodes()`（五类分表的投影：`id/type/name/x/y` 提出、其余进 `attributes`）；会话侧 `WiredEngine.list_nodes()` 先过 `_bound()` 再复用同一投影 | `pnpm lab:check` 37 条 HTTP 路径；`check:engines` 7/7 不变 |
+| 白名单 | `mininetRoutes.ts` 新增 `GET /nodes`（`lab:read`），查询 21 → **22**、总计 **58** 条 | `check:lab-bff` ⓪ 计数 + ②「GET /nodes 转发上游并回统一投影」 |
+| 页面 | `simulator.vue` 的 `load()` 由五张分表并发改为一条 `/api/mininet/nodes` + `/links`；`rawUnifiedNodesOf()` 只认画布支持的五个 kind（`ap`/`station` 到 M3 才进 `NODE_KIND_ICONS`），字段从 `attributes` 摊平 | `check:ui` 299/299（假上游 `scripts/lib/bff-harness.mjs` 同步给出 `/nodes`） |
+
+**M1.1 明确不做**
+
+- **页面不建会话**：`session_id` 只在 `POST /sessions` 成功后由 BFF 写回台账，页面既不读也不传；1.x 这条
+  `/api/mininet/nodes` 就是「默认会话」的读，因此只读会话（只有 `lab:read`）也能拿到拓扑。
+- **对账（`NMCPS-ADR-0023`）仍读五张分表**：它要按 kind 逐表比对台账清单，统一投影会把「哪张表少了」这条
+  信息抹掉；`check:ui` 11.6b 的 `expectedReconcileReads` 因此保持不变。
 
 ## 六、未决问题（阻塞项在前）
 

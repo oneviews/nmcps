@@ -90,6 +90,10 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 	{ method: "GET", template: "/nats", upstream: "/api/mininet/nats", permissions: ["lab:read"] },
 	{ method: "GET", template: "/routers", upstream: "/api/mininet/routers", permissions: ["lab:read"] },
 	{ method: "GET", template: "/links", upstream: "/api/mininet/links", permissions: ["lab:read"] },
+	// 统一节点读（M1.1）：五类分表的投影，页面拓扑只打这一条。
+	// 与会话侧的 `/sessions/{session_id}/nodes` 同形（`id/type/name/x/y` + `attributes`），
+	// 但 1.x 这条不需要 session_id —— 它等价于「默认会话」。
+	{ method: "GET", template: "/nodes", upstream: "/api/mininet/nodes", permissions: ["lab:read"] },
 	{ method: "GET", template: "/start", upstream: "/api/mininet/start", permissions: ["lab:read"] },
 
 	// ── 运行态读数（只读） ──

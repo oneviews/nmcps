@@ -156,6 +156,21 @@ def _unified_node(node_type: str, model: Any) -> Dict[str, Any]:
     }
 
 
+def unified_nodes() -> List[Dict[str, Any]]:
+    """五类分表的统一投影：`id/type/name/x/y` 提到顶层，其余键进 `attributes`。
+
+    刻意**不判会话绑定**：1.x 的 `/api/mininet/nodes` 等价于「默认会话」（`sessions.py`
+    模块注释），而会话侧那条在读之前先过 `_bound()`。两条读共用这里的形状，避免出现
+    两份 `_unified_node()` 调用顺序不同的投影。
+    """
+    api = _legacy()
+    nodes: List[Dict[str, Any]] = []
+    for node_type, registry in NODE_REGISTRY_NAMES:
+        for model in (getattr(api.app, registry, None) or {}).values():
+            nodes.append(_unified_node(node_type, model))
+    return sorted(nodes, key=lambda node: node["id"])
+
+
 def _link_id(source: str, target: str) -> str:
     """统一链路 id：`src--dst`（无向，按字典序归一，与台账的链路键同口径）。"""
     left, right = sorted((source, target))
@@ -235,12 +250,7 @@ class WiredEngine(Engine):
 
     def list_nodes(self, session_id: str) -> List[Dict[str, Any]]:
         self._bound(session_id)
-        api = _legacy()
-        nodes: List[Dict[str, Any]] = []
-        for node_type, registry in NODE_REGISTRY_NAMES:
-            for model in (getattr(api.app, registry, None) or {}).values():
-                nodes.append(_unified_node(node_type, model))
-        return sorted(nodes, key=lambda node: node["id"])
+        return unified_nodes()
 
     def add_node(self, session_id: str, node: NodeSpec) -> Dict[str, Any]:
         self._bound(session_id)

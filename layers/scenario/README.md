@@ -20,7 +20,7 @@
 
 ## 服务端
 
-- `server/api/mininet/**`：Mininet BFF 通道；`/api/mininet` 无路径段回 400，其余走 57 条白名单（21 条查询 + 36 条写，其中 12 条是 2.0 会话入口 `/sessions/**` → `/api/simulation/**`）。两条静态路由不在白名单里：`export/[kind].get.ts` 按 `LAB_EXPORT_UPSTREAMS` 取上游路径与权限位（`json` / `script` 是 `lab:read`，`pcap` 是 `lab:sniffer`），直接回 `text/plain` 或 pcap 二进制并自己生成文件名；`networks/[id]/sync.post.ts` 只改台账、不转发上游写（双权限 + 逐字确认，见 `NMCPS-ADR-0023`）。
+- `server/api/mininet/**`：Mininet BFF 通道；`/api/mininet` 无路径段回 400，其余走 58 条白名单（22 条查询 + 36 条写，其中 12 条是 2.0 会话入口 `/sessions/**` → `/api/simulation/**`；`GET /nodes` 是 M1.1 的统一节点投影，页面拓扑读它 + `/links`）。两条静态路由不在白名单里：`export/[kind].get.ts` 按 `LAB_EXPORT_UPSTREAMS` 取上游路径与权限位（`json` / `script` 是 `lab:read`，`pcap` 是 `lab:sniffer`），直接回 `text/plain` 或 pcap 二进制并自己生成文件名；`networks/[id]/sync.post.ts` 只改台账、不转发上游写（双权限 + 逐字确认，见 `NMCPS-ADR-0023`）。
 - 路由白名单与上游路径在 `layers/scenario/shared/constants/mininetRoutes.ts`；通道类型在 `layers/scenario/shared/types/mininet.ts`；节点草稿与请求体映射在 `layers/scenario/shared/types/labNodes.ts`；导入包体的形状校验在 `layers/scenario/shared/types/labImport.ts`（纯函数，页面与 `check-lab-bff` 共用同一口径）。
 - 鉴权、台账、租户实例、审计、串行化锁与出站过滤同层放在 `layers/scenario/server/utils/bff/lab*` / `mininet*.ts`，由本层路由引用；根 `server/` 不再反向依赖场景层。
 - `layers/scenario/scripts/check-lab-bff.mjs`：通道自查，复用根 `scripts/lib/bff-harness.mjs`。

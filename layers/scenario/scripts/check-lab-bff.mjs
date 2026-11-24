@@ -509,6 +509,20 @@ async function startMininet(port) {
 		 * 浏览器打的是同一个字符串但落在 Nitro 上。判「有没有触达上游」只认本函数记录，
 		 * 不要用「浏览器路径 === 上游路径」反推。
 		 */
+		// 统一节点读（M1.1）：五类分表的投影，形状与真实后端 `GET /api/mininet/nodes` 一致
+		// （`id/type/name/x/y` 在顶层，其余键进 `attributes`）。页面拓扑只打这一条。
+		if (path === "/api/mininet/nodes" && req.method === "GET") {
+			const unified = [];
+			const buckets = [["hosts", "host"], ["switches", "switch"], ["routers", "router"], ["nats", "nat"], ["controllers", "controller"]];
+			for (const [bucket, type] of buckets) {
+				for (const [id, node] of Object.entries(topology[bucket] ?? {})) {
+					const { name, x, y, ...attributes } = node;
+					unified.push({ id, type, name: name ?? id, x: x ?? 0, y: y ?? 0, attributes });
+				}
+			}
+			return send(200, unified);
+		}
+
 		if (path === "/api/mininet/hosts" && req.method === "GET") {
 			if (topology.fail.has("hosts"))
 				return send(500, { detail: "hosts exploded" });
@@ -844,7 +858,7 @@ async function startIam(port) {
 	const dual = writes.filter((entry) => entry.permissions.length > 1);
 
 	log("⓪ 白名单条目可从源码抽取（抽取为空即红）", whitelist.length > 0, `${whitelist.length} 条`);
-	log("⓪ 查询端点 21 条且权限位都是 lab:read", reads.length === 21 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 查询端点 22 条且权限位都是 lab:read", reads.length === 22 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
 	log("⓪ 写端点 36 条且都带非读权限位", writes.length === 36 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
 	log("⓪ full_reset / import_json 为双权限（lab:delete + lab:create）", dual.length === 2 && dual.every((entry) => entry.permissions.includes("lab:delete") && entry.permissions.includes("lab:create")), dual.map((entry) => `${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无");
 	log("⓪ 白名单 ⊆ Mininet OpenAPI 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.map((entry) => `${entry.method} ${entry.upstream}`).join(", ") || `${whitelist.length}/${whitelist.length}`);
@@ -868,7 +882,7 @@ try {
 
 		const channel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
 		log("① 未配租户实例的 channel 仍 200 且 configured=false", channel.status === 200 && channel.json?.data?.configured === false, `${channel.status} ${describe(channel.json?.data?.configured)}`);
-		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 57, describe(channel.json?.data));
+		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 58, describe(channel.json?.data));
 		log("① channel 不回传 baseUrl", !JSON.stringify(channel.json ?? {}).includes(mininetBase), describe(channel.json?.data));
 
 		const noPath = await request(port, "/api/mininet");
@@ -968,6 +982,18 @@ try {
 		const hostHit = mininet.log.slice(hitsBefore).at(-1);
 		log("② 白名单内 GET 到达上游且裸 JSON 套信封", hosts.status === 200 && hosts.json?.code === 0 && hosts.json?.data?.length === 2, `${hosts.status} len=${describe(hosts.json?.data?.length)}`);
 		log("② 查询参数原样转发（重复键保留）", hostHit?.path === "/api/mininet/hosts" && hostHit?.search === "?limit=2&tag=a&tag=b", describe(hostHit?.search));
+
+		const unifiedBefore = mininet.log.length;
+		const unified = await request(port, "/api/mininet/nodes", { cookie: auth.cookie });
+		const unifiedHit = mininet.log.slice(unifiedBefore).at(-1);
+		log(
+			"② 统一节点读（M1.1）：GET /nodes 转发上游 /api/mininet/nodes，回统一投影（type 在顶层 + attributes）",
+			unified.status === 200
+			&& unifiedHit?.path === "/api/mininet/nodes"
+			&& Array.isArray(unified.json?.data) && unified.json.data.length > 0
+			&& unified.json.data.every((node) => typeof node.type === "string" && node.attributes && typeof node.attributes === "object"),
+			`${unified.status} ${describe(unifiedHit?.path)} nodes=${describe(unified.json?.data?.length)}`
+		);
 
 		const health = await request(port, "/api/mininet/health", { cookie: auth.cookie });
 		log("② 探针端点映射到上游 /api/health（不是 /api/mininet/health）", health.status === 200 && health.json?.data?.status === "ok" && mininet.log.at(-1)?.path === "/api/health", describe(mininet.log.at(-1)?.path));

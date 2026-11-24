@@ -2035,6 +2035,23 @@
         "summary": "Node Position"
       }
     },
+    "/api/mininet/nodes": {
+      "get": {
+        "description": "统一节点读（M1.1）：五类分表的投影，形状与 `/api/simulation/sessions/{id}/nodes` 一致。\n\n1.x 的 `/api/mininet/**` 等价于「默认会话」（`sessions.py` 模块注释），因此这条不需要\n`session_id`；会话侧那条在 `WiredEngine.list_nodes()` 里先过 `_bound()`，两条共用\n`wired.unified_nodes()` 的投影。页面读拓扑只打一条，不再并发拉五张分表。",
+        "operationId": "list_unified_nodes_api_mininet_nodes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Unified Nodes"
+      }
+    },
     "/api/mininet/pingall": {
       "post": {
         "description": "Build network and start nodes",

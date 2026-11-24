@@ -2375,6 +2375,20 @@ export async function startUpstream(port) {
 				return sendText(200, JSON.stringify({ hosts: mininetState.hosts, switches: mininetState.switches, links: mininetState.links }, null, 4));
 			if (segments.length === 1 && segments[0] === "export_script")
 				return sendText(200, "from mininet.topo import Topo\n\ntopo = Topo()\n");
+			// 统一节点读（M1.1）：五类分表的投影，形状与上游 `GET /api/mininet/nodes` 一致 ——
+			// `id/type/name/x/y` 在顶层，其余键进 `attributes`（见 `engines/wired.py` 的
+			// `unified_nodes()`）。页面拓扑现在只打这一条，不再并发拉五张分表。
+			if (segments.length === 1 && segments[0] === "nodes") {
+				const unifiedNodes = [];
+				const unifiedBuckets = [["hosts", "host"], ["switches", "switch"], ["routers", "router"], ["nats", "nat"], ["controllers", "controller"]];
+				for (const [bucket, type] of unifiedBuckets) {
+					for (const [id, node] of Object.entries(mininetState[bucket])) {
+						const { name, x, y, ...attributes } = node;
+						unifiedNodes.push({ id, type, name: name ?? id, x: x ?? 0, y: y ?? 0, attributes });
+					}
+				}
+				return send(200, unifiedNodes);
+			}
 			// 运行态（ADR-0022 W3）：上游 `GET /api/mininet/start` 回的就是裸布尔
 			if (segments.length === 1 && segments[0] === "start")
 				return send(200, mininetRun.started);
