@@ -1,7 +1,7 @@
 # key: lab-api
-# source: 本地 `python3 scripts/check-mininet-api.py --source-only` 真实输出尾部（2026-11-23 重采）
-# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+# source: CI run 45295921703 步骤 "Mininet API source guard"（job: lint / typecheck / governance）产物 check-logs-quality/lab-api.log 尾部（2026-11-24 回填）
+# 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ 加 / 删链路时交换机端口与 failMode 跟着走（NMCPS-ADR-0024）
 ✅ 停网 / 全量重建都先等 pingall / iperf 收尾（NMCPS-ADR-0026 D3）
-✅ 吞吐测试自带子进程与硬超时，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）
+✅ 吞吐测试自带子进程 / 硬超时 / netns 内 ss 就绪探测，不再依赖 Net.iperf()（NMCPS-ADR-0026 §5）
 ✅ 源码守卫 3/3 组通过（--source-only：未导入后端，无 Mininet 依赖）

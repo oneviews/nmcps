@@ -1,5 +1,5 @@
 # key: bff
-# source: CI run 42319789443 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-07 回填）
+# source: CI run 45295921703 步骤 "Gateway contract checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-24 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ ⑨-4 allowWrite=false → 写端点 405 simulator_write_disabled — 405 simulator_write_disabled
 ✅ ⑨-4 allowWrite=false 的写请求不触达上游 — hits=0
@@ -8,4 +8,4 @@
 ✅ ⑨-6 白名单条目可从源码抽取（抽取为空即红，避免「白名单被清空」的假绿） — 23 条
 ✅ ⑨-6 白名单 ⊆ openapi 快照（路径 + 动词逐条命中） — 23/23
 ✅ ⑨-6 快照自身一致（pathCount = paths 键数，info.version 非空） — 113 条 / v0.1.0 / 采集于 2026-11-05
-127/127 项通过
+128/128 项通过

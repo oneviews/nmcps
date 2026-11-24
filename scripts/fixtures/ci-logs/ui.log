@@ -1,11 +1,11 @@
 # key: ui
-# source: CI run 42319789443 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-07 回填）
+# source: CI run 45295921703 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-24 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
-✅ A9 选中仿真节点后写按钮可点 — buttons=2 disabled=0
-✅ A9 点按钮先弹二次确认（写明动作与目标） — 弹窗文案：确认下发仿真动作？将向 核心路由器-1（仿真 id n1）下发「重启节点」这一步不可撤销动作直接作用在正在运行的仿真上，BFF 不保留副本，也不会自动回滚。取消确认下发
-✅ A9 确认前不触达上游 — 确认前写请求 0 次
-✅ A9 确认后写请求真的到达仿真平台（方法与路径原样） — POST /api/network/nodes/n1/restart（共 1 次）
-✅ A9 成功后给出成功提示并关掉弹窗 — 已提示「重启已下发」
+✅ 11.14 控制器详情只读：没有保存按钮，且弹窗写明「只改台账、不重启控制器」 — 只读说明=只读控制器与 NAT 只能看：上游改控制器只改台账、不重启控制器，改了也不会生效。 保存按钮=0
+✅ 11.9 只读会话（实验台操作员）：右栏只剩 日志 / 监控 / 网络，Webshell 与连通都不出现 — tabs=["日志","监控","网络"] 连通字样=false
+✅ 11.9 只有 lab:operate 的会话（租户管理员）：连通出现且探测 / 测速可用，Webshell 与抓包读数都不出现 — tabs=["日志","监控","网络","连通"] 运行态=true 探测=true 测速=true 抓包=false
+✅ 11.3 台账资源清单外的节点与链路不进入画布 — nodes=h1,sw1,r1,nat1,c0 links=h1|sw1|0
+✅ 11.6b 缺 lab:delete 时「台账对账」禁用（客户端能力位与 BFF 守卫同源） — 菜单项=[{"label":"导入拓扑（JSON）…","disabled":true},{"label":"导出 JSON","disabled":false},{"label":"导出 Python 脚本","disabled":false},{"label":"导出拓扑 PNG","disabled":false},{"label":"导出地址规划（JSON）","disabled":false},{"label":"台账对账…","disabled":true},{"label":"设置…","disabled":false}]
 ✅ Tauri 宿主侧栏出现「平台能力」分组 — 已显示
 ✅ 「平台能力」分组含 5 个探针入口 — /os /file /store /notifications /webview
-160/160 项通过
+299/299 项通过

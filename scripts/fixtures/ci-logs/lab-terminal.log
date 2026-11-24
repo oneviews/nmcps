@@ -1,6 +1,6 @@
 # key: lab-terminal
-# source: 本地 `pnpm check:lab-terminal` 真实输出尾部（2026-11-17 重采）
-# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+# source: CI run 45295921703 步骤 "Lab terminal PTY checks"（job: BFF contract / page UI）产物 check-logs-runtime/lab-terminal.log 尾部（2026-11-24 回填）
+# 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
    尾部：root@h1:~# echo after-interrupt | after-interrupt | root@h1:~# exit | exit
 ✅ Tab \t 触发 bash 补全（`ech` → `echo `，随后整行照常执行）
    尾部：root@h1:~# echo tab-ok | tab-ok | root@h1:~# exit | exit

@@ -1,34 +1,34 @@
 {
 	"bff": {
-		"sha256": "d62711ab73896d86bc19afc9f52677a1230a207c18208e106b243630e19f6b26",
-		"source": "CI run 42319789443 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-07 回填）"
+		"sha256": "72fbdff6638e1588a26073345a94f36c991016e52565c3c552709f3c6b5fb2d0",
+		"source": "CI run 45295921703 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-24 回填）"
 	},
 	"governance": {
-		"sha256": "7d254554f5c306cd9e2590a0510e6f25f314f2cdf0212acd36c4115b2207302f",
-		"source": "本地 `pnpm check:governance` 真实输出尾部（2026-11-17 重采）"
+		"sha256": "8f919a66a0df9ef351b817c40f46d3e2cb1f91a9a60e4709f81118943499121b",
+		"source": "CI run 45295921703 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-24 回填）"
 	},
 	"i18n": {
-		"sha256": "9be0ee1543270321b1417e2203951968042182f6ca61be447cb770b7f61254b4",
-		"source": "本地 `pnpm check:i18n` 真实输出尾部（2026-11-17 重采）"
+		"sha256": "8f4ab51bae37f7c5417c6bd67136a68bb2a14fd18789a0c3e9a13f97a3f6898e",
+		"source": "CI run 45295921703 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-24 回填）"
 	},
 	"lab-api": {
-		"sha256": "0fbe8678871cfd8aaaf4c3b89e3da9f440a17cf1f0c2a84a2b5911c75dbcd3a6",
-		"source": "本地 `python3 scripts/check-mininet-api.py --source-only` 真实输出尾部（2026-11-23 重采）"
+		"sha256": "d6339d4f44a0d82245857694063f7f32dd02b43f6584d562dadf13fb49d5eeb2",
+		"source": "CI run 45295921703 步骤 \"Mininet API source guard\"（job: lint / typecheck / governance）产物 check-logs-quality/lab-api.log 尾部（2026-11-24 回填）"
 	},
 	"lab-terminal": {
-		"sha256": "b1d4b3b5a5d36c20995a98c41512a5947bb45ba239e03c41cd5398ba1b31c4a2",
-		"source": "本地 `pnpm check:lab-terminal` 真实输出尾部（2026-11-17 重采）"
+		"sha256": "f375ba03f87f92e4872eef2b3d96e474b71e388310e1f95bf7138769fccb51c9",
+		"source": "CI run 45295921703 步骤 \"Lab terminal PTY checks\"（job: BFF contract / page UI）产物 check-logs-runtime/lab-terminal.log 尾部（2026-11-24 回填）"
 	},
 	"lint": {
-		"sha256": "e36eaf6b9f91f3803b37152420efa40bb93bc2b47870242b9c10d2a27fc933d7",
-		"source": "本地 `pnpm lint` 真实输出尾部（2026-11-17 重采）"
+		"sha256": "a58f23e70b88ac73f5d98754f6da6418a2b6977e04ed79afabe66a66a6a2bb1a",
+		"source": "CI run 45295921703 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-24 回填）"
 	},
 	"typecheck": {
-		"sha256": "0bb72fceb4acdcc52120fec23b05c86c9f8f7dd6d33463d147aa589ed7879a24",
-		"source": "本地 `pnpm typecheck` 真实输出尾部（2026-11-17 重采）"
+		"sha256": "1d3d49b4362cf9fe26fe12ae6f5b24422430a821f0791064b5359c58445034ec",
+		"source": "CI run 45295921703 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-24 回填）"
 	},
 	"ui": {
-		"sha256": "994b2ba0962c74f9ac09a8af478d7ceede0e2722d58ef1427bb3ccf111cfefb3",
-		"source": "CI run 42319789443 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-07 回填）"
+		"sha256": "82b3924ae3a8ae04d9000392417e56bd087acf02030a7f5932b113f601580990",
+		"source": "CI run 45295921703 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-24 回填）"
 	}
 }
