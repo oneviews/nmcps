@@ -140,7 +140,7 @@
 
 | 端点 | 语义 | 本仓 | 档 | 目标 |
 |---|---|---|---|---|
-| `GET /lldp` / `/lldp/summary` / `/lldp/neighbors/{node_id}` | LLDP 邻居 | — | **P0** | 拓扑页已登记 `summary`/`neighbors` 白名单 |
+| `GET /lldp` / `/lldp/summary` / `/lldp/neighbors/{node_id}` | LLDP 邻居 | **不复刻**（邻接由 `GET /api/mininet/links` 推导） | P3→撤销 | `NMCPS-ADR-0027` §7 追补：参考侧 native 模式本就是拿台账合成 MIB（不是 LLDP 实测），其「AP 侧假边」「幽灵 404」是合成路径的产物；真采需 `lldpd` 系统依赖 + 每节点守护，而 OVS 不转发 LLDP 保留组播 |
 | `GET /metrics/current/{sim_id}` | 当前指标快照 | 部分（`/stats/{node_id}`） | **P0** | 指标字段对齐 `shared/types/metric.ts` |
 | `GET /metrics/history/{sim_id}` | 历史序列 | — | P1 | 需时序存储；先做内存环形缓冲 |
 | `GET /metrics/summary/{sim_id}` | 汇总 | — | P1 | — |
@@ -226,7 +226,7 @@
 | 阶段 | 内容 | 出口验收 |
 |---|---|---|
 | **M0 骨架** | 引擎注册表（`registry` + `base` + `dryrun`）、会话层、BFF 远程化（token + `/api/version` 握手）、`engines/{wired,wireless}` 分层与静态守卫 | `pnpm contracts:gen` + `pnpm check:lab-bff`（远端 baseUrl 用例）；**无 root 的 `dryrun` 引擎能让 CI 跑通全链路** |
-| **M1 有线全量** | §2.1 与 §2.2 的 P0（统一 node、runtime-inventory、lldp、metrics 基础、connectivity 矩阵） | `check:lab-real`（90 真机）+ 前端拓扑/场景页端到端 |
+| **M1 有线全量** | §2.1 与 §2.2 的 P0（统一 node、runtime-inventory、metrics 基础、connectivity 矩阵；LLDP 已撤销，见 §五之三） | `check:lab-real`（90 真机）+ 前端拓扑/场景页端到端 |
 | **M2 SNMP 面** | `snmp/topology` + MIB 投影（按 7 类分批）、`snmp/onboard` | 外部 `snmpwalk` 取到一致 OID；`check:lab-bff` 加 SNMP 用例 |
 | **M3 无线 + 频谱** | hwsim + `hostapd` + `radio` 读写 + `wireless-nodes`；频谱页（冲突检测纯函数 + 一键消解） | 改信道 → 回读一致 → 冲突消失；`check:lab-real` 增加无线用例（root） |
 | **M4 传输** | `links/{id}/tc`、链路动作、弱网（P1） | tc 类 `rate` 与请求值一致（需 root 断言） |
@@ -315,8 +315,24 @@
 
 - **`disable` / `power`**：参考侧与 `up` / `down` 语义重叠（都落到接口状态），2.0 只复刻三个动作，
   多余动作不出现在页面上，也不另开端点。
-- **页面切换**：`layers/topology` 的拓扑监控页仍读 `:8001`（`/api/sim/**`）。缺的还有 **LLDP 面**
-  （`/lldp/summary` / `/lldp/neighbors/{node_id}`），那是 R8 的最后一个前置，见 `NMCPS-ADR-0027` §4。
+- **页面切换**：`layers/topology` 的拓扑监控页仍读 `:8001`（`/api/sim/**`）。原本记作「R8 最后一个前置」的
+  **LLDP 面已撤销**（见 §五之三）：邻接改由 `/links` 推导，页面切换不再有引擎面前置。
+
+## 五之三、LLDP 面撤销（2026-11-25，`NMCPS-ADR-0027` §7 追补）
+
+结论：**不建 `/api/lldp/summary` / `/api/lldp/neighbors/{node_id}`，不引入 `lldpd`**；页面邻接由
+`GET /api/mininet/links` + 现役纯函数 `topologyNeighborsOf()`（`app/utils/graph/topologyNodeFacts.ts`）推导。
+
+| 依据 | 事实 |
+|---|---|
+| 参考侧不是 LLDP 实测 | `_reference/netsim/.../lldp_agent.py` 的 native 模式注释即「基于真实拓扑构建 LLDP-MIB 数据（无需额外守护进程）」，实现是把台账链路拼成 `lldpRem*` 字段；`shared/types/simulator.ts` 记的「实测原样」是**合成结果**的形状 |
+| 合成路径的已知缺陷 | `_reference/netsim/docs/已知问题-AP侧LLDP假边.md`（假边）、`docs/backlog/2026-09-21-lldp-ghost-404.md`（未知节点 200 + 空数组） |
+| 真采代价 | 宿主无 `lldpd`（`which lldpd` 空）、需每节点命名空间一个守护；交换机是根 netns 的 OVS，只做二层转发，LLDP 保留组播 `01:80:C2:00:00:0E` 默认不转发不上送，交换机身份也无处可取 |
+| 与既有口径的冲突 | 没测过的读数只能回 `unknown`（M1.2）；合成邻接会给 `up` + `ttl: 120`，等于编数据 |
+
+字段落差照实承认：`ttl` / `discovered_at` / `sys_name` / `chassis_id` / `mib_oids` 无替代品，页面卡片切过去时
+只展示 `neighbor_id` / 名称 / 两端接口 / 链路状态（`up` / `down` / `unknown`），文案改叫「拓扑邻接」。
+`SIMULATOR_ROUTES` 里的两条 `/api/lldp/*` 是 1.0 通道现状，随页面切换与 `check:lab-bff` ⑨-6 一起退役。
 
 ## 六、未决问题（阻塞项在前）
 
@@ -345,5 +361,9 @@
    剩余 = 更新类操作（位置 / IP / 默认路由 / OpenFlow / 流表）与前端读路径切换，记为 M1.1。
 4. `check:engines` / `check:simulation` 进 CI：前者零依赖可直接进 quality job，
    后者需要 mininet 与 uvicorn，挂在 lab 专用 job（与 `lab:check` 同环境）。
+5. **R8 页面切换（可开始）**：读路径三项已就绪（`/nodes`、`/links`、邻接由 `/links` 推导，LLDP 面已撤销见 §五之三）。
+   顺序按 `NMCPS-ADR-0027` §4：先切读（含把「LLDP 邻居」卡改名「拓扑邻接」并按 `topologyNeighborsOf()` 出数），
+   再切能力位（`GET /api/mininet/channel`），最后删 `/api/sim/**` 与 `check:lab-bff` ⑨-6；`check:ui` 的 11.x 相邻用例
+   需同步改写（假上游改供 `/api/mininet/links`，断言不再看 `data-lldp-*` 的 LLDP 语义）。
 
 
