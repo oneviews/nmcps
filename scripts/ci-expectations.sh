@@ -17,8 +17,8 @@
 #   typecheck   → `$ vue-tsc -b --pretty`（同上）
 #   i18n        → `✅ 文案自查 10/10 通过`
 #   governance  → `结果：N 通过 / 0 失败 / 0 告警`（check:doc-system 的小结；N 随文档增减变化，不写死）
-#   bff         → `136/136 项通过`
-#   ui          → `299/299 项通过`
+#   bff         → `107/107 项通过`
+#   ui          → `297/297 项通过`
 #   lab-terminal → `6/6 项通过（真实 bash + PTY）`
 #   lab-api     → `源码守卫 3/3 组通过`（`--source-only`，无 Mininet 依赖）
 set -eu

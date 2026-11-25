@@ -107,7 +107,7 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 - 平台管理员（`tid === null`）回 `403 lab_permission_denied`，没有运行态权限。
 - 主网关已剥离客户端 `x-tenant-id`；租户只来自签名会话，不来自请求头 / 查询 / body。
 - 桌面端（`x-nmcps-client: desktop`）当前只在响应体拿 tokens，不落签名会话；在补充桌面会话承载前，`/api/mininet/**` 对桌面端返回 401。
-- `/api/sim/**` 仍保持原只读通道，尚未接入租户实例与签名会话；在 P3 写操作开放前必须补齐。
+- `/api/sim/**`（8001 仿真平台）已于 2026-11-25 随 `NMCPS-ADR-0027` §4 R8 退役：BFF 不再有第二条实验出站通道，租户实例与签名会话只在 `/api/mininet/**` 上闭环。
 - **真实 IAM 里的 `lab_*` 角色需要手工补（2026-11-18 两个都已补齐）**：`GET /api/iam/roles?page=1&page_size=200`（2026-11-17 实测）只有 9 条（`platform_admin`、三个租户各三条 `tenant_admin` / `tenant_operator` / `tenant_viewer`），所以演示账号 `tenantadmin` 的 `/api/mininet/channel` 恒为 `terminal: false`、`admin` 恒为 `403`；`check:ui` / `check:lab-bff` 能全绿是因为 `scripts/lib/bff-harness.mjs` 自造了 `r_lab_terminal` 并绑给 `alice`。想在本机手点 Webshell / 抓包，得先在 IAM 侧把角色补出来：
   ```bash
   # 1) 建角色（用租户令牌建，实测落库 tenant_id = tnt_default；用 admin 建会是平台角色）

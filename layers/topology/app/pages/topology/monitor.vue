@@ -168,10 +168,10 @@
 		</Teleport>
 
 		<!--
-			仿真通道降级（§八 硬性要求）：只保留「不可达」这一条 —— 它说的是「本可以工作但现在坏了、可重试」。
-			「未配置」不再挂告警条：那是**部署形态**而不是故障，链路动作按钮已整体置灰、tooltip 写明原因
-			（`linkActionHint` 的 `simulator_not_configured` 分支），页头再压一条 100px 高的常驻告警
-			等于把「没装仿真平台」当成缺陷报给用户（1.0 的顶栏也没有这条）。
+			实验通道降级（§八 硬性要求）：只保留「不可达」这一条 —— 它说的是「本可以工作但现在坏了、可重试」。
+			「租户没有实例」不挂告警条：那是**部署形态**而不是故障，链路动作按钮已整体置灰、tooltip 写明原因
+			（`linkActionHint` 的 `disabled` 分支），页头再压一条 100px 高的常驻告警
+			等于把「没开实验台」当成缺陷报给用户（1.0 的顶栏也没有这条）。
 		-->
 		<UAlert
 			v-if="simState === 'unreachable'"
@@ -555,7 +555,7 @@
 						<div class="mt-3 border-t border-(--ui-border) pt-2 text-xs">
 							<template v-if="selected.marker">
 								<div class="flex items-center gap-1 font-medium">
-									<UIcon name="carbon:simulation" class="size-3.5 text-(--ui-info)" />
+									<UIcon name="carbon:network-3" class="size-3.5 text-(--ui-info)" />
 									{{ $t("pages.topology-monitor.detail.simulated") }}
 								</div>
 								<dl class="mt-1 grid grid-cols-2 gap-x-2 gap-y-1">
@@ -647,7 +647,7 @@
 					-->
 					<div class="mt-3 border-t border-(--ui-border) pt-2">
 						<div class="mb-1 flex items-center gap-1 text-xs font-medium">
-							<UIcon name="carbon:simulation" class="size-3.5 text-(--ui-info)" />
+							<UIcon name="carbon:network-3" class="size-3.5 text-(--ui-info)" />
 							{{ $t("pages.topology-monitor.simControls.linkActions") }}
 						</div>
 						<UTooltip :text="linkActionHint">
@@ -770,71 +770,59 @@
 				</div>
 
 				<!--
-					LLDP 邻接（§6.13 取证 / §6.14 落地）：上游逐节点的邻接台账，与上面「邻居」不是同一件事 ——
-					那一块是**本图画布**上的边，这一块是设备自报（可能指向画布外设备）。
-					四种状态分开写，因为它们不是同一个结论：`idle`（不在仿真里，读不到台账）/ `loading` /
-					`ok` 且空数组（上游明确说没有邻居）/ `error`（只给原因，不写「没有邻居」）。
+					拓扑邻接（§6.14；`NMCPS-ADR-0027` §7）：读实验台账的链路，不是 LLDP 实测 ——
+					TTL / 发现时间 / MIB 系统名只在真实 LLDP TLV 里存在，这里没有替代品，因此不展示。
+					与上面「邻居」不是同一件事：那一块是**本图画布**上的边，这一块是实验台账里这台
+					设备的链路（对端可能不在本图上，照实列出）。
+					两种状态分开写：`idle`（不在实验运行态里，没有可读的台账）/ `ok`（可能有 0 条）。
 				-->
 				<div
 					v-if="selected && !selectedLink"
-					data-testid="topology-lldp-card"
-					:data-lldp-state="neighborState"
-					:data-lldp-count="neighborRows.length"
-					:data-lldp-on-canvas="neighborCanvasNodeCount"
+					data-testid="topology-adjacency-card"
+					:data-adjacency-state="neighborState"
+					:data-adjacency-count="neighborRows.length"
+					:data-adjacency-on-canvas="neighborCanvasNodeCount"
 					class="rounded-lg border border-(--ui-border) p-3"
 				>
 					<div class="mb-2 flex items-baseline justify-between gap-2">
 						<h2 class="text-sm font-semibold">
-							{{ $t("pages.topology-monitor.lldp.title") }}
+							{{ $t("pages.topology-monitor.adjacency.title") }}
 						</h2>
 						<span v-if="neighborState === 'ok'" class="text-xs text-(--ui-text-muted)">
-							{{ $t("pages.topology-monitor.lldp.counts", { total: neighborRows.length, onCanvas: neighborCanvasNodeCount }) }}
+							{{ $t("pages.topology-monitor.adjacency.counts", { total: neighborRows.length, onCanvas: neighborCanvasNodeCount }) }}
 						</span>
 					</div>
 
-					<p v-if="neighborState === 'idle'" data-testid="topology-lldp-idle" class="text-xs text-(--ui-text-muted)">
-						{{ simState === "ok" ? $t("pages.topology-monitor.lldp.notSimulated") : $t("pages.topology-monitor.lldp.unavailable") }}
-					</p>
-					<p v-else-if="neighborState === 'loading'" data-testid="topology-lldp-loading" class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.topology-monitor.lldp.loading") }}
-					</p>
-					<p v-else-if="neighborState === 'error'" data-testid="topology-lldp-error" class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.topology-monitor.lldp.error", { reason: neighborReason }) }}
+					<p v-if="neighborState === 'idle'" data-testid="topology-adjacency-idle" class="text-xs text-(--ui-text-muted)">
+						{{ simState === "ok" ? $t("pages.topology-monitor.adjacency.notSimulated") : simState === "empty" ? $t("pages.topology-monitor.adjacency.noNetwork") : $t("pages.topology-monitor.adjacency.unavailable") }}
 					</p>
 					<ul v-else-if="neighborRows.length" class="flex flex-col gap-2 text-xs">
 						<li
 							v-for="(row, index) in neighborRows"
 							:key="`${row.simId}-${index}`"
-							data-testid="topology-lldp-neighbor"
+							data-testid="topology-adjacency-neighbor"
 							:data-neighbor-id="row.simId"
 							:data-on-canvas="row.canvasId !== null"
 							class="flex flex-col gap-0.5"
 						>
 							<div class="flex items-center gap-1.5">
-								<!-- 两套身份并列：台账名（`N2`）与 MIB 自报名（`汇聚交换机-1`），谁也不顶替谁 -->
 								<span class="truncate font-medium">{{ row.name }}</span>
-								<span v-if="row.sysName && row.sysName !== row.name" class="truncate text-(--ui-text-muted)">
-									{{ row.sysName }}
-								</span>
-								<UBadge size="sm" variant="subtle" :color="row.linkStatus === 'up' ? 'success' : 'neutral'" class="ml-auto">
-									{{ row.linkStatus || "—" }}
+								<UBadge size="sm" variant="subtle" :color="row.linkStatus === 'up' ? 'success' : row.linkStatus === 'down' ? 'error' : 'neutral'" class="ml-auto">
+									{{ row.linkStatus }}
 								</UBadge>
 							</div>
 							<p class="text-[11px] text-(--ui-text-muted)">
 								{{ row.localInterface || "—" }} → {{ row.remoteInterface || "—" }}
 								<span v-if="row.type"> · {{ row.type }}</span>
-								<span v-if="row.ttl !== null"> · TTL {{ row.ttl }}s</span>
 							</p>
 							<p class="text-[11px] text-(--ui-text-muted)">
-								<span v-if="row.canvasId">{{ $t("pages.topology-monitor.lldp.onCanvas", { id: row.canvasId }) }}</span>
-								<span v-else>{{ $t("pages.topology-monitor.lldp.offCanvas") }}</span>
-								<!-- 上游本地时间字符串不带时区：原样展示，不做时区换算 -->
-								· {{ row.discoveredAt || "—" }}
+								<span v-if="row.canvasId">{{ $t("pages.topology-monitor.adjacency.onCanvas", { id: row.canvasId }) }}</span>
+								<span v-else>{{ $t("pages.topology-monitor.adjacency.offCanvas") }}</span>
 							</p>
 						</li>
 					</ul>
-					<p v-else data-testid="topology-lldp-empty" class="text-xs text-(--ui-text-muted)">
-						{{ $t("pages.topology-monitor.lldp.empty") }}
+					<p v-else data-testid="topology-adjacency-empty" class="text-xs text-(--ui-text-muted)">
+						{{ $t("pages.topology-monitor.adjacency.empty") }}
 					</p>
 				</div>
 
@@ -896,8 +884,9 @@
 
 <script setup lang="ts">
 	// `/topology/monitor` 网络拓扑总览（NMCPS-DESIGN-001 §二 / §七 / §八）。
-	// 主数据源 8888 `/api/topology/graph`，第二数据源 8001 `runtime-inventory`（只读叠加）。
-	// 仿真通道未配置 / 不可达时页面照常只读：拓扑与统计继续渲染，仿真区块单独降级。
+	// 主数据源 8888 `/api/topology/graph`，第二数据源引擎面 `GET /api/mininet/nodes` + `/links`
+	// （只读叠加，`NMCPS-ADR-0027` §4 R8）。实验通道未配置 / 不可达时页面照常只读：
+	// 拓扑与统计继续渲染，实验区块单独降级。
 	import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
 	import type { StatusColor } from "~~/app/utils/graph/topologyStatusStyle";
 	import type {
@@ -923,7 +912,7 @@
 	import { linkStatusColor, nodeFillClass, nodeStatusColor, statusI18nKey } from "~~/app/utils/graph/topologyStatusStyle";
 
 	import { deviceMetricsDeepLink, linkMetricsDeepLink } from "~~/app/utils/metric/metricDeepLink";
-	import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
+	import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
 	definePageMeta({ sort: 1, icon: "carbon:network-3" });
 
@@ -982,7 +971,6 @@
 		hasAlarms,
 		neighborRows,
 		neighborState,
-		neighborReason,
 		neighborCanvasNodeCount,
 		simulatorLinkFor,
 		performLinkAction,
@@ -1087,7 +1075,7 @@
 
 	// ── 页头读数（工具栏右区徽标，§七）：四档全部来自已取到的数据。────────────────────────
 	// 「仿真中节点」这一档已按 2026-11-09 用户裁决删除：仿真节点在画布上自带标记、详情栏也逐台
-	// 写「仿真中」，一个跨页头常驻的计数既重复又要依赖 `/api/sim/channel` 的可用性（通道不通时
+	// 写「仿真中」，一个跨页头常驻的计数既重复又要依赖 `/api/mininet/channel` 的可用性（通道不通时
 	// 写「—」，读者会以为拓扑里没有仿真节点）。
 	//
 	// 缺数据一律 `—`：拓扑没加载出来时写 0、告警通道没起来时写 0 条，都是把「不知道」说成「没有」。
@@ -1338,10 +1326,9 @@
 	}
 
 	// ── 写入口（§6.2）：只保留链路动作这一条流程（选中 → 二次确认 → 下发）─────────────────────
-	// 节点级的「停止节点 / 重启节点」两枚按钮已按 2026-11-09 用户裁决从工具栏删除：它们的可用性
-	// 建立在「工具栏上选中了哪台设备」之上，而工具栏与选中对象隔着一整张画布 —— 最高危的动作
-	// 挂在最不显眼的位置，停掉一台设备后也没有任何画布内的位置能把它拉回来。写能力本身仍由
-	// `/api/sim/channel` 的 `writeEnabled` 决定，链路动作（断开 / 恢复 / 来回切）留在链路事实卡里。
+	// 节点级的「停止节点 / 重启节点」两枚按钮已按 2026-11-09 用户裁决从工具栏删除，`NMCPS-ADR-0027`
+	// §4 第 2 条也不再为它们补引擎面端点。写能力本身由 `/api/mininet/channel` 的 `capabilities.operate`
+	// 决定（链路通断 = `lab:operate`），链路动作（断开 / 恢复 / 来回切）留在链路事实卡里。
 	/** 动作文案（键表放在一处：模板、提示、弹窗标题都从这里取，避免同一动作三种叫法） */
 	const ACTION_LABEL_KEY: Record<SimulatorLinkAction, string> = {
 		down: "pages.topology-monitor.simControls.linkDown",
@@ -1398,6 +1385,8 @@
 			return t("pages.topology-monitor.simControls.loading");
 		if (state === "disabled")
 			return t("pages.topology-monitor.simControls.disabled");
+		if (state === "empty")
+			return t("pages.topology-monitor.simControls.noNetwork");
 		if (state === "unreachable")
 			return t("pages.topology-monitor.simControls.unreachable");
 		if (!writeEnabled.value)
@@ -1409,13 +1398,13 @@
 		return t("pages.topology-monitor.simControls.linkReady", { name: linkEndpoints.value });
 	});
 
-	/** 失败原因：本方词汇（未开写 / 不可达 / 超时）翻成文案，其余是上游原话，照原样展示 */
+	/** 失败原因：本方词汇（无权限 / 不可达 / 超时）翻成文案，其余是上游原话，照原样展示 */
 	function describeActionError(message: string): string {
-		if (message === SIMULATOR_MESSAGES.writeDisabled)
+		if (message === MININET_MESSAGES.permissionDenied)
 			return t("pages.topology-monitor.simControls.writeDisabled");
-		if (message === SIMULATOR_MESSAGES.unreachable)
+		if (message === MININET_MESSAGES.unreachable)
 			return t("pages.topology-monitor.simControls.unreachable");
-		if (message === SIMULATOR_MESSAGES.timeout)
+		if (message === MININET_MESSAGES.timeout)
 			return t("pages.topology-monitor.simControls.timeout");
 		return message;
 	}
@@ -1436,7 +1425,7 @@
 		if (!action || !target || acting.value)
 			return;
 
-		const result: SimulatorActionResult = await performLinkAction(action, target.simId);
+		const result: SimulatorActionResult = await performLinkAction(action, { source: target.source, target: target.target });
 
 		if (!result.ok) {
 			actionError.value = describeActionError(result.message);

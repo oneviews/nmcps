@@ -584,6 +584,16 @@ export async function startUpstream(port) {
 	const mininetLinkAttrs = {};
 
 	/**
+	 * 链路运行态（M1.2 / ADR-0027 §4 R8）：`from|to` 两个方向都登记，`up` / `down`。
+	 * 没有登记时由 `mininetRun.started` 派生（未启动恒 `unknown`，不拿停网前的状态冒充运行态）。
+	 * `PATCH /links/{src}/{dst}/state` 真改它 —— 页面下发后再读 `GET /links` 必须看见变化。
+	 */
+	const mininetLinkState = {};
+	const mininetLinkStatusOf = (link) => mininetLinkState[`${link.from}|${link.to}`]
+		?? mininetLinkState[`${link.to}|${link.from}`]
+		?? (mininetRun.started ? "up" : "unknown");
+
+	/**
 	 * 账号口令是**可变**的：改密真的落库、重登真的校验（默认口令 `p@ssw0rd`）。
 	 *
 	 * 新代没有 `mfaRequired` / `mustResetPassword`（NMCPS-ADR-0018 缺口 G2/G8），
@@ -2313,6 +2323,25 @@ export async function startUpstream(port) {
 					return send(200, { message: `Node ${segments[1]} deleted successfully` });
 				}
 
+				if (req.method === "PATCH" && collection === "links" && segments.length === 4 && segments[3] === "state") {
+					const source = segments[1];
+					const target = segments[2];
+					if (!mininetRun.started)
+						return send(400, { detail: "network must be started" });
+					const exists = mininetState.links.some((link) =>
+						(link.from === source && link.to === target) || (link.from === target && link.to === source));
+					if (!exists)
+						return send(404, { detail: "link not found" });
+					const current = mininetLinkState[`${source}|${target}`] ?? mininetLinkState[`${target}|${source}`] ?? "up";
+					const requested = body?.state;
+					const next = requested === "toggle" ? (current === "up" ? "down" : "up") : requested;
+					if (next !== "up" && next !== "down")
+						return send(422, { detail: "state must be one of up / down / toggle" });
+					mininetLinkState[`${source}|${target}`] = next;
+					mininetLinkState[`${target}|${source}`] = next;
+					return send(200, { from: source, to: target, status: next });
+				}
+
 				if (req.method === "DELETE" && collection === "delete_link") {
 					const before = mininetState.links.length;
 					mininetState.links = mininetState.links.filter((link) =>
@@ -2476,10 +2505,12 @@ export async function startUpstream(port) {
 				});
 			}
 
-			// 链路清单带上 `options`：详情弹窗在「没改过」时也读得到台账里的属性
+			// 链路清单带上 `options`：详情弹窗在「没改过」时也读得到台账里的属性；
+			// `status` 是 M1.2 的运行态读数（未启动恒 `unknown`），页面邻接与链路动作都读它。
 			if (segments.length === 1 && segments[0] === "links") {
 				return send(200, mininetState.links.map((link) => ({
 					...link,
+					status: mininetLinkStatusOf(link),
 					options: mininetLinkAttrs[`${link.from}|${link.to}`] ?? mininetLinkAttrs[`${link.to}|${link.from}`] ?? {},
 					intfs: { from: `${link.from}-eth0`, to: `${link.to}-eth0` }
 				})));
@@ -2620,226 +2651,12 @@ export async function startUpstream(port) {
 	server.mininetLog = mininetLog;
 	server.mininetReadLog = mininetReadLog;
 	server.mininetState = mininetState;
+	server.mininetLinkAttrs = mininetLinkAttrs;
+	server.mininetLinkState = mininetLinkState;
 	server.mininetRun = mininetRun;
 	server.mininetSniffer = mininetSniffer;
 	// 抓包实时流（NMCPS-ADR-0022 D6）：连上就推 `MININET_SNIFFER_LIVE` 那两帧
 	server.mininetSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
-
-	return server;
-}
-
-/**
- * 假仿真平台（第二上游，NMCPS-ADR-0019 裁决 B）：只实现 BFF 白名单里那些端点的形状。
- *
- * 记录每次请求的 `{ method, path, headers }`（`server.log`）——「出站不带 authorization、
- * 不把 nmcps_at 转 Bearer」这类断言只能靠上游侧的客观记录来取证，不能问 BFF 自己。
- *
- * 返回体形状对齐 NMCPS-CONTRACT-001 §六 的实测形状（`nodes_by_type` 用动态键、
- * 链路的 `status` 是 up/down 字符串）；这里只求形状够用，数值不必等于真实仿真。
- */
-export async function startSimulator(port) {
-	const log = [];
-
-	/** 写端点的请求体（只用于回显，解析失败按 undefined） */
-	async function readBody(req) {
-		const chunks = [];
-		for await (const chunk of req) {
-			chunks.push(chunk);
-		}
-		const raw = Buffer.concat(chunks).toString("utf8");
-		if (!raw)
-			return undefined;
-		try {
-			return JSON.parse(raw);
-		} catch {
-			return raw;
-		}
-	}
-
-	/**
-	 * 假仿真平台的开关（与 8888 假上游各自独立）：`__control/lldp-error` 打开时
-	 * `/api/lldp/neighbors/*` 回 500 + 一句上游原话，用来证明「读不到邻居」不会被写成「没有邻居」
-	 * （NMCPS-DESIGN-001 §6.14 / A40）。
-	 */
-	const control = { lldpError: false };
-
-	const server = createHttpServer(async (req, res) => {
-		const url = new URL(req.url, `http://${HOST}:${port}`);
-		const path = url.pathname;
-
-		const send = (status, payload) => {
-			const body = JSON.stringify(payload);
-			res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-			res.end(body);
-		};
-
-		// 控制端点先于请求日志处理：页面期间「零写请求」的断言只数非 GET，
-		// 但这些调用也不该混进上游日志里（保持 `simulatorServer.log` 只有真请求）。
-		if (path.startsWith("/__control/")) {
-			if (path === "/__control/lldp-error")
-				control.lldpError = true;
-			else if (path === "/__control/lldp-ok")
-				control.lldpError = false;
-			else if (path !== "/__control/state")
-				return send(404, { detail: "unknown_control", path });
-			return send(200, { lldpError: control.lldpError });
-		}
-
-		log.push({ method: req.method, path, headers: req.headers });
-
-		// ── 只读 ──
-		if (path === "/api/network/runtime-inventory" && req.method === "GET") {
-			// 形状对齐 `shared/types/simulator.ts`（NMCPS-CONTRACT-001 §6.3）：IP 在 `ip_address`，
-			// 与 8888 图节点（`id` = 管理 IP）对齐靠它 —— 页面用它叠「仿真中」标记。
-			const node = (id, name, type, ip) => ({
-				id,
-				name,
-				type,
-				status: "online",
-				x: null,
-				y: null,
-				interfaces: [],
-				ip_address: ip,
-				mac_address: null,
-				device_type: type,
-				role: null,
-				ports: [],
-				weaknet_config: null,
-				protocol_config: null,
-				radio: null
-			});
-
-			return send(200, {
-				running: true,
-				scenario: "drill-a",
-				overrides: { exists: false, updated_at: null, node_count: 0, link_count: 0, topology_count: 0 },
-				nodes: [
-					node("n1", "核心路由器-1", "router", "10.0.0.1"),
-					node("n2", "汇聚交换机-1", "switch", "10.0.0.2")
-				],
-				links: [
-					{
-						id: "l1",
-						source: "n1",
-						target: "n2",
-						source_interface: "Gi0/1",
-						target_interface: "Gi0/2",
-						type: "wired",
-						status: "up",
-						bandwidth: "1Gbps",
-						delay: "2ms",
-						loss: "0%",
-						real_stats: null,
-						weaknet_config: null,
-						protocol_config: null,
-						tc: null
-					}
-				]
-			});
-		}
-
-		if (path === "/api/network/stats" && req.method === "GET") {
-			return send(200, {
-				node_count: 36,
-				link_count: 48,
-				nodes_by_type: { router: 3, switch: 6, ap: 18, station: 9 },
-				links_by_type: { wired: 40, wireless: 8 },
-				nodes_online: 36,
-				links_up: 48
-			});
-		}
-
-		// ── /api/lldp/*：邻接发现（NMCPS-DESIGN-001 §6.2 / §6.13） ──
-		// 形状对齐 2026-11-07 对 8001 的实测（`shared/types/simulator.ts` 的 LLDP 两段）：
-		//   ① summary 是「本轮扫描规模 + 一台示例端点的自报身份」，**不是**按交换机分组的邻居计数；
-		//   ② 邻居项两套身份并存（`neighbor_id` 是平台台账、`sys_name` 是 MIB 字段），两端接口分名，
-		//      `mib_oids` 是「字段名 → OID」的对照表；`discovered_at` 带微秒但**不带时区**。
-		if (path === "/api/lldp/summary" && req.method === "GET") {
-			return send(200, {
-				node_count: 36,
-				neighbor_entry_count: 96,
-				mode: "native",
-				mib_standard: "IEEE 802.1AB",
-				lldp_mib_oid: "1.0.8802.1.1.2.1.4.1.1",
-				local_sys_name: "核心路由器-1",
-				local_sys_desc: "n1 LLDP agent (IEEE 802.1AB)",
-				local_chassis_id: "00:00:00:00:00:00"
-			});
-		}
-
-		const neighbor = path.match(/^\/api\/lldp\/neighbors\/([^/]+)$/);
-		if (neighbor && req.method === "GET") {
-			// 失败分支（A40）：上游原话放 `detail`，BFF 原样透出（数据不翻译）——
-			// 页面这时只能写「邻接通道不可用：<原话>」，不能写成「没有邻居」。
-			if (control.lldpError)
-				return send(500, { detail: "lldp_agent_unreachable: snmp timeout on n1" });
-
-			const nodeId = decodeURIComponent(neighbor[1]);
-			const lldpNeighbor = (peerId, peerType, peerName, sysName, localIf, remoteIf, discoveredAt) => ({
-				neighbor_id: peerId,
-				neighbor_type: peerType,
-				neighbor_name: peerName,
-				local_interface: localIf,
-				remote_interface: remoteIf,
-				chassis_id: "00:00:00:00:00:00",
-				chassis_id_subtype: "mac",
-				port_id: remoteIf,
-				port_id_subtype: "ifname",
-				port_descr: `${peerId} port ${remoteIf}`,
-				sys_name: sysName,
-				sys_desc: `${peerId} (${peerType}) LLDP agent`,
-				ttl: 120,
-				link_type: "wired",
-				link_status: "up",
-				discovered_at: discoveredAt,
-				mib_oids: {
-					lldpRemChassisId: "1.0.8802.1.1.2.1.4.1.1.5",
-					lldpRemChassisIdValue: "00:00:00:00:00:00",
-					lldpRemPortId: "1.0.8802.1.1.2.1.4.1.1.7",
-					lldpRemPortIdValue: remoteIf,
-					lldpRemSysName: "1.0.8802.1.1.2.1.4.1.1.9",
-					lldpRemSysNameValue: sysName
-				}
-			});
-			// 邻居条目按「实测形状」给，且**一台设备可以有几个邻居**：
-			//   `n1`（画布节点 10.0.0.1）—— 两个邻居，`n2` 在画布上（10.0.0.2，可 join）、
-			//                              `n10` 不在运行态快照里（画布外设备，照实列出）；
-			//   `n4`（不在运行态快照里）—— 两台，用来证明「画布外的设备也有台账」；
-			//   其余节点 —— 空数组：空数组也是上游真实回答（没开采集的节点照实回 `[]`，不是 404）。
-			const neighbors = nodeId === "n4"
-				? [
-					lldpNeighbor("n1", "router", "N1", "核心路由器-1", "n4-eth1", "n1-eth2", "2026-11-05T10:38:56.863667"),
-					lldpNeighbor("n10", "switch", "N10", "接入交换机-1", "n4-eth5", "n10-eth2", "2026-11-05T10:38:56.922743")
-				]
-				: nodeId === "n1"
-					? [
-						lldpNeighbor("n2", "switch", "N2", "汇聚交换机-1", "n1-eth0", "n2-eth0", "2026-11-05T10:38:56.843328"),
-						lldpNeighbor("n10", "switch", "N10", "接入交换机-1", "n1-eth4", "n10-eth1", "2026-11-05T10:38:56.901117")
-					]
-					: [];
-
-			return send(200, { node_id: nodeId, neighbors });
-		}
-
-		if (path === "/api/network/runtime/preview" && req.method === "GET") {
-			return send(200, { nodes: [], links: [], warnings: [] });
-		}
-
-		// ── 写（`allowWrite: true` 才会到这里） ──
-		const write = req.method !== "GET" && /^\/api\/network\/(?:links|nodes|runtime)\//.test(path);
-		if (write) {
-			return send(200, { ok: true, method: req.method, path, received_body: await readBody(req) });
-		}
-
-		return send(404, { detail: "simulator_path_not_found", path, method: req.method });
-	});
-
-	await new Promise((resolve, reject) => {
-		server.once("error", reject);
-		server.listen(port, HOST, resolve);
-	});
-
-	server.log = log;
 
 	return server;
 }

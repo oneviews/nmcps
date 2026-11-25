@@ -1,36 +1,36 @@
+// layers/topology/app/composables/useTopologyMonitor.ts
+// `/topology/monitor` 的取数内核（NMCPS-DESIGN-001 §6.1 / §6.2 / §6.4）：
+//   · 8888 主数据源：`GET /api/topology/graph`（拓扑结构，缺失即错误态 + 重试）；
+//   · 实验通道第二数据源：`GET /api/mininet/nodes` + `/links`（运行态快照，见 `runtimeInventory.ts`），
+//     可选通道：租户没有实例 / 不可达只降级实验区块，**不**把整页变成错误。
+//
+// 两路数据的失败语义刻意不同：主上游失败 → 页面级错误；实验通道失败 → 只读降级 + 一行说明
+// （DESIGN-001 §八「不允许把可选上游的抖动升级成整页错误」）。
+// 读路径按 `NMCPS-ADR-0027` §4 R8 从 8001 `runtime-inventory` / `stats` / `lldp/neighbors` 切到
+// 引擎面：邻接不再有独立端点（§7），由 `GET /links` 在本机推导。
+import type { LabAdjacencyRow } from "~~/app/utils/graph/labAdjacency";
+import type { LabChannelInfo, LabLink, LabUnifiedNode, RuntimeInventory } from "~~/app/utils/graph/runtimeInventory";
 import type { SimulatorLinkMarker, SimulatorNodeMarker } from "~~/app/utils/graph/simulatorOverlay";
 import type { TopologyAlarmIndex } from "~~/app/utils/graph/topologyAlarms";
 import type { ComboStorage } from "~~/app/utils/graph/topologyComboPrefs";
 import type { TopologyLayoutMode } from "~~/app/utils/graph/topologyLayout";
-import type { TopologyNeighborRow } from "~~/app/utils/graph/topologyNeighbors";
 import type { NodeOffset, NodeOffsetMap } from "~~/app/utils/graph/topologyNodeOffsets";
-// layers/topology/app/composables/useTopologyMonitor.ts
-// `/topology/monitor` 的取数内核（NMCPS-DESIGN-001 §6.1 / §6.2 / §6.4）：
-//   · 8888 主数据源：`GET /api/topology/graph`（拓扑结构，缺失即错误态 + 重试）；
-//   · 8001 第二数据源：`GET /api/sim/api/network/runtime-inventory` 与 `/stats`（仿真运行态，
-//     可选通道：未配置 / 不可达只降级仿真区块，**不**把整页变成错误）。
-//
-// 两路数据的失败语义刻意不同：主上游失败 → 页面级错误；仿真通道失败 → 只读降级 + 一行说明
-// （DESIGN-001 §八「不允许把可选上游的抖动升级成整页错误」）。
 import type { AlarmEvent, AlarmEventPage } from "~~/shared/types/alarm";
-import type { SimulatorChannelInfo, SimulatorLldpNeighbor, SimulatorLldpNeighbors, SimulatorNetworkStats, SimulatorRuntimeInventory } from "~~/shared/types/simulator";
 import type { TopologyGraph } from "~~/shared/types/topology";
+
+import { labAdjacencyOf } from "~~/app/utils/graph/labAdjacency";
+import { runtimeInventoryOf } from "~~/app/utils/graph/runtimeInventory";
 import { buildSimulatorIndex, buildSimulatorLinkIndex, simulatorLinkOf, simulatorMarkerOf } from "~~/app/utils/graph/simulatorOverlay";
 import { alarmIndexOf, normalizeAlarmEvents } from "~~/app/utils/graph/topologyAlarms";
 import { childIndex, collapsePlanOf } from "~~/app/utils/graph/topologyCollapse";
 import { pruneCollapsedCombos, readCollapsedCombos, writeCollapsedCombos } from "~~/app/utils/graph/topologyComboPrefs";
 import { layoutTopology, RADIAL_ROTATE_DEG, TOPOLOGY_ROTATE_MAX, TOPOLOGY_ROTATE_MIN } from "~~/app/utils/graph/topologyLayout";
-import { neighborCanvasCount, neighborRowsOf } from "~~/app/utils/graph/topologyNeighbors";
 import { clearNodeOffsets, countNodeOffsets, setNodeOffset } from "~~/app/utils/graph/topologyNodeOffsets";
 import { normalizeNodeStatus, normalizeTopologyGraph, topologyLinksOf, topologyNodeIp } from "~~/app/utils/graph/topologyNormalize";
-import { SIMULATOR_MESSAGES } from "~~/shared/constants/upstreamReasons";
+import { MININET_MESSAGES } from "~~/shared/constants/upstreamReasons";
 
-/** 仿真通道三态 + loading：`disabled` 是「未配置」，不是错误 */
-export type SimulatorChannelState = "loading" | "disabled" | "unreachable" | "ok";
-
-/** 页面开放的节点动作（NMCPS-DESIGN-001 §6.2 写入口范围表；端点由 `SIMULATOR_ROUTES` 白名单兜底） */
-export const SIMULATOR_NODE_ACTIONS = ["restart", "stop"] as const;
-export type SimulatorNodeAction = (typeof SIMULATOR_NODE_ACTIONS)[number];
+/** 实验通道四态 + loading：`disabled` = 租户没有实例，`empty` = 租户还没有实验网络（都属部署/使用形态，不是故障） */
+export type SimulatorChannelState = "loading" | "disabled" | "empty" | "unreachable" | "ok";
 
 /**
  * 页面开放的**链路**动作（§6.2 写入口范围表，2026-11-07 随链路选择一起开放）。
@@ -38,30 +38,29 @@ export type SimulatorNodeAction = (typeof SIMULATOR_NODE_ACTIONS)[number];
  * 只开三个：`up` / `down` / `toggle` 改的是「这条链路通不通」，语义单一、结果可立刻在画布上看到；
  * `disable` / `power` / `reconfigure` 与 `PATCH tc|radio` 属其它域的参数化改动（传输 / 频谱），
  * 本页不设入口 —— 不开放的动作不出现在工具栏上，而不是亮着按钮点了没反应。
+ * 节点级动作（重启 / 停止节点）没有引擎面端点，`NMCPS-ADR-0027` §4 第 2 条裁决「切读路径时不补」。
  */
 export const SIMULATOR_LINK_ACTIONS = ["down", "up", "toggle"] as const;
 export type SimulatorLinkAction = (typeof SIMULATOR_LINK_ACTIONS)[number];
 
-/** 动作并集：`acting` 记的是「正在下发哪一个」（节点与链路共用一把门闩，避免并发写同一台仿真） */
-export type SimulatorAction = SimulatorNodeAction | SimulatorLinkAction;
-
 /** 动作结果：失败时 `message` 是 BFF/上游原话（数据，不翻译），由页面决定提示口径 */
 export interface SimulatorActionResult {
 	ok: boolean
-	action: SimulatorAction
+	action: SimulatorLinkAction
 	/** 失败原因（成功时为空串） */
 	message: string
 }
 
-/** 告警通道状态（与仿真通道分开：告警不可用时只摘角标，拓扑照常画） */
+/** 告警通道状态（与实验通道分开：告警不可用时只摘角标，拓扑照常画） */
 export type AlarmChannelState = "loading" | "ok" | "error";
 
 /**
- * 邻接通道状态（§6.14）：`idle` = 没有可查的对象（未选中 / 该节点不在仿真运行态里）。
+ * 邻接读表状态（§6.14）：`idle` = 没有可读的对象（未选中 / 该节点不在实验运行态里）。
  *
- * `idle` 与 `ok`（空数组）**不是**一回事：前者是「没有这份数据」，后者是「上游明确说没有邻居」。
+ * 邻接现在是**本机从 `/links` 推导**（ADR-0027 §7），不存在「请求失败」这一态：链路读不到时
+ * 整个实验通道已经降级为 `unreachable`，此时邻接是 `idle`（没有这份数据），而不是「没有邻居」。
  */
-export type NeighborChannelState = "idle" | "loading" | "ok" | "error";
+export type NeighborChannelState = "idle" | "ok";
 
 /** 告警通道一次取多少条：现网 firing 实测 77 条（2026-11-07），留到 200 给增长空间 */
 const ALARM_PAGE_SIZE = 200;
@@ -79,20 +78,19 @@ export function useTopologyMonitor() {
 	const api = useApi();
 
 	const graph = ref<TopologyGraph | null>(null);
-	const inventory = ref<SimulatorRuntimeInventory | null>(null);
-	const stats = ref<SimulatorNetworkStats | null>(null);
-	/** 通道能力位（`/api/sim/channel`）：写按钮可不可点只看它，不猜 */
-	const channel = ref<SimulatorChannelInfo | null>(null);
+	const inventory = ref<RuntimeInventory | null>(null);
+	/** 通道能力位（`/api/mininet/channel`）：写按钮可不可点只看它，不猜 */
+	const channel = ref<LabChannelInfo | null>(null);
 	const loading = ref(false);
 	const refreshing = ref(false);
 	const graphError = ref<TopologyGraphError | null>(null);
 	const simState = ref<SimulatorChannelState>("loading");
-	/** 仿真通道的原始原因（`simulator_not_configured` / `simulator_unreachable`…） */
+	/** 实验通道的原始原因（`tenant_runtime_unavailable` / `mininet_unreachable`…） */
 	const simReason = ref<string>("");
 	const selectedId = ref<string | null>(null);
 	const lastLoadedAt = ref<Date | null>(null);
-	/** 正在下发的动作（按钮 `loading` 与重复提交的门闩；节点与链路动作共用） */
-	const acting = ref<SimulatorAction | null>(null);
+	/** 正在下发的动作（按钮 `loading` 与重复提交的门闩） */
+	const acting = ref<SimulatorLinkAction | null>(null);
 	/** 2D 布局形态（§6.8）：默认分层网格，与 1.0 的默认 radial 不同 —— 2.0 的径向扇是可选视图 */
 	const layoutMode = ref<TopologyLayoutMode>("radial");
 	/** 径向扇整体旋转（度，视觉逆时针为正；仅 `radial` 布局读取） */
@@ -536,66 +534,32 @@ export function useTopologyMonitor() {
 			selectedId.value = defaultSelectionId();
 	}, { immediate: true });
 
-	// ── 邻接发现（LLDP，§6.13 取证 / §6.14 落地，2026-11-07） ────────────────────────
-	//
-	// 只对**仿真中的选中节点**取数：`neighbors/{node_id}` 的 `node_id` 是仿真侧 id（`n1`），画布 id 是管理
-	// IP，两者的桥就是 `runtime-inventory` 的 IP 对齐（`selected.marker.simId`）。四种「画不出邻居」必须
-	// 分开说，因为它们不是同一件事：通道未配置 / 节点不在仿真里 / 上游明确回空数组 / 请求失败。
-	// 前两种属「没有这份数据」，第三种才是「这台设备确实没有邻居」，第四种只能给原因。
-	const neighbors = ref<SimulatorLldpNeighbor[]>([]);
-	const neighborState = ref<NeighborChannelState>("idle");
-	/** 邻居通道的原始失败原因（上游原话，数据不翻译） */
-	const neighborReason = ref<string>("");
-	/** 请求序号：切换选中节点后旧响应必须丢弃，否则 A 的邻居会画到 B 头上 */
-	let neighborSeq = 0;
+	// ── 邻接读表（§6.14，2026-11-07；2026-11-25 随 R8 改为本机推导） ────────────────
+	// 邻接不再是独立上游（ADR-0027 §7）：`GET /links` 已经是实验台账里真实的边，
+	// 再挂一个「LLDP 通道」只会把同一份事实说两遍。行由 `labAdjacencyOf()` 从快照推出：
+	// 只看**选中节点在实验运行态里的那一条**（`selected.marker.simId`，画布 id 是管理 IP）。
+	// `idle` = 没有可读对象（未选中 / 不在实验里 / 通道不可用），`ok` 才是「读到了，可能有 0 条」。
+	/** 实验节点 id → 画布节点 id（邻接行的「对端在图上」判定；`markers` 是反方向） */
+	const canvasIdBySimId = computed(() => {
+		const index = new Map<string, string>();
+		for (const [canvasId, marker] of Object.entries(markers.value)) {
+			if (!index.has(marker.simId))
+				index.set(marker.simId, canvasId);
+		}
+		return index;
+	});
 
-	/** 邻接读表：保持上游顺序，`canvasId` 非空即「对端在本图上」 */
-	const neighborRows = computed<TopologyNeighborRow[]>(() =>
-		neighborRowsOf(neighbors.value, inventory.value?.nodes, nodeIdSet.value)
-	);
+	const neighborRows = computed<LabAdjacencyRow[]>(() => {
+		const simId = selected.value?.marker?.simId ?? "";
+		if (!simId || simState.value !== "ok")
+			return [];
+		return labAdjacencyOf(simId, inventory.value?.links, inventory.value?.nodes, canvasIdBySimId.value);
+	});
+
+	const neighborState = computed<NeighborChannelState>(() => selected.value?.marker?.simId && simState.value === "ok" ? "ok" : "idle");
 
 	/** 画布上的对端台数（与总条数分开报，不合并成一个数字） */
-	const neighborCanvasNodeCount = computed(() => neighborCanvasCount(neighborRows.value));
-
-	/**
-	 * 拉一次选中节点的邻接。`idle` = 没有活可干（未选中 / 该节点不在仿真运行态里）。
-	 *
-	 * 失败时**清空上一台的邻居**（不像告警那样保留旧读数）：邻接是逐节点的清单，留着上一台的邻居
-	 * 会被读成「这台也有这些邻居」，比一行失败原因更容易误导。
-	 */
-	async function loadNeighbors(): Promise<void> {
-		const simId = selected.value?.marker?.simId ?? "";
-		neighborSeq += 1;
-		const seq = neighborSeq;
-
-		if (!simId) {
-			neighbors.value = [];
-			neighborState.value = "idle";
-			neighborReason.value = "";
-			return;
-		}
-
-		neighborState.value = "loading";
-		try {
-			const payload = await api.get<SimulatorLldpNeighbors>(`/api/sim/api/lldp/neighbors/${encodeURIComponent(simId)}`);
-			if (seq !== neighborSeq)
-				return;
-			// 空数组是上游的**真实回答**（没开采集的节点照实回 `[]`，不是 404），照收
-			neighbors.value = payload?.neighbors ?? [];
-			neighborState.value = "ok";
-			neighborReason.value = "";
-		} catch (error) {
-			if (seq !== neighborSeq)
-				return;
-			const { message } = error as Partial<TopologyGraphError>;
-			neighbors.value = [];
-			neighborState.value = "error";
-			neighborReason.value = message ?? "api_network_error";
-		}
-	}
-
-	// 选中变化 / 运行态补齐（仿真标记晚一轮才到）都要重取：`simId` 是唯一触发键
-	watch(() => selected.value?.marker?.simId ?? "", () => void loadNeighbors(), { immediate: true });
+	const neighborCanvasNodeCount = computed(() => neighborRows.value.filter((row) => row.canvasId !== null).length);
 
 	/** 主上游：失败进 `graphError`（页面级错误态 + 重试），成功即清空 */
 	async function loadGraph(): Promise<void> {
@@ -617,35 +581,44 @@ export function useTopologyMonitor() {
 	}
 
 	/**
-	 * 仿真通道：503 `simulator_not_configured` → `disabled`（未配置），其余失败 → `unreachable`。
-	 * 两者都不改 `graphError`：主上游结构照常渲染，仿真区块单独降级。
+	 * 实验通道：`GET /api/mininet/channel` 不触达上游，`configured: false` 是「租户没有实例」
+	 * （`disabled`，不是错误）；节点 / 链路 / 运行态任一条读失败才判 `unreachable`。
+	 *
+	 * 三者并行读、一份快照落地（`runtimeInventoryOf()`）：读一半就画会让「节点在、链路没了」
+	 * 这种中间态看起来像上游事实。全部失败才降级，部分失败按整体失败处理（不展示残缺快照）。
 	 */
 	async function loadSimulator(): Promise<void> {
-		// 能力位与运行态是两条独立请求：能力位读不到只让写入口关闭，不代表运行态也不可用
 		try {
-			channel.value = await api.get<SimulatorChannelInfo>("/api/sim/channel");
+			channel.value = await api.get<LabChannelInfo>("/api/mininet/channel");
 		} catch {
 			channel.value = null;
 		}
 
+		if (channel.value?.configured === false) {
+			simState.value = "disabled";
+			simReason.value = MININET_MESSAGES.tenantRuntimeUnavailable;
+			inventory.value = null;
+			return;
+		}
+
 		try {
-			inventory.value = await api.get<SimulatorRuntimeInventory>("/api/sim/api/network/runtime-inventory");
+			// 运行态是裸布尔；读不到就是 `null`（未知），由 `runtimeInventoryOf()` 记成 `unknown`，
+			// 不假设「没启动」（与 `labRunStateOf()` 同一口径）。
+			const [nodes, links, started] = await Promise.all([
+				api.get<LabUnifiedNode[]>("/api/mininet/nodes"),
+				api.get<LabLink[]>("/api/mininet/links"),
+				api.get<unknown>("/api/mininet/start").catch(() => null)
+			]);
+			inventory.value = runtimeInventoryOf(nodes, links, started);
 			simState.value = "ok";
 			simReason.value = "";
 		} catch (error) {
 			const { code, message } = error as Partial<TopologyGraphError>;
 			simReason.value = message ?? "api_network_error";
-			simState.value = code === 503 && message === SIMULATOR_MESSAGES.notConfigured ? "disabled" : "unreachable";
+			// 404 `lab_resource_not_found`：该租户还没有实验网络（台账没有归属记录）。这是使用形态，
+			// 不是通道故障 —— 与实验台页面的「暂无仿真网络」同口径，不挂降级条、也不发写入口。
+			simState.value = code === 404 && message === MININET_MESSAGES.resourceNotFound ? "empty" : "unreachable";
 			inventory.value = null;
-			stats.value = null;
-			return;
-		}
-
-		// 统计只用于页头徽标：它失败不影响运行态台账，故单独兜住，不把通道判成不可达
-		try {
-			stats.value = await api.get<SimulatorNetworkStats>("/api/sim/api/network/stats");
-		} catch {
-			stats.value = null;
 		}
 	}
 
@@ -661,51 +634,24 @@ export function useTopologyMonitor() {
 	}
 
 	/**
-	 * 下发一个节点动作（重启 / 停止）。
+	 * 下发一个链路动作（up / down / toggle），`PATCH /api/mininet/links/{src}/{dst}/state`。
 	 *
-	 * `simId` 必须是对端仿真节点的 id（`marker.simId`），不是 8888 的节点 id：后者是管理 IP，
-	 * 用它拼出来的路径在仿真平台上必然 404。`action` 的取值集合 `SIMULATOR_NODE_ACTIONS`
-	 * 与白名单条目一一对应，写错会落到白名单 404 而不是静默成功。
+	 * 两端必须取**实验节点 id**（`simulatorLinkFor(link)` 的 `source` / `target`），不是图上的
+	 * 管理 IP：路径段是台账里的节点 id，用错只会得到 404。`toggle` 的目标状态由**上游**按当前
+	 * 状态取反（M1.2），客户端不先读一次再算 —— 两次往返之间状态可能已变。
 	 *
 	 * 成功后就地刷新：动作改的是运行态台账，靠轮询等 30s 才看到变化会让人以为「没生效」。
 	 */
-	async function performNodeAction(action: SimulatorNodeAction, simId: string): Promise<SimulatorActionResult> {
+	async function performLinkAction(action: SimulatorLinkAction, link: { source: string, target: string }): Promise<SimulatorActionResult> {
 		if (!writeEnabled.value)
-			return { ok: false, action, message: SIMULATOR_MESSAGES.writeDisabled };
+			return { ok: false, action, message: MININET_MESSAGES.permissionDenied };
 
 		if (acting.value)
-			return { ok: false, action, message: "simulator_action_in_flight" };
+			return { ok: false, action, message: "lab_action_in_flight" };
 
 		acting.value = action;
 		try {
-			await api.post(`/api/sim/api/network/nodes/${encodeURIComponent(simId)}/${action}`);
-			await refresh();
-			return { ok: true, action, message: "" };
-		} catch (error) {
-			const { message } = error as Partial<TopologyGraphError>;
-			return { ok: false, action, message: message ?? "api_network_error" };
-		} finally {
-			acting.value = null;
-		}
-	}
-
-	/**
-	 * 下发一个链路动作（up / down / toggle）。
-	 *
-	 * `simId` 必须是**仿真侧**链路 id（`simulatorLinkFor(link).simId`），不是图上的 `source→target`：
-	 * 拓扑图的链路 id 由两端节点 id 拼成，仿真平台不认识；用错 id 只会得到 404。
-	 * 成功后与节点动作同源刷新 —— 画布的链路状态来自运行态台账，不刷新看不到变化。
-	 */
-	async function performLinkAction(action: SimulatorLinkAction, simId: string): Promise<SimulatorActionResult> {
-		if (!writeEnabled.value)
-			return { ok: false, action, message: SIMULATOR_MESSAGES.writeDisabled };
-
-		if (acting.value)
-			return { ok: false, action, message: "simulator_action_in_flight" };
-
-		acting.value = action;
-		try {
-			await api.post(`/api/sim/api/network/links/${encodeURIComponent(simId)}/${action}`);
+			await api.patch(`/api/mininet/links/${encodeURIComponent(link.source)}/${encodeURIComponent(link.target)}/state`, { state: action });
 			await refresh();
 			return { ok: true, action, message: "" };
 		} catch (error) {
@@ -796,19 +742,15 @@ export function useTopologyMonitor() {
 		alarmFiringCount,
 		hasAlarms,
 		loadAlarms,
-		/** 邻接发现（§6.13 / §6.14）：读表行 / 通道状态 / 原始原因 / 画布对端数 / 重取 */
-		neighbors,
+		/** 拓扑邻接（§6.14，ADR-0027 §7）：读表行 / 状态 / 画布对端数 */
 		neighborRows,
 		neighborState,
-		neighborReason,
 		neighborCanvasNodeCount,
-		loadNeighbors,
-		/** 链路 ↔ 仿真对齐：链路读数表 / 单条查询 */
+		/** 链路 ↔ 实验台账对齐：链路读数表 / 单条查询 */
 		linkMarkers,
 		simulatorLinkFor,
 		inventory,
-		stats,
-		/** 通道能力位（`configured` / `writeEnabled` / `timeoutMs` / `readinessPath`） */
+		/** 通道能力位（`configured` / `writeEnabled` / `capabilities` / `endpointCount`） */
 		channel,
 		writeEnabled,
 		canWrite,
@@ -827,9 +769,7 @@ export function useTopologyMonitor() {
 		lastLoadedAt,
 		selectNode,
 		refresh,
-		/** 下发节点动作（restart / stop）：`simId` 取 `selected.marker.simId` */
-		performNodeAction,
-		/** 下发链路动作（up / down / toggle）：`simId` 取 `simulatorLinkFor(link).simId` */
+		/** 下发链路动作（up / down / toggle）：两端取 `simulatorLinkFor(link)` 的 `source` / `target` */
 		performLinkAction,
 		/** 页面开放的链路动作集合（工具栏按它渲染，不在模板里写死） */
 		SIMULATOR_LINK_ACTIONS,

@@ -34,31 +34,11 @@ export const BFF_UPSTREAM_MESSAGES = {
 export type BffUpstreamMessage = (typeof BFF_UPSTREAM_MESSAGES)[keyof typeof BFF_UPSTREAM_MESSAGES];
 
 /**
- * 仿真平台（第二上游）的失败词汇表：与主上游分开命名，前端不必靠状态码猜是哪条腿断了。
+ * Mininet 实验后端（第二上游）的失败词汇表。
  *
- * 依据 NMCPS-ARCH-002 §6.5（layers/content/collections/cn/architecture/1.architecture/datasource-architecture.md）：
- * 未配 `baseUrl` 与「未配主上游」同口径（503），但 message 不同 —— 通道未启用不是错误。
- */
-export const SIMULATOR_MESSAGES = {
-	/** 运维未配置 `NUXT_SIMULATOR_BASE_URL`（通道未启用，页面退化为只读静态拓扑） */
-	notConfigured: "simulator_not_configured",
-	/** 仿真平台不可达（DNS / 连接被拒 / 掉线） */
-	unreachable: "simulator_unreachable",
-	/** 仿真平台在超时窗口内没有响应 */
-	timeout: "simulator_timeout",
-	/** `allowWrite: false` 时的写端点（直接 405，不触达上游） */
-	writeDisabled: "simulator_write_disabled",
-	/** 配置的基址不合法（拼接失败） */
-	baseInvalid: "simulator_base_invalid"
-} as const;
-
-export type SimulatorMessage = (typeof SIMULATOR_MESSAGES)[keyof typeof SIMULATOR_MESSAGES];
-
-/**
- * Mininet 实验后端（第三上游）的失败词汇表。
- *
- * 与主上游 / 仿真平台分开命名：页面据此判断“实验床没开”而不是“主业务失败”。
- * 依据 NMCPS-ADR-0020（layers/content/collections/cn/records/adr/adr-0020.md）。
+ * 与主上游分开命名：页面据此判断“实验床没开”而不是“主业务失败”。
+ * 依据 NMCPS-ARCH-002 §6.5（layers/content/collections/cn/architecture/1.architecture/datasource-architecture.md）
+ * 与 NMCPS-ADR-0020（layers/content/collections/cn/records/adr/adr-0020.md）。
  */
 export const MININET_MESSAGES = {
 	/** 运维未配置 `NUXT_MININET_BASE_URL`（通道未启用，不是错误） */
@@ -75,6 +55,8 @@ export const MININET_MESSAGES = {
 	tenantRuntimeUnavailable: "tenant_runtime_unavailable",
 	/** 台账没有该资源，或资源属于别的租户（D4：不区分「不存在」与「别人的」） */
 	resourceNotFound: "lab_resource_not_found",
+	/** 会话缺少该动作的能力位（`labGuard` 的 403；页面按能力位不渲染入口，这里是竞态兜底） */
+	permissionDenied: "lab_permission_denied",
 	/** 同一网络已有在途写操作（NMCPS-ADR-0022 D5） */
 	operationInProgress: "lab_operation_in_progress",
 	/** 同租户已有运行中网络，第二次建网 / 导入（NMCPS-ADR-0021 D6） */

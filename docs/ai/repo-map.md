@@ -23,10 +23,12 @@
 ```text
 Browser/Tauri
   → /api/**        → Nitro BFF → 主 API :8888
-  → /api/sim/**    → Nitro BFF → 仿真平台 :8001
-  → /api/mininet/** → Nitro BFF → Mininet API :8000（GET 查询 + 写端点白名单）
+  → /api/mininet/** → Nitro BFF → Mininet API :8000（GET 查询 + 写端点白名单，逐条能力位）
   → /mininet-ws/*   → Nitro BFF（验一次性票）→ Mininet API WebSocket（sniffer / terminal / logs / monitor）
 ```
+
+> `/api/sim/**`（8001 仿真平台）已于 2026-11-25 随 `NMCPS-ADR-0027` §4 R8 退役：通道、白名单与
+> openapi 快照一次删净，实验面只剩 `/api/mininet/**` 与 `/mininet-ws/*`。
 
 BFF 与上游**前缀同形**（`NMCPS-ADR-0022` D11）：同一串 `/api/mininet/**` 在浏览器侧是 Nitro 路径，
 在出站侧拼在租户实例 `baseUrl` 之后 —— 排障时按「有没有主机 / 端口」区分，别按前缀猜。
@@ -77,6 +79,7 @@ BFF 与上游**前缀同形**（`NMCPS-ADR-0022` D11）：同一串 `/api/minine
 ## 仿真端复刻计划
 
 - 2.0 废弃仿真平台 `:8001`、由本仓重建其全部功能；参考实现在 `_reference/netsim`（只读）。
+  **退役已落地（2026-11-25）**：`/api/sim/**`、`SIMULATOR_ROUTES`、openapi 快照与 `check:bff` 第 ⑨ 组一并删除（`NMCPS-ADR-0027` §4 R8）。
 - 分档、端点对照、阶段划分见 `docs/ai/simulation-parity.md`（工程计划产物，不受 doc-system 治理）。
 - 仿真端仍部署在 `90` 单机，管理面经 `runtimeConfig.mininet.baseUrl` 远程访问；一宿主一实例。
 - M0 已落地：`services/mininet-api/mininet_gui_backend/engines/**`（`base`/`registry`/`dryrun`/`wired`/`wireless`）

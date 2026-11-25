@@ -69,18 +69,11 @@ export default defineNuxtConfig({
 			readinessPath: "/health",
 			readinessTimeoutMs: 2000
 		},
-		// 仿真平台（第二出站通道，NMCPS-ADR-0019 裁决 B / NMCPS-ARCH-002 §六）：
-		// baseUrl 为空＝通道未启用（不是错误，`/api/sim/**` 回 503 simulator_not_configured）；
-		// allowWrite 默认 false —— 写端点一律 405，页面以只读态呈现。
-		simulator: {
-			baseUrl: "",
-			allowWrite: false,
-			timeoutMs: 15000,
-			readinessPath: "/api/health"
-		},
-		// Mininet 实验后端（第三出站通道，NMCPS-ADR-0020）：
+		// 8001 仿真平台（原第二出站通道）已于 2026-11-25 随 NMCPS-ADR-0027 §4 R8 退役：
+		// `simulator` 段、`/api/sim/**`、`SIMULATOR_ROUTES` 与 openapi 快照一次删净。
+		// Mininet 实验后端（第二出站通道，NMCPS-ADR-0020 / NMCPS-ARCH-002 §六）：
 		// baseUrl 为空＝通道未启用（`/api/mininet/**` 回 503 mininet_not_configured）；
-		// 白名单只有 GET，写操作 / 终端 / 抓包在后续决策前不开放。
+		// 白名单逐端点带权限位，终端 / 抓包要独立能力位。
 		mininet: {
 			baseUrl: "",
 			// 租户 → 实例注册表（JSON 字符串）：{"t_a":{"baseUrl":"http://127.0.0.1:8000"}}

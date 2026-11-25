@@ -1,5 +1,5 @@
 // shared/constants/labPermissions.ts
-// 仿真网络（`/api/mininet/**` + `/api/sim/**`）的权限矩阵 —— 纯函数，无 IO、无框架依赖。
+// 实验网络（`/api/mininet/**`）的权限矩阵 —— 纯函数，无 IO、无框架依赖。
 //
 // 设计基准：NMCPS-ADR-0021（layers/content/collections/cn/records/adr/adr-0021.md）
 //   - D3：权限位与角色基线；
@@ -7,10 +7,10 @@
 //   - D5：平台管理员默认没有运行态权限；
 //   - D8：角色解析失败必须失败关闭，不能把失败当成 `tenant_user`。
 //
-// 该文件是 BFF 守卫与页面能力位的唯一真源；后续 `/api/mininet/**` / `/api/sim/**`
+// 该文件是 BFF 守卫与页面能力位的唯一真源；`/api/mininet/**`
 // 的鉴权实现必须调用这里的 `hasLabPermission()`，不得各自维护一份角色表。
 
-/** 仿真网络权限位（字符串值与 ADR-0021 §4.3 一致） */
+/** 实验网络权限位（字符串值与 ADR-0021 §4.3 一致） */
 export const LAB_PERMISSIONS = {
 	READ: "lab:read",
 	CREATE: "lab:create",

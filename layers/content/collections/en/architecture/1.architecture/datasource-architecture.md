@@ -1,8 +1,8 @@
 ---
 docId: NMCPS-ARCH-002
 title: "Data Source Architecture"
-description: "Tier 1 architecture baseline for data sources (arch.datasource): data source classification (device collection/metrics/alarms/asset-config), storage layering (RDBMS control + TSDB time-series), the cloud/edge data adapter layer, unified data flow, and the second data source (the simulator) with its separate channel, whitelist and write switch. This is the single authority for the arch.datasource domain."
-excerpt: "Data source classification, RDBMS+TSDB layering, cloud/edge adapters, and the simulator's second channel."
+description: "Tier 1 architecture baseline for data sources (arch.datasource): data source classification (device collection/metrics/alarms/asset-config/lab runtime), storage layering (RDBMS control + TSDB time-series), the cloud/edge data adapter layer, unified data flow, and the second egress channel (the Mininet lab backend) with its whitelist, capability bits and readiness separation. This is the single authority for the arch.datasource domain."
+excerpt: "Data source classification, RDBMS+TSDB layering, cloud/edge adapters, and the Mininet lab backend's second channel."
 keywords:
   - "datasource"
   - "architecture"
@@ -12,14 +12,14 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.4.0
+version: 0.5.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-06"
+updatedAt: "2026-11-25"
 icon: "carbon:data-base"
 tags:
   - "Architecture"
@@ -48,9 +48,9 @@ The data source is the "memory" of the NMS: control data (assets, config, identi
 | Metrics stream | High-frequency metrics (port traffic, CPU, memory) | Realtime | TSDB |
 | Alarm events | Edge-judged alarms | Realtime | RDBMS (via MQTT) |
 | Assets & config | Device assets, config changes, identity | Strong consistency | RDBMS |
-| Simulator runtime | Node / link / session state and control entry points of a simulated network (optional) | Realtime, never stored | Read and forward through the BFF (see §6) |
+| Lab runtime | Node / link / run-state / flow-table state and control entry points of a lab network (optional) | Realtime, never stored | Read and forward through the BFF (see §6) |
 
-> The first four need storage; the fifth is a **zero-storage** optional upstream with its own channel and its own readiness signal, and its absence degrades pages locally instead of taking them down.
+> The first four need storage; the fifth is a **zero-storage** optional upstream with its own channel and its own readiness signal, and its absence degrades pages locally instead of taking them down. The 8001 simulator runtime held this row until 2026-11-25, when `NMCPS-ADR-0027` R8 retired it in favour of the Mininet lab backend.
 
 ---
 
@@ -89,63 +89,63 @@ Device (SNMP/Agent)
   → Console UI (queryCollection / composables)
 ```
 
-The simulator is a **second egress channel** (see §6) that bypasses the collection chain above and writes to no storage layer: it exposes the live state and control entry points of the currently running simulated network, which the BFF reads within a request and returns normalised as `ApiResponse`, with no caching and no write-back.
+The Mininet lab backend is the **second egress channel** (see §6): it bypasses the collection chain above and writes to no storage layer. It exposes the live state and control entry points of the current lab network, which the BFF reads within a request and returns normalised as `ApiResponse`, with no caching and no write-back.
 
 ---
 
-## 6. Second Data Source: The Simulator
+## 6. Second Egress Channel: The Mininet Lab Backend
 
-The BFF (Nitro) has exactly two egress channels: the primary upstream (`runtimeConfig.bff.upstreamBase`, the NMS gateway) and an optional upstream (`runtimeConfig.simulator.baseUrl`, the hybrid-network simulation platform). Cross-layer verdicts, measured evidence and rejected options live in ADR-0019 §4; this section pins only the architecture-level constraints, while field-level contracts belong to `NMCPS-CONTRACT-001`.
+The BFF (Nitro) has exactly two egress channels: the primary upstream (`runtimeConfig.bff.upstreamBase`, the NMS gateway) and an optional upstream (`runtimeConfig.mininet.baseUrl` / `instances`, the Mininet lab backend, exposed through `/api/mininet/**` and `/mininet-ws/*`). Cross-layer verdicts live in `NMCPS-DESIGN-008` (layers/content/collections/cn/architecture/2.domain/simulation.md); listening surface, privileges, credentials and restart semantics live in `NMCPS-ARCH-007` (layers/content/collections/cn/architecture/1.architecture/lab-deployment-architecture.md).
+
+> **The 8001 simulator channel was retired on 2026-11-25** (`NMCPS-ADR-0027` §4 R8): `/api/sim/**`, `runtimeConfig.simulator`, `SIMULATOR_ROUTES`, the openapi snapshot and `check:bff` group ⑨ were deleted in one batch — no aliases, no dual writes. The table below describes only the current channel; the rationale and impact live in the ADR.
 
 ### 6.1 Channel shape
 
 | Piece | Landing point | Constraint |
 | :--- | :--- | :--- |
-| Config | `nuxt.config.ts` → `runtimeConfig.simulator` | `{ baseUrl, allowWrite, timeoutMs, readinessPath }`, all overridable via `NUXT_SIMULATOR_*`; an empty `baseUrl` means **channel disabled**, not an error |
-| Config reader | `server/utils/bff/simConfig.ts` | Same shape as `getBffConfig()`: defaults in one place, trailing slash stripped, `allowWrite` strictly boolean |
-| Egress | `server/utils/bff/simulator.ts` | Its own `$fetch` instance; timeout and `AbortSignal`; responses normalised to `ApiResponse` |
-| Route | `server/api/sim/[...slug].ts` (a path-less `/api/sim` is answered 400 `bff_path_missing` by `server/api/sim/index.ts`, never by the primary gateway) | Whitelist first, egress second; no match → 404 `bff_resource_not_allowed`, wrong verb → 405 |
-| Whitelist | `shared/constants/simulatorRoutes.ts` | One row per entry `{ method, template, write }`; `{param}` template matching, never prefix passthrough |
-| Capability probe | `server/api/sim/channel.get.ts` | A static route wins over the `[...slug]` channel; returns only `{ configured, writeEnabled, timeoutMs, readinessPath }` and **never `baseUrl`** (the upstream address is not leaked to the browser), so the page decides button state from `writeEnabled` |
+| Config | `nuxt.config.ts` → `runtimeConfig.mininet` | `{ baseUrl, instances, token, timeoutMs, longTimeoutMs }`, overridable via `NUXT_MININET_*`; an empty `baseUrl` means **channel disabled**, not an error; once `instances` is set, an unmatched tenant gets 503 `tenant_runtime_unavailable` and **never falls back to the global `baseUrl`** |
+| Config reader | `layers/scenario/server/utils/bff/mininetConfig.ts` | Per-tenant instance resolution (trailing slash stripped, tenant scope fails closed), defaults in one place |
+| Egress | `layers/scenario/server/utils/bff/mininet.ts` (called from `[...slug].ts`) | Its own `$fetch`; 15s for reads, `longTimeoutMs` for long endpoints; the entry credential only travels as an `x-lab-token` header, never in the query string |
+| Route | `layers/scenario/server/api/mininet/[...slug].ts` | Session (401/503) → path (400/404/405) → permission bit (403 `lab_permission_denied`) → ledger (404 `lab_resource_not_found`) → audit → lock → egress; writes audit first, and one network allows only one in-flight write (409) |
+| Whitelist | `layers/scenario/shared/constants/mininetRoutes.ts` | One row per entry `{ method, template, upstream, permissions }`; `{param}` template matching, never prefix passthrough; unknown path 404 `bff_resource_not_allowed`, wrong verb 405 `bff_method_not_allowed`, encoded traversal 400 `bff_path_invalid` |
+| Capability probe | `layers/scenario/server/api/mininet/channel.get.ts` | A static route ahead of `[...slug]`; returns only `{ configured, readOnly, writeEnabled, capabilities, endpointCount, timeoutMs, readinessPath }` and **never `baseUrl`**; the page renders entries from `capabilities` |
+| WebSocket | `/mininet-ws/*` + `POST /api/mininet/ws-ticket` | A 60-second single-use ticket bound to `kind` + `target`; the browser never connects to `:8000` directly and the upstream address never reaches it |
 
 ### 6.2 Why it must be a separate channel
 
-`proxyToUpstream()` in `server/api/[...slug].ts` reads the `nmcps_at` cookie and turns it into a `Bearer` header, and a 401 triggers single-flight refresh. The simulator was measured to require no auth header, so reusing that channel would send an access token to an upstream with no notion of authentication; the 401/403 semantics also differ, so a mis-triggered refresh would escalate one local failure into a lost session.
+`proxyToUpstream()` in `server/api/[...slug].ts` reads the `nmcps_at` cookie and turns it into a `Bearer` header, triggering single-flight refresh on 401. The lab backend authenticates with an entry credential (`x-lab-token`) plus loopback trust, and has no notion of `Bearer`; reusing the gateway would send an access token to an upstream that cannot use it, and the differing 401/403 semantics would escalate one local failure into a lost session. The lab backend also carries privileged operations (terminal / sniffer / rebuild), so permission bits, audit and in-flight write exclusion all close inside this channel instead of being layered onto a generic proxy.
 
 ### 6.3 Whitelist philosophy
 
-1. **Per-endpoint authorisation, never a prefix pass.** That upstream carries command execution, headless browser and credential-rotation endpoints, so a prefix pass is a full-open door.
-2. **Only register what a page actually calls**, grouped by layer (topology / device networking / scenario planning / transport / spectrum / system overview); adding an entry obliges a same-batch update of the matching `NMCPS-DESIGN-*` data-source table.
-3. **Permanently excluded entries need a new ADR to unlock**: `POST /api/network/nodes/{node_id}/execute` (arbitrary in-node command execution), `/api/browser/**` (headless browser and proxies, also an SSRF surface), `/api/integrity/watch/**` (long-running daemons), `/api/devices/clear`, `/api/test/**`, `/api/snmp/onboard/**`, `/api/nms/vmagent/**`.
+1. **Per-endpoint authorisation, never a prefix pass.** That upstream carries command execution, headless browser and credential-rotation capabilities, so a prefix pass is a full-open door.
+2. **Only register what a page actually calls**, authorised entry by entry through capability bits (`lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`); adding an entry obliges a same-batch update of the matching `NMCPS-DESIGN-*` data-source table.
+3. **Permanently excluded entries need a new ADR to unlock**: in-node arbitrary command execution (`execute`), headless browser (`browser`), integrity inspection (`integrity`), device library (`devices`), standalone probes (`test`), SNMP onboarding (`snmp/onboard`), external monitoring stack (`nms/vmagent`). These are verdicts R1–R7 of `NMCPS-ADR-0027`, not "not done yet".
 
-The whitelist is not a hand-copied constant: it is derived mechanically from the simulator's `/openapi.json`, and `check:bff` assertion ⑨-6 proves "whitelist ⊆ openapi `paths`", so a renamed upstream path, a missing entry or a wrong template all surface (a stale snapshot `info.version` only warns, never reddens — an upstream patch release must not break CI).
+The whitelist is not a hand-copied constant: `check:lab-bff` ⓪ reconciles it line by line as "22 queries + 37 writes = 59", while `check:engines` / `check:simulation` guard the engine face and the external backend; any added or renamed endpoint must change the whitelist and its assertions in the same batch.
 
-### 6.4 Write switch
+### 6.4 Write capability bits
 
-`allowWrite` defaults to `false`: every `write: true` endpoint answers 405 and the page renders read-only with a "simulator control disabled" note. The page does not guess: it reads the capability probe `GET /api/sim/channel` (§6.1) first, and with `writeEnabled=false` the buttons are `disabled` and it sends **not a single write request** — the BFF's 405 is only the second gate for a caller that bypasses the front end. Even when enabled, three constraints hold — the egress header whitelist is only `accept` / `content-type` (**no `authorization`**, never reads `nmcps_at`); each write call emits one **structured audit line** (a single JSON line so a log pipeline can parse it: `{"event":"simulator.write","method":…,"template":…,"path":…,"status":…,"durationMs":…,"requestId":…,"clientIp":…}`, body excluded); and writes persist nothing locally, because the BFF keeps no second ledger. The audit line carries no actor identity: the identity cookie (`nmcps_ui`) is scoped to `/api/auth`, which the simulator channel cannot read at all — when "who clicked it" matters, join on `requestId` against the gateway access log instead of keeping a second copy of identities inside the BFF.
+There is no coarse `allowWrite` boolean: write capability is the intersection of **the endpoint's declared permission** and **the session's capability bits**. The page first reads `capabilities` from `GET /api/mininet/channel`; unauthorised actions are not rendered and send no request, and the BFF's 403 `lab_permission_denied` remains the only permission boundary and the race-condition backstop. Writes still obey three constraints: the egress headers are limited to `accept` / `content-type` / `x-lab-token` (client `authorization` and cookies are never forwarded); every write emits one **structured audit** line first (`.data/audit/lab-audit-<date>.jsonl`: method / path / status / duration / `requestId` / client IP, **body excluded**), and a failed audit write answers 503 `audit_unavailable` rather than "do first, log later"; one network allows only one in-flight write (409 `lab_operation_in_progress`), so two tabs cannot edit the same network at once.
 
 ### 6.5 Readiness separation
 
-`/ready` reflects the primary upstream only. An unreachable simulator **must not** redden `/ready` — it affects just the pages that depend on it, which degrade locally (a topology page falls back to "8888 static topology only"), so an optional upstream's hiccup never becomes a site-wide outage. With no `baseUrl`, `/api/sim/**` returns 503 `simulator_not_configured`, the same shape as an unconfigured primary upstream. This channel's failure vocabulary lives in `SIMULATOR_MESSAGES` (`shared/constants/upstreamReasons.ts`: `notConfigured` / `unreachable` / `timeout` / `writeDisabled` / `baseInvalid`), so the front end tells "channel is off" from "simulator is down" by message rather than by status code.
+`/ready` reflects the primary upstream only. An unreachable lab backend **must not** redden `/ready` — it affects just the pages that depend on it, which degrade locally (the topology monitor falls back to "8888 static topology only"), so an optional upstream's hiccup never becomes a site-wide outage. With no `baseUrl`, `/api/mininet/**` returns 503 `mininet_not_configured`, the same shape as an unconfigured primary upstream. The failure vocabulary lives in `MININET_MESSAGES` (`shared/constants/upstreamReasons.ts`: `notConfigured` / `unreachable` / `timeout` / `baseInvalid` / `tenantRuntimeUnavailable` / `resourceNotFound` / `permissionDenied` …), so the front end tells "channel is off", "tenant has no instance", "the ledger has no such network" and "the backend is down" by message rather than by status code.
+
+The page keeps those three apart (`NMCPS-DESIGN-001` §8): `disabled` (deployment shape: no instance) and `empty` (usage shape: no lab network yet, 404 `lab_resource_not_found`) raise no banner; only a real read failure becomes `unreachable`.
 
 ### 6.6 Relationship to storage layering
 
-The simulator is a **zero-storage data source**: the runtime state it returns (nodes, links, sessions) lives only for the request, never written back to RDBMS / TSDB; control commands are forwarded to the simulation engine while the BFF only applies the whitelist and logs. §3's layering therefore stands unchanged — simulator data is not retained historically, and metrics that need a history still come from the primary upstream's `/metric/*`.
+The lab backend is a **zero-storage data source**: the runtime state it returns (nodes, links, run state, flow tables) lives only for the request, and the BFF writes nothing but "whose network is this" into its local ledger (`.data/lab-ledger.json`, control-plane metadata rather than a data copy) — never back to RDBMS / TSDB; control commands are forwarded to the backend while the BFF only applies permissions, audit and exclusion. §3's layering therefore stands unchanged: lab data is not retained historically, and metrics that need a history still come from the primary upstream's `/metric/*`.
 
-### 6.7 Guards (`check:bff` group ⑨, shipped with the P1 code)
+### 6.7 Guards
 
-Six assertions, split into 21 checkpoints, landed with the code (`pnpm check:bff` measured 127/127 green):
+After the retirement this channel is no longer covered by `check:bff` group ⑨ (deleted together with `/api/sim/**`); three self-checks take over:
 
-| Assertion | Covers | Criterion |
-| :--- | :--- | :--- |
-| ⑨-1 | Channel disabled / path-less | No `baseUrl` → 503 `simulator_not_configured` with an `ApiResponse` envelope and zero upstream hits; `/api/sim` and `/api/sim/` → 400 `bff_path_missing` (never the primary gateway's 404) |
-| ⑨-2 | Whitelist boundary | A whitelisted path reaches the fake upstream and is wrapped in the envelope; anything else 404 `bff_resource_not_allowed`; the permanent exclusions (`browser` / `execute` / `test`) also 404; wrong verb (GET on a POST-only endpoint) → 405 `bff_method_not_allowed` |
-| ⑨-3 | Path traversal | Encoded traversal (`%2e%2e%2f`) → 400 `bff_path_invalid` |
-| ⑨-4 | Both sides of the write switch | `allowWrite: false` → write endpoints 405 `simulator_write_disabled` with zero upstream hits; `true` → reaches the upstream with verb and path intact |
-| ⑨-5 | Egress headers | When the client sends `authorization` and an `nmcps_at` cookie, both are absent from the headers **recorded on the fake upstream** (ask the upstream, not the BFF) |
-| ⑨-6 | Whitelist ⊆ snapshot | All 23 entries proved "path + verb" ∈ `scripts/fixtures/simulator-openapi.json` (a mechanical projection of `/openapi.json`: 113 paths); an empty extraction reddens |
-
-The snapshot has exactly one refresh entry: `NUXT_SIMULATOR_BASE_URL=http://<host>:8001 pnpm check:bff --refresh-simulator-snapshot` (rewrites `_meta.capturedAt` and `paths`). A `_meta.capturedAt` older than 180 days only prints `⚠️` and never reddens — an upstream patch release must not break CI. Conversely, mistyping one whitelist template (measured with `/api/network/stats-v2`) makes ⑨-6 name that exact entry, so the guard is not decorative.
+| Check | Coverage |
+| :--- | :--- |
+| `pnpm check:lab-bff` | ⓪ whitelist count and line-by-line reconciliation; sessions / ledger ownership / permission bits / audit fail-closed / in-flight 409 / WebSocket tickets; page read path and write endpoints |
+| `pnpm check:simulation` / `pnpm check:engines` | Session semantics of the external backend and engine-layer isolation (`import mininet` only inside `engines/` plus the frozen legacy files) |
+| `pnpm check:ui` | Page side: capability trimming, the `disabled` / `empty` / `unreachable` states, link-action end to end (the fake upstream records what actually arrived) |
 
 ---
 
@@ -157,3 +157,4 @@ The snapshot has exactly one refresh entry: `NUXT_SIMULATOR_BASE_URL=http://<hos
 | 2026-11-05 | 0.2.0 | Adds "§6 Second data source: the simulator": channel shape (`runtimeConfig.simulator` / `simConfig.ts` / `simulator.ts` / `server/api/sim/**` / `simulatorRoutes.ts`), why it must be separate (no Bearer egress, distinct 401 semantics), whitelist philosophy (per endpoint, grouped by layer, seven permanent exclusions, mechanically derived from `openapi.json`), write switch (`allowWrite` off by default, logging, no second ledger), readiness separation (an unreachable simulator never reddens `/ready`), the zero-storage stance and the group ⑨ guards; §2 gains a "simulator runtime" row and §5 gains the second-channel note. Delivers ADR-0019 §7 obligation 2. |
 | 2026-11-05 | 0.3.0 | **Pre-code obligation 4 is now fulfilled: the group ⑨ guards ship with the P1 code (`pnpm check:bff` 127/127).** ① `scripts/fixtures/simulator-openapi.json` is new — a mechanical projection of the upstream `/openapi.json` (113 paths → verb lists plus `_meta.source/capturedAt`), refreshable only via `NUXT_SIMULATOR_BASE_URL=<upstream> pnpm check:bff --refresh-simulator-snapshot`, with a `capturedAt` older than 180 days merely warning. ② `check:bff` gained group ⑨ (21 checkpoints) mapped one-to-one onto ⑨-1~⑨-6 (table in §6.7); the fake simulator `startSimulator()` (`scripts/lib/bff-harness.mjs`) records request headers **on the upstream side**, which is what proves the egress carries no `authorization` and never trades the `nmcps_at` cookie for a Bearer. ③ The §6.1 route row now names `server/api/sim/index.ts`: a path-less `/api/sim` answers 400 `bff_path_missing` instead of falling through to the primary gateway and reporting "path not allowed" for what was really a missing path. ④ §6.5 gained the `SIMULATOR_MESSAGES` vocabulary. ⑤ Reverse-checked: changing one whitelist template to `/api/network/stats-v2` reddens ⑨-6 and names that entry. |
 | 2026-11-06 | 0.4.0 | **With write entries open, the write gate moved forward to the page**: §6.1 gained the capability-probe row `server/api/sim/channel.get.ts` (a static route ahead of the catch-all channel; returns `configured` / `writeEnabled` / `timeoutMs` / `readinessPath` and **never `baseUrl`**); §6.4 upgraded "one structured log line" into a **single-line JSON audit record** `{"event":"simulator.write",…}` (with `path` / `requestId` / `clientIp`, still no body) and documented why the record carries no actor identity and how to join it instead (the identity cookie is scoped to `/api/auth`, so join on `requestId` against the gateway access log); with `allowWrite=false` the page sends zero write requests and the BFF's 405 becomes the second gate for bypassing the front end. `check:ui` section 11 grew to `139/139` (new A9 plus the assertion that the probe leaks no address). |
+| 2026-11-25 | 0.5.0 | **The second egress channel changes hands: the 8001 simulator is retired and the Mininet lab backend is registered (`NMCPS-ADR-0027` R8 step 4).** ① §6 was rewritten for `/api/mininet/**`: config (`runtimeConfig.mininet` with `baseUrl` / `instances`; an unmatched tenant gets 503 `tenant_runtime_unavailable`, never a fallback to the global base URL), config reader (`layers/scenario/server/utils/bff/mininetConfig.ts`), egress (`mininet.ts`, entry credential only via `x-lab-token`), route and whitelist (`layers/scenario/server/api/mininet/[...slug].ts` + `mininetRoutes.ts`; unknown path 404 / wrong verb 405 / traversal 400), capability probe (`GET /api/mininet/channel`, capability bits only, never `baseUrl`) and WebSocket (single-use ticket + `/mininet-ws/*`). ② The write switch became **capability bits**: no `allowWrite` boolean; the page trims by `capabilities`, the BFF's 403 is the only permission boundary, audit is written first (a failed write answers 503 `audit_unavailable`), and one in-flight write per network (409). ③ Readiness separation stays: an unreachable lab backend never reddens `/ready`, and `disabled` / `empty` / `unreachable` mean "no instance" / "no lab network yet" / "a real read failure". ④ The guards moved: `check:bff` group ⑨ (21 checkpoints, the `simulator-openapi.json` snapshot, `--refresh-simulator-snapshot`) was deleted together with `/api/sim/**`, `simulatorRoutes.ts`, `simConfig.ts` / `simulator.ts`, `SIMULATOR_MESSAGES` and the `simulator` block in `nuxt.config.ts`; coverage now comes from `check:lab-bff` / `check:simulation` / `check:engines` / `check:ui`. ⑤ The §2 classification row and the §5 data-flow note were renamed to match. |

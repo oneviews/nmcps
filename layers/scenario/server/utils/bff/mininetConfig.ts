@@ -6,8 +6,8 @@ import { useRuntimeConfig } from "nitropack/runtime";
  * 可用 `NUXT_MININET_*` 覆盖。
  *
  * 依据 NMCPS-ADR-0020（layers/content/collections/cn/records/adr/adr-0020.md）。
- * 与 `getSimulatorConfig()` 同形：缺省值集中一处、`baseUrl` 去尾斜杠。
- * 这里没有写开关：白名单本身只有 GET，写权限不靠布尔位“关着”，而是根本没有入口。
+ * 缺省值集中一处、`baseUrl` 去尾斜杠；租户注册表未命中即失败关闭。
+ * 这里没有写开关：写能力由白名单每条的权限位决定，不由布尔位“关着”。
  */
 export interface MininetConfig {
 	/** 实验后端基址（server-only，例：`http://127.0.0.1:8000`）；空串＝通道未启用 */

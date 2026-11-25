@@ -10,7 +10,7 @@ import { Buffer } from "node:buffer";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { CATALOG_UPSTREAM_FAILURE, closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, MININET_TERMINAL_BANNER, startBff, startSimulator, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { CATALOG_UPSTREAM_FAILURE, closeUpstream, freePort, HOST, METRIC_UPSTREAM_FAILURE, MININET_TERMINAL_BANNER, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 const ACCOUNT = process.env.CHECK_UI_ACCOUNT ?? "alice";
 const PASSWORD = process.env.CHECK_UI_PASSWORD ?? "p@ssw0rd";
@@ -79,6 +79,9 @@ if (!BASE_URL) {
 	const port = await freePort();
 	bffChild = await startBff(port, {
 		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
+		// 实验端点要读签名会话（`authorizeLabSession`）：缺 secret 时通道探针直接 503
+		// `bff_auth_not_configured`，监控页会把「没配实例」误读成「通道不可达」（A34 / A6）。
+		NUXT_BFF_SESSION_SECRET: "check-ui-main-session-secret-0123456789abcdef",
 		// 本实例要测「实验台操作员」预填与三枚演示身份按钮：显式打开演示开关
 		// （缺省 false，见 nuxt.config.ts 的 `public.demoLabOperator`）
 		NUXT_PUBLIC_DEMO_LAB_OPERATOR: "true"
@@ -1655,8 +1658,8 @@ if (upstreamPort) {
 }
 
 // 11. 拓扑监控（NMCPS-DESIGN-001 §九 A1~A9）：页面接两条通道 —— 8888 `/api/topology/graph`
-// 与 8001 `/api/sim/api/network/runtime-inventory`。本段锁四件事：画得出来、空拓扑走空态、
-// 主上游掉线只降级不白屏、仿真通道未配置时页面照常只读且 `/ready` 不变红。
+// 与引擎面 `/api/mininet/nodes` + `/links`（`NMCPS-ADR-0027` §4 R8）。本段锁四件事：画得出来、
+// 空拓扑走空态、主上游掉线只降级不白屏、租户没有实验实例时页面照常只读且 `/ready` 不变红。
 // A4 / A5 依赖假上游的 `__control/topology-*` 与 `__control/down`，外部实例模式无法构造，故只在自建模式跑。
 {
 	await page.goto(`${BASE_URL}/topology/monitor`, { waitUntil: "networkidle" });
@@ -1743,7 +1746,7 @@ if (upstreamPort) {
 			: "未找到 [data-testid='topology-canvas']"
 	);
 
-	// A6：自建实例没有 `NUXT_SIMULATOR_BASE_URL` → 拓扑照常渲染。（2026-11-09 起画布上不再有
+	// A6：自建实例没有 `NUXT_MININET_INSTANCES` → 拓扑照常渲染。（2026-11-09 起画布上不再有
 	// 节点级「停止 / 重启」按钮：那两档改的是整台设备的运行态，与「看拓扑」不是一件事，
 	// 用户裁决下线。链路动作仍在链路详情卡里，见后面对 `topology-link-action` 的断言。）
 	// 「未配置」不挂页头告警条（2026-11-08 用户裁决）：那是部署形态而不是故障。
@@ -1759,7 +1762,7 @@ if (upstreamPort) {
 			text: document.body.textContent ?? ""
 		};
 	});
-	log("A6 仿真未配置时拓扑照常渲染", simProbe.canvas, simProbe.canvas ? "canvas 存在" : "canvas 缺失");
+	log("A6 租户没有实验实例时拓扑照常渲染", simProbe.canvas, simProbe.canvas ? "canvas 存在" : "canvas 缺失");
 	log(
 		"A6 画布不再提供节点停止 / 重启按钮（节点级动作整体下线）",
 		simProbe.actions === 0 && !simProbe.text.includes("停止节点") && !simProbe.text.includes("重启节点"),
@@ -1767,22 +1770,27 @@ if (upstreamPort) {
 	);
 	log(
 		"仿真未配置时不再挂「未启用」告警条（原因留在按钮 tooltip 里）",
-		!simProbe.degraded && !simProbe.alertText.includes("仿真控制未启用"),
+		!simProbe.degraded && !simProbe.alertText.includes("实验通道未启用"),
 		`alert=${simProbe.degraded} titles=${simProbe.alertText}`
 	);
 
-	// A7：写端点在 `allowWrite=false`（默认）时被拒，且不触达上游。自建实例连仿真平台都没配，
-	// 通道在 `baseUrl` 这一步就短路成 503 `simulator_not_configured`（处理顺序：路径白名单 → 通道
-	// 是否启用 → 写权限），所以这里只能断言「默认配置下写不出去」；精确的 405 断言放在 11.1 的
-	// 「通道已配置」实例里，两者合起来才是完整的写入口语义。
-	const writeResponse = await page.request.post(`${BASE_URL}/api/sim/api/network/links/l1/down`, { data: {} }).catch(() => null);
+	// A7：默认配置下写端点被拒。自建实例没有 `NUXT_MININET_INSTANCES`：能力探针回
+	// `configured: false`（部署形态，不是错误），写路径在「租户没有实例」这一步就被
+	// 503 `tenant_runtime_unavailable` 拦下（比 `mininet_not_configured` 更准确：租户作用域
+	// 下只查注册表、不回退全局基址）—— 页面零写请求、BFF 也不触达上游。
+	// `NMCPS-ADR-0027` R8 之前这里断言的是 `/api/sim` 的 405 / 503；退役后写通道只剩实验面。
+	const channelProbe = await page.request.get(`${BASE_URL}/api/mininet/channel`).catch(() => null);
+	const channelJson = channelProbe ? await channelProbe.json().catch(() => null) : null;
+	const writesBeforeA7 = upstreamServer?.mininetLog.filter((entry) => entry.method !== "GET").length ?? 0;
+	const writeResponse = await page.request.patch(`${BASE_URL}/api/mininet/links/h1/h2/state`, { data: { state: "down" } }).catch(() => null);
 	const writeJson = writeResponse ? await writeResponse.json().catch(() => null) : null;
-	const writeBlocked = (writeResponse?.status() === 405 && writeJson?.message === "simulator_write_disabled")
-		|| (writeResponse?.status() === 503 && writeJson?.message === "simulator_not_configured");
+	const writesAfterA7 = upstreamServer?.mininetLog.filter((entry) => entry.method !== "GET").length ?? 0;
 	log(
-		"A7 默认配置下写端点被拒（405 写关闭 / 503 通道未启用）",
-		writeBlocked,
-		writeResponse ? `${writeResponse.status()} ${writeJson?.message ?? ""}` : "请求失败"
+		"A7 默认配置下通道未启用（configured:false），写端点被 503 拒绝且不触达上游",
+		channelProbe?.status() === 200 && channelJson?.data?.configured === false
+		&& writeResponse?.status() === 503 && writeJson?.message === "tenant_runtime_unavailable"
+		&& writesAfterA7 === writesBeforeA7,
+		`channel=${channelProbe?.status()}/${channelJson?.data?.configured} write=${writeResponse?.status()}/${writeJson?.message} 上游写=${writesAfterA7 - writesBeforeA7}`
 	);
 
 	// A8：仿真未配置 / 写被拒都不许把就绪探针拉红
@@ -3184,7 +3192,7 @@ if (upstreamPort) {
 				linkClose: !!document.querySelector("[data-testid='topology-link-close']"),
 				nodeCard: !!document.querySelector("[data-testid='topology-node-metrics']"),
 				alarmCard: !!document.querySelector("[data-testid='topology-alarm-card']"),
-				lldpCard: !!document.querySelector("[data-testid='topology-lldp-card']"),
+				adjacencyCard: !!document.querySelector("[data-testid='topology-adjacency-card']"),
 				wifiCard: !!document.querySelector("[data-testid='topology-wifi-card']"),
 				selectedCount: selected.length,
 				selectedWidths: [...new Set(selected.map((el) => getComputedStyle(el).strokeWidth))],
@@ -3217,7 +3225,7 @@ if (upstreamPort) {
 		const asideBackOnNode = await readAside();
 		const linkPanelOk = asideOnNode.nodeCard && !asideOnNode.linkCard
 			&& asideOnLink.linkCard && !asideOnLink.nodeCard
-			&& !asideOnLink.alarmCard && !asideOnLink.lldpCard && !asideOnLink.wifiCard
+			&& !asideOnLink.alarmCard && !asideOnLink.adjacencyCard && !asideOnLink.wifiCard
 			&& asideBackOnNode.nodeCard && !asideBackOnNode.linkCard;
 		log(
 			"A49 链路可点选中且右栏二选一切换、右下角图例只留层色一行",
@@ -3238,7 +3246,7 @@ if (upstreamPort) {
 			+ ` 默认选中=${defaultSelection.selectedIds.join("/") || "无"}[根=${defaultSelection.rootIds.join("/") || "无"}]`
 			+ `/环=${defaultSelection.selectedHalos}/节点卡=${defaultSelection.nodeCard}/链路卡=${defaultSelection.linkCard}`
 			+ ` 节点态[链路卡=${asideOnNode.linkCard}/节点卡=${asideOnNode.nodeCard}]`
-			+ ` 链路态[链路卡=${asideOnLink.linkCard}/关闭叉=${asideOnLink.linkClose}/节点卡=${asideOnLink.nodeCard}/告警=${asideOnLink.alarmCard}/LLDP=${asideOnLink.lldpCard}/无线=${asideOnLink.wifiCard}]`
+			+ ` 链路态[链路卡=${asideOnLink.linkCard}/关闭叉=${asideOnLink.linkClose}/节点卡=${asideOnLink.nodeCard}/告警=${asideOnLink.alarmCard}/邻接=${asideOnLink.adjacencyCard}/无线=${asideOnLink.wifiCard}]`
 			+ ` 选中=${clickedLinkForPanel || "未点中"}→${asideOnLink.selectedCount}条/${asideOnLink.selectedWidths.join("/")}/${asideOnLink.selectedStrokes.join("/")}`
 			+ ` 外延=${asideOnLink.selectedHaloCount}圈/${asideOnLink.selectedHaloWidths.join("/")}/${asideOnLink.selectedHaloOpacities.join("/")}`
 			+ ` 可聚焦命中区=${asideOnLink.hitFocusable}/${asideOnLink.hitAreas} aria-pressed=${asideOnLink.selectedPressed.join("/")}`
@@ -3721,11 +3729,11 @@ if (upstreamPort) {
 			};
 		});
 		log(
-			"A34 链路动作：三个按钮齐备，仿真平台未配置时整组置灰并写明原因",
+			"A34 链路动作：三个按钮齐备，租户没有实验实例时整组置灰并写明原因",
 			linkActions.actions.length === 3 && linkActions.actions.join(",") === "down,up,toggle"
 			&& linkActions.disabled
 			&& linkActions.labels.join("|").includes("断开链路")
-			&& linkActions.card.includes("仿真控制未启用"),
+			&& linkActions.card.includes("实验通道未启用"),
 			`actions=${linkActions.actions.join(",")} disabled=${linkActions.disabled} labels=${linkActions.labels.join("|")}`
 		);
 
@@ -4688,24 +4696,42 @@ if (upstreamPort) {
 	}
 }
 
-// 11.1 仿真通道**已配置**的对照面（只有自建模式能拉起假仿真平台）：另起一个带
-// `NUXT_SIMULATOR_BASE_URL` 的 BFF，断言「仿真中」标记真的落到对齐的节点上（虚线外环 2 个）、
-// 未配置时的降级条消失。这条是 A6 的反向证明 —— 只测「未配置」等于没测过通道接通。
+// 11.1 实验通道**已配置**的对照面：另起一个带 `NUXT_MININET_INSTANCES` 的 BFF，断言「实验」标记
+// 真的落到按管理 IP 对齐的节点上（虚线外环 2 个）、降级条不出现；邻接卡读的是
+// `GET /api/mininet/links` 推导出的台账（`NMCPS-ADR-0027` §7），不是已经裁决不建的 LLDP 通道。
+// 只读一侧：把能力位覆盖成没有 `lab:operate`，页面连一条写都不该发（按钮置灰不靠 403 兜底）。
 if (upstreamPort) {
-	const simPort = await freePort();
-	const simulatorServer = await startSimulator(simPort);
+	const SIM_TENANT = "t_default";
 	const simBffPort = await freePort();
 	const simBffBase = `http://${HOST}:${simBffPort}`;
 	const simBff = await startBff(simBffPort, {
 		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
-		NUXT_SIMULATOR_BASE_URL: `http://${HOST}:${simPort}`
+		// 实验端点要读签名会话（`authorizeLabSession`）：缺 secret 时通道探针回 503 `bff_auth_not_configured`
+		NUXT_BFF_SESSION_SECRET: "check-ui-monitor-session-secret-0123456789abcdef",
+		// 台账没有归属记录时 `/api/mininet/nodes` 回 404 `lab_resource_not_found`（租户还没有实验网络）。
+		// 监控页叠加的是「已有那张网」的运行态，所以这里按实验台页面同形种一条台账记录。
+		NUXT_LAB_LEDGER_FILE: `.data/check-ui-monitor-${process.pid}.json`,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify([{ id: "net_monitor", tenant_id: SIM_TENANT, engine: "mininet", upstream_id: "mininet-t_default", state: "running", created_by: "u_alice", created_at: "2026-11-15T00:00:00.000Z", updated_at: "2026-11-15T00:00:00.000Z" }]),
+		NUXT_MININET_INSTANCES: JSON.stringify({ [SIM_TENANT]: { baseUrl: `http://${HOST}:${upstreamPort}` } })
 	});
 
+	/**
+	 * 邻接样本：默认台账是 h1—sw1 / sw1—r1，补一条 h1—h2 —— h2 的 IP（10.0.0.2）在 8888 图上是
+	 * 已知节点、sw1 没有，于是同一张卡里「画布内对端 + 画布外对端」同时出现。
+	 */
+	const adjacencyLink = { from: "h1", to: "h2" };
+	const dropAdjacencyLink = () => {
+		upstreamServer.mininetState.links = upstreamServer.mininetState.links
+			.filter((link) => !(link.from === adjacencyLink.from && link.to === adjacencyLink.to));
+	};
+
 	try {
+		upstreamServer.mininetRun.started = true;
+		upstreamServer.mininetState.links.push(adjacencyLink);
 		const simContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const simPage = await simContext.newPage();
-		// 记下「页面打开之前」的请求数：后面的「页面零写请求」只数这一段之后的新增
-		const simLogBeforePage = simulatorServer.log.length;
+		// 记下「页面打开之前」的写请求数：后面的「只读会话零写请求」只数这一段之后的新增
+		const simWritesBeforePage = upstreamServer.mininetLog.length;
 		await simPage.goto(`${simBffBase}/auth/login`, { waitUntil: "networkidle" });
 		await simPage.locator("input[autocomplete='username']").fill(ACCOUNT);
 		await simPage.locator("input[type='password']").fill(PASSWORD);
@@ -4720,66 +4746,72 @@ if (upstreamPort) {
 			text: document.body.textContent ?? ""
 		}));
 		log(
-			"仿真通道已配置时按管理 IP 对齐并叠加「仿真中」标记",
+			"实验通道已配置时按管理 IP 对齐并叠加「实验中」标记",
 			!probe.degraded && probe.markers === 2,
 			`markers=${probe.markers} degraded=${probe.degraded}`
 		);
 		log(
-			"仿真通道已配置时不再显示降级条",
-			!probe.text.includes("仿真控制未启用"),
-			probe.text.includes("仿真控制未启用") ? "仍提示未启用" : "无降级提示"
+			"实验通道已配置时不再显示降级条",
+			!probe.text.includes("实验通道不可用"),
+			probe.text.includes("实验通道不可用") ? "仍提示不可用" : "无降级提示"
 		);
 
-		// A9 的「没开写」一半：能力位如实回报「已配置、未开写」，且响应体里没有上游地址 ——
-		// 页面据此把按钮置灰，而不是让用户点了再收 405。地址泄露是安全问题，这里按原文搜端口号。
-		const channelOff = await simPage.request.get(`${simBffBase}/api/sim/channel`).catch(() => null);
-		const channelOffJson = channelOff ? await channelOff.json().catch(() => null) : null;
-		const channelOffRaw = channelOff ? await channelOff.text().catch(() => "") : "";
+		// 能力探针：`/api/mininet/channel` 不触达上游，回 `configured` + `capabilities` + `endpointCount`，
+		// 且响应体里没有上游地址 —— 页面据此把按钮置灰，而不是让用户点了再收 403。地址泄露是安全问题，
+		// 这里按原文搜端口号。
+		const channel = await simPage.request.get(`${simBffBase}/api/mininet/channel`).catch(() => null);
+		const channelJson = channel ? await channel.json().catch(() => null) : null;
+		const channelRaw = channel ? await channel.text().catch(() => "") : "";
 		log(
-			"能力探针回「已配置 + 未开写」且不泄露上游地址",
-			channelOff?.status() === 200
-			&& channelOffJson?.data?.configured === true
-			&& channelOffJson?.data?.writeEnabled === false
-			&& !channelOffRaw.includes(String(simPort)),
-			channelOff
-				? `${channelOff.status()} configured=${channelOffJson?.data?.configured} writeEnabled=${channelOffJson?.data?.writeEnabled} 泄露端口=${channelOffRaw.includes(String(simPort))}`
+			"能力探针回 configured + lab:operate + 端点数，且不泄露上游地址",
+			channel?.status() === 200
+			&& channelJson?.data?.configured === true
+			&& channelJson?.data?.capabilities?.operate === true
+			&& channelJson?.data?.endpointCount === 59
+			&& !channelRaw.includes(String(upstreamPort)),
+			channel
+				? `${channel.status()} configured=${channelJson?.data?.configured} operate=${channelJson?.data?.capabilities?.operate} 端点=${channelJson?.data?.endpointCount} 泄露端口=${channelRaw.includes(String(upstreamPort))}`
 				: "请求失败"
 		);
 
-		// 未开写时页面连一条写请求都不该发（BFF 的 405 只是绕过前端时的第二道闸）
-		const pageWriteHits = simulatorServer.log
-			.slice(simLogBeforePage)
-			.filter((entry) => entry.method !== "GET")
-			.length;
+		// 只读会话：`operate=false` 时链路动作按钮必须禁用（不渲染可点入口），且一条写都不发
+		await simPage.route("**/api/mininet/channel", async (route) => {
+			const response = await route.fetch();
+			const payload = await response.json();
+			if (!payload?.data?.capabilities)
+				return route.fulfill({ response, json: payload });
+			payload.data.capabilities.operate = false;
+			payload.data.capabilities.create = false;
+			payload.data.capabilities.delete = false;
+			payload.data.writeEnabled = false;
+			payload.data.readOnly = true;
+			await route.fulfill({ response, json: payload });
+		});
+		await simPage.reload({ waitUntil: "networkidle" });
+		await simPage.waitForTimeout(800);
+		await simPage.evaluate(() => {
+			const link = Array.from(document.querySelectorAll("[data-link-key]"))
+				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-key") ?? ""));
+			link?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		});
+		await simPage.waitForTimeout(500);
+		const readOnlyProbe = await simPage.evaluate(() => {
+			const buttons = Array.from(document.querySelectorAll("[data-testid='topology-link-action']"));
+			return { total: buttons.length, enabled: buttons.filter((el) => !el.hasAttribute("disabled")).length };
+		});
+		const pageWrites = upstreamServer.mininetLog
+			.slice(simWritesBeforePage)
+			.filter((entry) => entry.method !== "GET");
 		log(
-			"未开写时页面零写请求（按钮置灰不靠 405 兜底）",
-			pageWriteHits === 0,
-			`页面期间写请求共 ${pageWriteHits} 次`
+			"没有 lab:operate 时链路动作全部禁用且页面零写请求",
+			readOnlyProbe.total === 3 && readOnlyProbe.enabled === 0 && pageWrites.length === 0,
+			`按钮=${readOnlyProbe.total} 可点=${readOnlyProbe.enabled} 写请求=${pageWrites.length}`
 		);
 
-		// A7 的精确面：通道已配置、`NUXT_SIMULATOR_ALLOW_WRITE` 仍是默认 false → 必须 405
-		// `simulator_write_disabled`，且这个被拒的写请求**不**出现在假仿真平台的请求日志里。
-		const writeHitsBefore = simulatorServer.log.length;
-		const writeOff = await simPage.request.post(`${simBffBase}/api/sim/api/network/links/l1/down`, { data: {} }).catch(() => null);
-		const writeOffJson = writeOff ? await writeOff.json().catch(() => null) : null;
-		log(
-			"仿真通道已配置时写端点仍 405 simulator_write_disabled",
-			writeOff?.status() === 405 && writeOffJson?.message === "simulator_write_disabled",
-			writeOff ? `${writeOff.status()} ${writeOffJson?.message ?? ""}` : "请求失败"
-		);
-		// 只数写请求：页面每 30s 仍会轮询只读端点，用「非 GET」判断才不会误报。
-		const writesReachedUpstream = simulatorServer.log
-			.slice(writeHitsBefore)
-			.filter((entry) => entry.method !== "GET")
-			.length;
-		log(
-			"被 405 拦下的写请求不触达仿真平台",
-			writesReachedUpstream === 0,
-			`写请求命中共 ${writesReachedUpstream} 次`
-		);
-		// A38：LLDP 邻接分区（§6.13 取证 / §6.14 落地）。上游一台设备可以有几个邻居，其中可能指向**画布外**
-		// 设备；`chassis_id` 实测恒为零，join 只能靠 `neighbor_id`。样本里 `n1`（画布 `10.0.0.1`）两个邻居：
-		// `n2` 在画布上（`10.0.0.2`）、`n10` 不在运行态快照里。断言两套身份并存、两端接口分名、on-canvas 计数。
+		// A38：拓扑邻接卡（`NMCPS-ADR-0027` §7）。台账里 h1 两条链路：h2 在画布上（10.0.0.2），
+		// sw1 没有 8888 对应节点（画布外）。断言两端接口按方向分名、链路状态取 M1.2 的实测读数、
+		// 画布内计数分开报；**不**出现 TTL / 发现时间 / MIB 系统名（那不是台账能给出的事实）。
+		await simPage.unroute("**/api/mininet/channel");
 		await simPage.reload({ waitUntil: "networkidle" });
 		await simPage.waitForTimeout(800);
 		await simPage.evaluate(() => {
@@ -4788,13 +4820,14 @@ if (upstreamPort) {
 			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 		});
 		await simPage.waitForTimeout(600);
-		const lldpProbe = await simPage.evaluate(() => {
-			const card = document.querySelector("[data-testid='topology-lldp-card']");
-			const rows = Array.from(document.querySelectorAll("[data-testid='topology-lldp-neighbor']"));
+		const adjacencyProbe = await simPage.evaluate(() => {
+			const card = document.querySelector("[data-testid='topology-adjacency-card']");
+			const rows = Array.from(document.querySelectorAll("[data-testid='topology-adjacency-neighbor']"));
 			return {
-				state: card?.getAttribute("data-lldp-state") ?? "",
-				count: Number(card?.getAttribute("data-lldp-count") ?? -1),
-				onCanvas: Number(card?.getAttribute("data-lldp-on-canvas") ?? -1),
+				state: card?.getAttribute("data-adjacency-state") ?? "",
+				count: Number(card?.getAttribute("data-adjacency-count") ?? -1),
+				onCanvas: Number(card?.getAttribute("data-adjacency-on-canvas") ?? -1),
+				text: (card?.textContent ?? "").replace(/\s+/g, " ").trim(),
 				rows: rows.map((el) => ({
 					id: el.getAttribute("data-neighbor-id") ?? "",
 					onCanvas: el.getAttribute("data-on-canvas") ?? "",
@@ -4802,99 +4835,78 @@ if (upstreamPort) {
 				}))
 			};
 		});
+		const h2Row = adjacencyProbe.rows.find((row) => row.id === "h2");
+		const sw1Row = adjacencyProbe.rows.find((row) => row.id === "sw1");
 		log(
-			"A38 LLDP 邻接分区：两套身份并存、两端接口分名、画布外对端照实列出",
-			lldpProbe.state === "ok" && lldpProbe.count === 2 && lldpProbe.onCanvas === 1
-			&& lldpProbe.rows[0]?.id === "n2" && lldpProbe.rows[0].onCanvas === "true"
-			&& lldpProbe.rows[0].text.includes("N2") && lldpProbe.rows[0].text.includes("汇聚交换机-1")
-			&& lldpProbe.rows[0].text.includes("n1-eth0 → n2-eth0") && lldpProbe.rows[0].text.includes("10.0.0.2")
-			&& lldpProbe.rows[1]?.id === "n10" && lldpProbe.rows[1].onCanvas === "false"
-			&& lldpProbe.rows[1].text.includes("不在本图上"),
-			`state=${lldpProbe.state} count=${lldpProbe.count} onCanvas=${lldpProbe.onCanvas} rows=${JSON.stringify(lldpProbe.rows)}`
+			"A38 拓扑邻接从 /links 推导：对端身份、两端接口、画布内外分开报",
+			adjacencyProbe.state === "ok" && adjacencyProbe.count === 2 && adjacencyProbe.onCanvas === 1
+			&& h2Row?.onCanvas === "true" && h2Row?.text.includes("h1-eth0 → h2-eth0")
+			&& sw1Row?.onCanvas === "false"
+			&& !adjacencyProbe.text.includes("TTL") && !adjacencyProbe.text.includes("00:00:00:00:00:00"),
+			`state=${adjacencyProbe.state} count=${adjacencyProbe.count} onCanvas=${adjacencyProbe.onCanvas} h2=${h2Row?.text ?? "无"} sw1=${sw1Row?.text ?? "无"}`
 		);
 
-		// A39：空数组是上游的**真实回答**（不是 404、也不是失败）—— 只有明确拿到 `[]` 之后，页面才允许说
-		// 「这台设备没有邻居」。样本里 `n2`（画布 `10.0.0.2`）回空数组。
+		// A39：台账里确实没有链路时才是「没有邻接」—— 撤掉 h1—h2，h2 自己一条边都没有，
+		// 卡片必须写空态而不是失败、也不是「读不到」。
+		dropAdjacencyLink();
+		await simPage.reload({ waitUntil: "networkidle" });
+		await simPage.waitForTimeout(800);
 		await simPage.evaluate(() => {
 			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
 				.find((el) => el.getAttribute("data-node-id") === "10.0.0.2");
 			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 		});
 		await simPage.waitForTimeout(600);
-		const lldpEmpty = await simPage.evaluate(() => {
-			const card = document.querySelector("[data-testid='topology-lldp-card']");
-			const empty = document.querySelector("[data-testid='topology-lldp-empty']");
+		const adjacencyEmpty = await simPage.evaluate(() => {
+			const card = document.querySelector("[data-testid='topology-adjacency-card']");
+			const empty = document.querySelector("[data-testid='topology-adjacency-empty']");
 			return {
-				state: card?.getAttribute("data-lldp-state") ?? "",
-				count: Number(card?.getAttribute("data-lldp-count") ?? -1),
+				state: card?.getAttribute("data-adjacency-state") ?? "",
+				count: Number(card?.getAttribute("data-adjacency-count") ?? -1),
 				emptyText: (empty?.textContent ?? "").replace(/\s+/g, " ").trim(),
-				errorNode: !!document.querySelector("[data-testid='topology-lldp-error']")
+				idle: !!document.querySelector("[data-testid='topology-adjacency-idle']")
 			};
 		});
 		log(
-			"A39 上游明确回空数组才写「没有邻居」（不是失败、也不是没数据）",
-			lldpEmpty.state === "ok" && lldpEmpty.count === 0 && !lldpEmpty.errorNode
-			&& lldpEmpty.emptyText.includes("空数组") && lldpEmpty.emptyText.includes("没有邻居"),
-			`state=${lldpEmpty.state} count=${lldpEmpty.count} empty=${lldpEmpty.emptyText}`
+			"A39 台账里没有链路时写空态（不是失败、也不是读不到）",
+			adjacencyEmpty.state === "ok" && adjacencyEmpty.count === 0 && !adjacencyEmpty.idle
+			&& adjacencyEmpty.emptyText.includes("实验台账里这台设备没有链路"),
+			`state=${adjacencyEmpty.state} count=${adjacencyEmpty.count} empty=${adjacencyEmpty.emptyText}`
 		);
-
-		// A40：邻接取数**失败**时只能给上游原话，不能写成「没有邻居」—— 「读不到」与「没有」是两件事
-		// （与 A32 的告警通道同口径）。
-		await fetch(`http://${HOST}:${simPort}/__control/lldp-error`);
-		await simPage.evaluate(() => {
-			const node = Array.from(document.querySelectorAll("[data-testid='topology-node']"))
-				.find((el) => el.getAttribute("data-node-id") === "10.0.0.1");
-			node?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-		});
-		await simPage.waitForTimeout(600);
-		const lldpError = await simPage.evaluate(() => {
-			const card = document.querySelector("[data-testid='topology-lldp-card']");
-			const error = document.querySelector("[data-testid='topology-lldp-error']");
-			const text = document.body.textContent ?? "";
-			return {
-				state: card?.getAttribute("data-lldp-state") ?? "",
-				errorText: (error?.textContent ?? "").replace(/\s+/g, " ").trim(),
-				emptyNode: !!document.querySelector("[data-testid='topology-lldp-empty']"),
-				claimsNone: text.includes("这台设备没有邻居")
-			};
-		});
-		log(
-			"A40 邻接通道失败只写上游原话，不写成「没有邻居」",
-			lldpError.state === "error" && lldpError.errorText.includes("lldp_agent_unreachable")
-			&& !lldpError.emptyNode && !lldpError.claimsNone,
-			`state=${lldpError.state} error=${lldpError.errorText} emptyNode=${lldpError.emptyNode} claimsNone=${lldpError.claimsNone}`
-		);
-		await fetch(`http://${HOST}:${simPort}/__control/lldp-ok`);
 
 		await simContext.close();
 	} finally {
+		dropAdjacencyLink();
+		// 上游运行态是全局单例：不复位会把 11.3 的「台账 running + 上游 false ⇒ 已停止」对账钉弄红。
+		upstreamServer.mininetRun.started = false;
 		await stopBff(simBff);
-		await closeUpstream(simulatorServer);
 	}
 }
 
-// 11.2 写入口（NMCPS-DESIGN-001 §九 A9）：再起一个带 `NUXT_SIMULATOR_ALLOW_WRITE=true` 的 BFF。
-// 11.1 证明「没开写时一步也走不出去」，这里证明「开了写之后按钮真的能按下、按下真的到达上游」——
-// 两条合起来才是完整的写入口语义：能力位 → 二次确认 → 上游实收 → 成功提示。
+// 11.2 写入口（NMCPS-DESIGN-001 §九 A9）：同一个实验通道，能力位来自 `GET /api/mininet/channel` 的
+// `capabilities.operate`。11.1 证明「没授权时一步也走不出去」，这里证明「有授权时按钮真的能按下、
+// 按下真的到达上游」—— 能力位 → 二次确认 → 上游实收 → 成功提示。
 if (upstreamPort) {
-	const writeSimPort = await freePort();
-	const writeSimulator = await startSimulator(writeSimPort);
+	const WRITE_TENANT = "t_default";
+	const writeLink = { from: "h1", to: "h2" };
 	const writeBffPort = await freePort();
 	const writeBffBase = `http://${HOST}:${writeBffPort}`;
 	const writeBff = await startBff(writeBffPort, {
 		NUXT_BFF_UPSTREAM_BASE: `http://${HOST}:${upstreamPort}`,
-		NUXT_SIMULATOR_BASE_URL: `http://${HOST}:${writeSimPort}`,
-		NUXT_SIMULATOR_ALLOW_WRITE: "true"
+		NUXT_BFF_SESSION_SECRET: "check-ui-monitor-session-secret-0123456789abcdef",
+		// 台账没有归属记录时 `/api/mininet/nodes` 回 404 `lab_resource_not_found`（租户还没有实验网络）。
+		// 监控页叠加的是「已有那张网」的运行态，所以这里按实验台页面同形种一条台账记录。
+		NUXT_LAB_LEDGER_FILE: `.data/check-ui-monitor-write-${process.pid}.json`,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify([{ id: "net_monitor", tenant_id: WRITE_TENANT, engine: "mininet", upstream_id: "mininet-t_default", state: "running", created_by: "u_alice", created_at: "2026-11-15T00:00:00.000Z", updated_at: "2026-11-15T00:00:00.000Z" }]),
+		NUXT_MININET_INSTANCES: JSON.stringify({ [WRITE_TENANT]: { baseUrl: `http://${HOST}:${upstreamPort}` } })
 	});
 
 	try {
-		const channelOnResponse = await fetch(`${writeBffBase}/api/sim/channel`).catch(() => null);
-		const channelOnBody = channelOnResponse ? await channelOnResponse.json().catch(() => null) : null;
-		log(
-			"开启写开关后能力探针回 writeEnabled=true",
-			channelOnResponse?.status === 200 && channelOnBody?.data?.writeEnabled === true,
-			`${channelOnResponse?.status ?? 0} writeEnabled=${channelOnBody?.data?.writeEnabled}`
-		);
+		upstreamServer.mininetRun.started = true;
+		if (!upstreamServer.mininetState.links.some((link) => link.from === writeLink.from && link.to === writeLink.to))
+			upstreamServer.mininetState.links.push(writeLink);
+		delete upstreamServer.mininetLinkState[`${writeLink.from}|${writeLink.to}`];
+		delete upstreamServer.mininetLinkState[`${writeLink.to}|${writeLink.from}`];
 
 		const writeContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 		const writePage = await writeContext.newPage();
@@ -4903,29 +4915,35 @@ if (upstreamPort) {
 		await writePage.locator("input[type='password']").fill(PASSWORD);
 		await writePage.locator("button[type='submit']").first().click();
 		await writePage.waitForURL((url) => url.pathname !== "/auth/login", { timeout: 20_000 }).catch(() => {});
+
+		const channelResponse = await writePage.request.get(`${writeBffBase}/api/mininet/channel`).catch(() => null);
+		const channelBody = channelResponse ? await channelResponse.json().catch(() => null) : null;
+		log(
+			"实验台管理员的能力探针回 writeEnabled=true（lab:operate）",
+			channelResponse?.status() === 200 && channelBody?.data?.writeEnabled === true,
+			`${channelResponse?.status() ?? 0} writeEnabled=${channelBody?.data?.writeEnabled}`
+		);
+
 		await writePage.goto(`${writeBffBase}/topology/monitor`, { waitUntil: "networkidle" });
 		await writePage.waitForTimeout(800);
 
-		// A9：写开关打开后，画布**仍然**只是「选谁看什么」——不提供节点级「停止 / 重启」
-		// （2026-11-09 用户裁决下线，与 A6 同一条口径：那两档改的是整台设备的运行态，与「看拓扑」不是一件事）。
-		// 写入口只剩链路详情卡里的 `topology-link-action`（端到端见下面的 A35），所以 A9 钉的是
-		// 「开了写也不会在画布上长出动作」，同时确认页面真的渲染出来了（否则下面 A35 是在空页上点）。
+		// A9：有写权限也**仍然**不在画布上长出节点级动作 —— 引擎面没有节点动作端点（ADR-0027 §4 第 2 条），
+		// 写入口只剩链路详情卡里的 `topology-link-action`。
 		const writeCapability = await writePage.evaluate(() => ({
 			canvas: !!document.querySelector("[data-testid='topology-canvas']"),
 			actions: document.querySelectorAll("[data-testid='sim-action']").length,
 			text: document.body.textContent ?? ""
 		}));
 		log(
-			"A9 开了写也不在画布上长出节点级动作（写入口只在链路详情卡里）",
+			"A9 有写权限也不在画布上长出节点级动作（写入口只在链路详情卡里）",
 			writeCapability.canvas && writeCapability.actions === 0
 			&& !writeCapability.text.includes("停止节点") && !writeCapability.text.includes("重启节点"),
 			`canvas=${writeCapability.canvas} sim-action=${writeCapability.actions}`
-			+ ` 文案残留=${writeCapability.text.includes("停止节点") || writeCapability.text.includes("重启节点")}`
 		);
 
-		// A35：链路动作端到端（§6.2）。选一条仿真里的链路（`10.0.0.1 ↔ 10.0.0.2` 在假仿真里是 `l1`），
-		// 按钮才可点；弹窗写明「链路 + 仿真链路 id + 动作」；确认后写请求打到仿真侧**链路**端点，
-		// 路径里的 id 必须是仿真 id（`l1`），不能是图上的 `source→target`（仿真平台不认那个）。
+		// A35：链路动作端到端。选 `10.0.0.1 ↔ 10.0.0.2`（台账里就是 h1—h2），按钮才可点；弹窗写明
+		// 动作与实验链路；确认后写请求打到 `PATCH /api/mininet/links/h1/h2/state`，正文是 `{ state }`，
+		// 上游台账与页面回读都必须变成 `down`。
 		await writePage.evaluate(() => {
 			const link = Array.from(document.querySelectorAll("[data-link-key]"))
 				.find((el) => /10\.0\.0\.1.+10\.0\.0\.2/.test(el.getAttribute("data-link-key") ?? ""));
@@ -4936,34 +4954,44 @@ if (upstreamPort) {
 			const buttons = Array.from(document.querySelectorAll("[data-testid='topology-link-action']"));
 			return {
 				actions: buttons.map((el) => el.getAttribute("data-action")),
-				disabled: buttons.filter((el) => el.hasAttribute("disabled")).length,
-				card: (document.querySelector("[data-testid='topology-link-card']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+				disabled: buttons.filter((el) => el.hasAttribute("disabled")).length
 			};
 		});
 		log(
-			"A35 选中仿真里的链路后三个链路动作按钮都可点（写明端点）",
-			linkReady.actions.join(",") === "down,up,toggle" && linkReady.disabled === 0
-			&& linkReady.card.includes("↔"),
+			"A35 选中实验台账里的链路后三个链路动作按钮都可点",
+			linkReady.actions.join(",") === "down,up,toggle" && linkReady.disabled === 0,
 			`actions=${linkReady.actions.join(",")} disabled=${linkReady.disabled}`
 		);
 
-		const linkHitsBefore = writeSimulator.log.length;
+		const linkHitsBefore = upstreamServer.mininetLog.length;
 		await writePage.locator("[data-testid='topology-link-action'][data-action='down']").click();
 		const linkConfirmText = await writePage.locator("[role='dialog']").first().evaluate((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim()).catch(() => "");
 		log(
-			"A35 链路动作也要二次确认并写明仿真链路 id",
-			linkConfirmText.includes("断开链路") && linkConfirmText.includes("仿真链路 id l1"),
+			"A35 链路动作要二次确认并写明实验链路",
+			linkConfirmText.includes("断开链路") && linkConfirmText.includes("实验链路 h1 → h2"),
 			linkConfirmText.slice(0, 120) || "未出现确认弹窗"
 		);
 
 		await writePage.locator("[data-testid='sim-confirm']").click();
-		await writePage.waitForTimeout(1000);
-		const linkHits = writeSimulator.log.slice(linkHitsBefore).filter((entry) => entry.method !== "GET");
+		await writePage.waitForTimeout(1200);
+		const linkHits = upstreamServer.mininetLog.slice(linkHitsBefore).filter((entry) => entry.method !== "GET");
 		const linkHit = linkHits[0];
 		log(
-			"A35 确认后写请求到达仿真平台的链路端点（id 用仿真 id，不用图上 id）",
-			linkHits.length === 1 && linkHit?.method === "POST" && linkHit?.path === "/api/network/links/l1/down",
-			linkHit ? `${linkHit.method} ${linkHit.path}（共 ${linkHits.length} 次）` : `写请求 ${linkHits.length} 次`
+			"A35 确认后 PATCH 到达 /links/h1/h2/state，正文是 { state: down }",
+			linkHits.length === 1 && linkHit?.method === "PATCH"
+			&& linkHit?.path === "/api/mininet/links/h1/h2/state"
+			&& linkHit?.body?.state === "down",
+			linkHit ? `${linkHit.method} ${linkHit.path} body=${JSON.stringify(linkHit.body)}` : `写请求 ${linkHits.length} 次`
+		);
+
+		const linksAfter = await writePage.request.get(`${writeBffBase}/api/mininet/links`).catch(() => null);
+		const linksAfterJson = linksAfter ? await linksAfter.json().catch(() => null) : null;
+		const h1h2 = (linksAfterJson?.data ?? []).find((link) =>
+			(link.from === "h1" && link.to === "h2") || (link.from === "h2" && link.to === "h1"));
+		log(
+			"A35 下发后回读 /links 是 down（状态真落到了台账）",
+			upstreamServer.mininetLinkState["h1|h2"] === "down" && h1h2?.status === "down",
+			`上游=${upstreamServer.mininetLinkState["h1|h2"] ?? "无"} 回读=${h1h2?.status ?? "无"}`
 		);
 
 		const linkDoneText = await writePage.evaluate(() => document.body.textContent ?? "");
@@ -4975,8 +5003,13 @@ if (upstreamPort) {
 
 		await writeContext.close();
 	} finally {
+		upstreamServer.mininetState.links = upstreamServer.mininetState.links
+			.filter((link) => !(link.from === writeLink.from && link.to === writeLink.to));
+		delete upstreamServer.mininetLinkState[`${writeLink.from}|${writeLink.to}`];
+		delete upstreamServer.mininetLinkState[`${writeLink.to}|${writeLink.from}`];
+		// 同上：留给 11.3 的必须是「假上游没启动」这个事实。
+		upstreamServer.mininetRun.started = false;
 		await stopBff(writeBff);
-		await closeUpstream(writeSimulator);
 	}
 }
 

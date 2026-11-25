@@ -290,7 +290,7 @@
 |---|---|---|
 | 上游统一读 | `api.py` 的 `GET /api/mininet/nodes` → `engines/wired.py` 的 `unified_nodes()`（五类分表的投影：`id/type/name/x/y` 提出、其余进 `attributes`）；会话侧 `WiredEngine.list_nodes()` 先过 `_bound()` 再复用同一投影 | `pnpm lab:check` 38 条 HTTP 路径；`check:engines` 7/7 不变 |
 | 白名单 | `mininetRoutes.ts` 新增 `GET /nodes`（`lab:read`），查询 21 → **22**、总计 **58** 条 | `check:lab-bff` ⓪ 计数 + ②「GET /nodes 转发上游并回统一投影」 |
-| 页面 | `simulator.vue` 的 `load()` 由五张分表并发改为一条 `/api/mininet/nodes` + `/links`；`rawUnifiedNodesOf()` 只认画布支持的五个 kind（`ap`/`station` 到 M3 才进 `NODE_KIND_ICONS`），字段从 `attributes` 摊平 | `check:ui` 299/299（假上游 `scripts/lib/bff-harness.mjs` 同步给出 `/nodes`） |
+| 页面 | `simulator.vue` 的 `load()` 由五张分表并发改为一条 `/api/mininet/nodes` + `/links`；`rawUnifiedNodesOf()` 只认画布支持的五个 kind（`ap`/`station` 到 M3 才进 `NODE_KIND_ICONS`），字段从 `attributes` 摊平 | `check:ui` 297/297（假上游 `scripts/lib/bff-harness.mjs` 同步给出 `/nodes`） |
 
 **M1.1 明确不做**
 
@@ -315,8 +315,24 @@
 
 - **`disable` / `power`**：参考侧与 `up` / `down` 语义重叠（都落到接口状态），2.0 只复刻三个动作，
   多余动作不出现在页面上，也不另开端点。
-- **页面切换**：`layers/topology` 的拓扑监控页仍读 `:8001`（`/api/sim/**`）。原本记作「R8 最后一个前置」的
-  **LLDP 面已撤销**（见 §五之三）：邻接改由 `/links` 推导，页面切换不再有引擎面前置。
+- **页面切换**：M1.3 已落地（见下）；原本记作「R8 最后一个前置」的 **LLDP 面已撤销**（见 §五之三）。
+
+**M1.3 已落地（拓扑监控页切读路径，2026-11-25，`NMCPS-ADR-0027` §8）**
+
+`layers/topology` 的拓扑监控页不再 import `/api/sim/**`，也不再 import `shared/types/simulator.ts`；通道本体已于同日删除（见下方「R8 第 4 条」）。
+
+| 项 | 位置 | 验收 |
+|---|---|---|
+| 快照映射 | `app/utils/graph/runtimeInventory.ts` 的 `runtimeInventoryOf()`：`GET /api/mininet/nodes` + `/links` + `/start` 一份快照；节点状态只复述网络运行态（`started`/`stopped`/`unknown`），`/stats` 不再取 | `pnpm typecheck` |
+| 邻接 | `app/utils/graph/labAdjacency.ts` 的 `labAdjacencyOf()` 从 `/links` 推导（无 LLDP 面）；卡片改名「拓扑邻接」，不展示 `ttl` / `discovered_at` / `sys_name` | `check:ui` A38 / A39（画布内外分开报、0 条写空态） |
+| 能力位 | `GET /api/mininet/channel`：`configured:false` ⇒ `disabled`、台账 404 ⇒ `empty`（都属使用形态，不挂降级条）；写开关 = `capabilities.operate` | `check:ui` A6 / A34 / 11.1 只读探针（三枚按钮全禁用且零写请求） |
+| 链路动作 | `PATCH /api/mininet/links/{src}/{dst}/state`（两端取实验节点 id，`toggle` 由上游取反） | `check:ui` A35（`{state:"down"}` 到达上游、回读 `status=down`） |
+| 假上游 | `scripts/lib/bff-harness.mjs` 的 `GET /links` 带 `status`、`PATCH /links/{src}/{dst}/state` 真改 `mininetLinkState` | `check:ui` 297/297（2026-11-25） |
+
+**M1.3 明确不做 / 已随 R8 第 4 条完成**
+
+- **R8 第 4 条（2026-11-25 已执行）**：删 `server/api/sim/**`、`simConfig.ts` / `simulator.ts`、`simulatorRoutes.ts`、`shared/types/simulator.ts`、`fixtures/simulator-openapi.json`、无调用方的 `topologyNeighbors.ts` 与 `SIMULATOR_MESSAGES`；退 `check:bff` 第 ⑨ 组与 `nuxt.config.ts` 的 `simulator` 段；`check:ui` A7 改为断 `/api/mininet` 的「通道未启用 + 503 + 上游零写」。实测：`check:bff` **107/107**、`check:lab-bff` **160/160**、`check:doc-system` 1267/0、`check:ui` 见下。
+- 节点级 `restart` / `stop` 动作不再有入口（引擎面无端点），页面也不再有节点级按钮。
 
 ## 五之三、LLDP 面撤销（2026-11-25，`NMCPS-ADR-0027` §7 追补）
 
@@ -332,7 +348,7 @@
 
 字段落差照实承认：`ttl` / `discovered_at` / `sys_name` / `chassis_id` / `mib_oids` 无替代品，页面卡片切过去时
 只展示 `neighbor_id` / 名称 / 两端接口 / 链路状态（`up` / `down` / `unknown`），文案改叫「拓扑邻接」。
-`SIMULATOR_ROUTES` 里的两条 `/api/lldp/*` 是 1.0 通道现状，随页面切换与 `check:lab-bff` ⑨-6 一起退役。
+`SIMULATOR_ROUTES` 里的两条 `/api/lldp/*` 已随白名单本体删除（R8 第 4 条，2026-11-25），`check:bff` ⑨-6 同时退役。
 
 ## 六、未决问题（阻塞项在前）
 
@@ -361,9 +377,10 @@
    剩余 = 更新类操作（位置 / IP / 默认路由 / OpenFlow / 流表）与前端读路径切换，记为 M1.1。
 4. `check:engines` / `check:simulation` 进 CI：前者零依赖可直接进 quality job，
    后者需要 mininet 与 uvicorn，挂在 lab 专用 job（与 `lab:check` 同环境）。
-5. **R8 页面切换（可开始）**：读路径三项已就绪（`/nodes`、`/links`、邻接由 `/links` 推导，LLDP 面已撤销见 §五之三）。
-   顺序按 `NMCPS-ADR-0027` §4：先切读（含把「LLDP 邻居」卡改名「拓扑邻接」并按 `topologyNeighborsOf()` 出数），
-   再切能力位（`GET /api/mininet/channel`），最后删 `/api/sim/**` 与 `check:lab-bff` ⑨-6；`check:ui` 的 11.x 相邻用例
-   需同步改写（假上游改供 `/api/mininet/links`，断言不再看 `data-lldp-*` 的 LLDP 语义）。
+5. **R8 已完成（2026-11-25）**：读路径走 `/nodes` + `/links`、能力位走 `GET /api/mininet/channel`、
+   邻接由 `labAdjacencyOf()` 推导，链路动作走 `PATCH /links/{src}/{dst}/state`；`check:ui` 的 11.1 / 11.2
+   已按新通道改写（假上游供 `status` 与链路状态端点）。第 4 条同样落地：`NMCPS-ARCH-002` §6 与
+   `NMCPS-DESIGN-001` 的数据源表 / 断言先改，再删 `/api/sim/**`、`check:bff` ⑨-6 与 `nuxt.config.ts`
+   的 `simulator` 段（实测 `check:bff` 107/107、`check:lab-bff` 160/160、`check:doc-system` 1267/0）。
 
 
