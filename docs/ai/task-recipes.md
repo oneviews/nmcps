@@ -35,10 +35,10 @@
 
 `pnpm check:ui` 与 `pnpm check:lab-bff` 的上游是假的（终端只回显），证明不了「按键真被 bash 认了」。真后端手验走一个**显式开门**的脚本：
 
-1. 以 root 起真后端：`pnpm dev:lab-api`（`127.0.0.1:8000`），确认 `curl http://127.0.0.1:8000/api/health` 通；Mininet 需要 root，普通用户跑不了。
+1. 以 root 起真后端：`pnpm dev:lab-api`（`127.0.0.1:8000`），确认 `curl --noproxy '*' http://127.0.0.1:8000/api/health` 通；Mininet 需要 root，普通用户跑不了。回环地址必须带 `--noproxy '*'`（本机 `http_proxy` 会把 `127.0.0.1` 送去公司代理，拿到的是 nginx 的 400）；后端未配 `LAB_API_TOKEN` 时是 loopback-only，改用网卡地址会回 401 `lab_token_required`。
 2. 真后端必须是**空实例**（`GET /api/mininet/start` 为 `false`，hosts / switches / routers / nats / controllers 全空）。不是就先 `POST /api/mininet/full_reset` —— 脚本会自己建 `h1`、起停网络，拿正在用的拓扑跑会把别人的实验停掉，所以这道空实例守卫是硬门。
 3. `pnpm build:server`（脚本消费 `.output/server/index.mjs`，不自行构建）。
-4. `CHECK_REAL_MININET=1 pnpm check:lab-real`：脚本用假 IAM + 真 BFF（`NUXT_MININET_INSTANCES` 指向真后端）+ Playwright，断言演示开关预填 `alice`、运行态读真后端、五标签切换、真提示符、算术执行、方向键行内编辑、`Ctrl-L` 后仍可执行、粘贴整段执行、`Ctrl+V` 不留 `v`、切标签不拆 socket、收起右栏全断；W13 起还覆盖双击链路改带宽。要连 `tc` 那一层一起断言（非 root 只会打 `⏭`）就用 `pnpm check:lab-real:root`，它自己把 `PATH` / `CHECK_REAL_MININET` / `REAL_MININET_BASE` 送进 `sudo -A env`。
+4. `CHECK_REAL_MININET=1 pnpm check:lab-real`：脚本用假 IAM + 真 BFF（`NUXT_MININET_INSTANCES` 指向真后端）+ Playwright，断言演示开关预填 `alice`、运行态读真后端、五标签切换、真提示符、算术执行、方向键行内编辑、`Ctrl-L` 后仍可执行、粘贴整段执行、`Ctrl+V` 不留 `v`、切标签不拆 socket、收起右栏全断；W13 起还覆盖双击链路改带宽。要连 `tc` 那一层一起断言（非 root 只会打 `⏭`）就用 `pnpm check:lab-real:root`，它自己把 `PATH` / `CHECK_REAL_MININET` / `REAL_MININET_BASE` 送进 `sudo -A env`；后端开了 `LAB_API_TOKEN` 时导出同值（`LAB_API_TOKEN=<token> REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root`），包装脚本会经 0600 临时文件把它转给直连与 BFF，不落命令行。
 5. 收尾由脚本自己做（停网络、删掉它建的 `h1`、删临时台账）；跑完再确认 `GET /api/mininet/start` 回到 `false`、`GET /api/mininet/hosts` 回到 `{}`。
 
 不带 `CHECK_REAL_MININET=1` 时脚本只打印跳过说明并以 0 退出 —— 「没跑」不是「通过」，别把它当成真机回归的替代品。
@@ -46,7 +46,7 @@
 ## 排查 BFF 502 / WS 断连
 
 1. `pnpm lab:check` 确认后端可导入。
-2. `curl http://127.0.0.1:8000/api/health` 确认服务活着。
+2. `curl --noproxy '*' http://127.0.0.1:8000/api/health` 确认服务活着。
 3. 检查 `NUXT_MININET_INSTANCES` 是否为当前租户配置实例、是否被防火墙拦截；`GET /api/mininet/channel` 的 `configured` 是否为 `true`。
 4. 检查 BFF 白名单是否包含该 path；只读阶段 method 必须是 `GET`。
 5. WS 额外检查反向代理的 Upgrade 头、ticket 是否过期。

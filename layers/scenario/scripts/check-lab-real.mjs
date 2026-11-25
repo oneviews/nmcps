@@ -18,6 +18,9 @@
 //   （默认 http://192.168.1.55:8888，需该实例已有 alice 且两个实验室角色都已分配）。
 // 真后端地址默认 http://127.0.0.1:8000（`pnpm dev:lab-api` 的本机口径），可用 `REAL_MININET_BASE`
 // 覆盖：有些机器 127.0.0.1:8000 被 nginx 的默认 SSL server 占着，只有走网卡地址才能拿到后端。
+// 后端配了 `LAB_API_TOKEN` 时（网卡地址只认 token），把同值导给包装脚本即可，它负责带上
+// `x-lab-token` 并给 BFF 配 `NUXT_MININET_TOKEN`：
+//   LAB_API_TOKEN=<token> REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root
 // 前置：`pnpm build:server`（消费 `.output/server/index.mjs`）+ 一个**空**的真后端
 // （`GET /api/mininet/start` 为 false 且 hosts / switches / routers / nats / controllers 全空）。
 // root 整跑（tc 那一层不再跳过，共 19 项）：`sudo -A env PATH=… CHECK_REAL_MININET=1 … node <本文件>`，
@@ -25,7 +28,7 @@
 // 结束时脚本自己收尾：停网络、删掉它建的 `h1` / `h2`（连带那条自建链路）、删临时台账；
 // 不碰别人正在跑的拓扑 —— 所以空实例守卫是硬门，别为了「跑通」把它去掉。
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import process from "node:process";
 import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "../../../scripts/lib/bff-harness.mjs";
 
@@ -52,11 +55,32 @@ const log = (name, ok, detail) => {
 	console.log(`${ok ? "✅" : "❌"} ${name}${detail === undefined ? "" : ` — ${detail}`}`);
 };
 
+/**
+ * 真后端入口凭据（`M0` 远程化，`NMCPS-ARCH-007`）：后端设了 `LAB_API_TOKEN` 时，HTTP 一律要
+ * `x-lab-token`，BFF 侧用同值的 `NUXT_MININET_TOKEN`。三个来源按优先级读 —— 包装脚本给的
+ * `LAB_TOKEN_FILE`（0600 临时文件，避免 token 出现在 `ps` 的 `sudo env …` 里）、直接跑时的
+ * `LAB_API_TOKEN` / `NUXT_MININET_TOKEN`。三者都没有 = 后端回环信任模式，两边都不发头。
+ */
+const LAB_TOKEN = (() => {
+	if (process.env.LAB_TOKEN_FILE) {
+		try {
+			return readFileSync(process.env.LAB_TOKEN_FILE, "utf8").trim();
+		} catch {
+			return "";
+		}
+	}
+	return (process.env.LAB_API_TOKEN ?? process.env.NUXT_MININET_TOKEN ?? "").trim();
+})();
+
 /** 真后端的直连调用：只用于**准备与收尾**（建 / 删节点、起停网络、读健康） */
 const call = async (method, path, body, timeoutMs) => {
+	const headers = {
+		...(body === undefined ? {} : { "content-type": "application/json" }),
+		...(LAB_TOKEN ? { "x-lab-token": LAB_TOKEN } : {})
+	};
 	const response = await fetch(`${REAL_BASE}${path}`, {
 		method,
-		headers: body === undefined ? undefined : { "content-type": "application/json" },
+		headers,
 		body: body === undefined ? undefined : JSON.stringify(body),
 		signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
 	});
@@ -169,6 +193,8 @@ const bff = await startBff(port, {
 	NUXT_BFF_SESSION_SECRET: "check-lab-real-secret-0123456789",
 	// 单租户实例：BFF 的每个 `/api/mininet/**` 都落到这台真后端
 	NUXT_MININET_INSTANCES: JSON.stringify({ [TENANT]: { baseUrl: REAL_BASE } }),
+	// 后端要 `x-lab-token` 时，BFF 用同一个值（`NUXT_MININET_TOKEN`）；回环信任模式下不设
+	...(LAB_TOKEN ? { NUXT_MININET_TOKEN: LAB_TOKEN } : {}),
 	NUXT_LAB_LEDGER_FILE: LEDGER_FILE,
 	// 台账先登记本网的节点清单：ws-ticket 的 `target` 只放行清单内节点，
 	// 不登记就等页面刷新台账之后再开会话（这里直接给全，省掉时序依赖）
@@ -605,6 +631,7 @@ try {
 			NUXT_BFF_UPSTREAM_BASE: iamUrl,
 			NUXT_BFF_SESSION_SECRET: "check-lab-real-iam-secret-0123456789",
 			NUXT_MININET_INSTANCES: JSON.stringify({ [TENANT]: { baseUrl: REAL_BASE } }),
+			...(LAB_TOKEN ? { NUXT_MININET_TOKEN: LAB_TOKEN } : {}),
 			NUXT_LAB_LEDGER_FILE: iamLedger,
 			NUXT_LAB_LEDGER_SEED: JSON.stringify([{
 				id: "net_real",

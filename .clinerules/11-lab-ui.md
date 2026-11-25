@@ -57,7 +57,7 @@ Mininet 实验台是 scenario 层里的一个受限功能区，不是第二个�
 
 `11.5b` / `11.5c` / `11.5d` 只钉机器事实（PNG 魔数、上游读次数、写顺序）。下面这些「看着对不对」的部分**刻意不自动化**：`check:ui` 全量约 6 分钟（脚本里 299 处 `waitForTimeout` 合计 2.7 分钟纯等待），且没有 `--only` 子集过滤，为一条观感断言付全量回归不划算。改「文件」菜单的导出、生成拓扑或它们的错误提示后，按这份清单点一遍。
 
-准备：`pnpm build:server` 起前端；真后端用 `REAL_MININET_BASE=http://<lab-host>:8000`（本机是 `192.168.1.90:8000`，`127.0.0.1:8000` 是 nginx 默认 server）。「实验台操作员」（仅 `lab:read`）与「租户管理员」（含 `lab:operate` / `lab:create`）各看一遍。
+准备：`pnpm build:server` 起前端；真后端用缺省 `REAL_MININET_BASE=http://127.0.0.1:8000`（后端未配 `LAB_API_TOKEN` 时是 loopback-only，网卡地址 `192.168.1.90:8000` 会回 401；`curl` 验证要带 `--noproxy '*'`。要给后端开 token 再跑网卡地址就导出 `LAB_API_TOKEN=<token>`，`check:lab-real:root` 会自己转给直连与 BFF，见 `09-local-sudo.md`）。「实验台操作员」（仅 `lab:read`）与「租户管理员」（含 `lab:operate` / `lab:create`）各看一遍。
 
 1. **只读会话 ·「文件」菜单**：导入拓扑、台账对账灰色禁用（要 `lab:create` + `lab:delete`）；导出 JSON / 导出脚本 / 导出拓扑 PNG / 导出地址规划（JSON）/ 设置 五项可点 —— PNG 与地址规划**本来就没有**能力位门控，别给它们补 `disabled`。
 2. **空画布点导出拓扑 PNG**：红色 toast「画布上还没有可导出的拓扑」，**不产生**下载。（`check:ui` 11.6c 已把这条钉成机器断言 —— 它守的是「画布常驻 ≠ 有东西可导」这个判断；这里留一手是因为假上游与真后端的能力位 / 网络状态不同，人工再确认一次 toast 文案与颜色。）

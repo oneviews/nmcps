@@ -7,11 +7,13 @@
 // 手写这条命令容易漏（漏 `PATH` 就是「sudo: node: command not found」，漏门禁变量就是
 // 「⏭ 跳过」被读成「已验」）。口令不进命令行：`sudo -A` + `.clinerules/sudo-askpass.sh`
 // 只做「把 git-ignored 的 `.sudo.local` 回显给 sudo」，见 `.clinerules/09-local-sudo.md`。
+// 后端要 `x-lab-token` 时也不把 token 拼进 `env`（那会在 `ps` 里明文可见）：这里落成 0600
+// 临时文件、只传 `LAB_TOKEN_FILE=<路径>`，被测脚本读完转给 BFF，`finally` 删除。
 //
 // 空实例守卫仍在 `check-lab-real.mjs` 里（`GET /api/mininet/start` 为 false 且五类节点全空）：
 // 这层不重复实现，也不替它兜底 —— 别人的拓扑一律不碰。
 import { execFileSync } from "node:child_process";
-import { chownSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -86,20 +88,35 @@ if (!existsSync(SCRIPT)) {
 	process.exit(1);
 }
 
+/**
+ * 真后端入口凭据（`M0` 远程化）：后端配了 `LAB_API_TOKEN` 时，准备 / 收尾的直连要带 `x-lab-token`，
+ * BFF 侧要用同值的 `NUXT_MININET_TOKEN`。**不能把它拼进 `sudo -A env …`** —— 那会在 `ps` 里明文可见；
+ * 这里落成 0600 临时文件，只把路径传进去，被测脚本读完自己转发给 BFF，`finally` 删除。
+ */
+const TOKEN = (process.env.LAB_API_TOKEN ?? process.env.NUXT_MININET_TOKEN ?? "").trim();
+const TOKEN_FILE = resolve(`.data/check-lab-real-token-${process.pid}.txt`);
+
+const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+const node = process.execPath;
+
+if (!isRoot && TOKEN) {
+	mkdirSync(dirname(TOKEN_FILE), { recursive: true });
+	writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 });
+	chmodSync(TOKEN_FILE, 0o600);
+}
+
 /** 要跨过 sudo 的环境变量：一个都不能少（`PATH` 决定 node 能不能找到） */
 const passthrough = ["CHECK_REAL_MININET", "REAL_MININET_BASE", "CHECK_REAL_IAM", "REAL_IAM_BASE", "PLAYWRIGHT_BROWSERS_PATH", "NMCPS_SUDO_PASS_FILE"];
 const envPairs = [
 	`PATH=${dirname(process.execPath)}:${process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}`,
 	"CHECK_REAL_MININET=1",
 	`REAL_MININET_BASE=${REAL_BASE}`,
+	...(TOKEN ? [`LAB_TOKEN_FILE=${TOKEN_FILE}`] : []),
 	...passthrough
 		.filter((key) => key !== "CHECK_REAL_MININET" && key !== "REAL_MININET_BASE")
 		.filter((key) => process.env[key] !== undefined)
 		.map((key) => `${key}=${process.env[key]}`)
 ];
-
-const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
-const node = process.execPath;
 
 if (isRoot) {
 	// 已经是 root（容器 / `sudo -i` 里）：直接跑，别在 root 上再套一层 sudo
@@ -112,6 +129,7 @@ if (isRoot) {
 	} catch (caught) {
 		process.exitCode = typeof caught?.status === "number" ? caught.status : 1;
 	} finally {
+		rmSync(TOKEN_FILE, { force: true });
 		const restored = restoreDataOwnershipInProcess();
 		if (restored > 0)
 			console.log(`  ⏎ 已把 ${restored} 个 root 名下的 .data 产物还给调用者（否则普通用户的写端点会 503 audit_unavailable）`);
@@ -136,6 +154,7 @@ try {
 	process.exitCode = typeof caught?.status === "number" ? caught.status : 1;
 } finally {
 	// 被测脚本失败也要还原：半途崩掉同样会留下 root 名下的审计分片
+	rmSync(TOKEN_FILE, { force: true });
 	let restored = 0;
 	try {
 		restored = restoreDataOwnershipViaSudo();

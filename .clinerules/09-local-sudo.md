@@ -57,20 +57,32 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
   所以别在交互式终端里跑需要密码的 `sudo -S`，一次喂错就卡住（`-A` 没有这个问题）。
 - 起长驻进程（重启后端）要 `sudo -A nohup … > /tmp/xxx.log 2>&1 &`，然后**用 `curl` 的 HTTP 码验证**
   （`000` = 没人 bind，见 `docs/ai/lab-boundary.md` 的「两个进程都在、没人 bind」），不要等提示符。
+  验证回环端口必须 `curl --noproxy '*'`：本机 `http_proxy` 会把 `127.0.0.1` 也送去公司代理，
+  不绕过时拿到的是代理那侧的 nginx 400，不是本服务的真实状态。
 - 整跑 `check:lab-real`（root 下才会真断言 tc）直接用包装脚本 `pnpm check:lab-real:root`
   （`layers/scenario/scripts/check-lab-real-root.mjs`）：它自己把 `PATH`（nvm 的 `node` 不在 sudo 的
   `secure_path` 里）、`CHECK_REAL_MININET=1`、`REAL_MININET_BASE` 跟在 `sudo -A env …` 之后传，
   并检查 askpass helper 存在可执行 —— 手写这条命令最容易漏变量（漏 `PATH` = `sudo: node: command not found`，
-  漏门禁变量 = 打 `⏭` 却被读成「已验」）。**`REAL_MININET_BASE` 的缺省是 `http://127.0.0.1:8000`**，
-  本机那个端口被 nginx 的默认 server 占着（回 400），所以包装脚本也要显式传网卡地址：
-  `REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root`。不传时脚本会在空实例守卫附近
-  报错退出（实测 2026-11-23：什么都没测就 `EXIT=1`，极易被读成「用例挂了」）。要手工复现等价命令
-  （2026-11-20 实测 root 下 18/18 全绿；2026-11-23 新增真 iperf 用例后 19/19 全绿）：
+  漏门禁变量 = 打 `⏭` 却被读成「已验」）。**`REAL_MININET_BASE` 的缺省就是 `http://127.0.0.1:8000`，
+  本机也用它**（2026-11-25 实测 `REAL_MININET_BASE=http://127.0.0.1:8000 pnpm check:lab-real:root`
+  19/19 全绿，含 tc 真断言）。两处曾经的误判要分清：
+  - `curl http://127.0.0.1:8000/...` 回 nginx 的 400「plain HTTP to HTTPS port」**不是端口被占**，是本机
+    `http_proxy` 把回环请求也送去了公司代理。验证直连要 `curl --noproxy '*'`；Node 内置 fetch 只在
+    `NODE_USE_ENV_PROXY` 打开时才走代理（本机没开），所以脚本自己不受影响。
+  - 改成网卡地址 `http://192.168.1.90:8000` 时，后端若没配 `LAB_API_TOKEN` 会回 **401 `lab_token_required`**
+    （loopback-only 策略；`/api/health`、`/api/version` 例外）。要给后端开 token 再按网卡地址跑：
+    `LAB_API_TOKEN=<token> REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root` ——
+    包装脚本把 token 落成 `.data` 下的 0600 临时文件、只把 `LAB_TOKEN_FILE=<路径>` 传给 root 进程
+    （`ps` 里看不到明文），被测脚本据此给准备 / 收尾的直连带 `x-lab-token`、给 BFF 配同值
+    `NUXT_MININET_TOKEN`，收尾自动删文件。实测 2026-11-25：token 后端 + 网卡地址 **19/19 全绿**（含 tc 真断言）。
+  实例非空时脚本会在空实例守卫处报错退出（实测 2026-11-23：什么都没测就 `EXIT=1`，极易被读成「用例挂了」），
+  跑前先 `POST /api/mininet/full_reset`。要手工复现等价命令
+  （2026-11-20 实测 root 下 18/18 全绿；2026-11-23 新增真 iperf 用例、2026-11-25 复验后 19/19 全绿）：
   ```bash
   NODE_BIN=$(dirname "$(command -v node)")
   SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A env \
     PATH="$NODE_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    CHECK_REAL_MININET=1 REAL_MININET_BASE=http://192.168.1.90:8000 \
+    CHECK_REAL_MININET=1 REAL_MININET_BASE=http://127.0.0.1:8000 \
     node layers/scenario/scripts/check-lab-real.mjs
   ```
   浏览器的 `PLAYWRIGHT_BROWSERS_PATH` 不用管，脚本自己回落到 `$SUDO_USER` 的缓存。

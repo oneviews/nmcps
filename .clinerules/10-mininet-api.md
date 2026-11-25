@@ -36,6 +36,11 @@ paths:
   （Node 内置 WebSocket 不能设头）；BFF 侧是同值的 `NUXT_MININET_TOKEN`，握手走 `GET /api/mininet/version`。
   token 不进查询串、不进日志、不回传。监听面 / 特权 / 凭据 / 重启语义的完整基准见 `NMCPS-ARCH-007`
   （`layers/content/collections/cn/architecture/1.architecture/lab-deployment-architecture.md`）。
+  未设 `LAB_API_TOKEN` 时是 **loopback-only**（`/api/health`、`/api/version` 例外）：从网卡地址访问一律
+  401 `lab_token_required`。本机排查先过代理这一关 —— `http_proxy` 会把 `127.0.0.1` 也送去公司代理，
+  `curl` 直连必须加 `--noproxy '*'`，否则拿到的是代理那侧的 nginx 400，不是本服务的状态。
+  带 token 的真机验收：`LAB_API_TOKEN=<token> pnpm check:lab-real:root`（包装脚本经 0600 临时文件传，
+  不落命令行，见 `.clinerules/09-local-sudo.md`）。
 - 非 root 时 `app.net` 为 `None`（`Mininet()` 会 `exit(1)`），只有 `dryrun` 可用；自检带
   `LAB_SKIP_STARTUP_CLEANUP=1`，否则启动时的 `mn -c` 会反复 `pkill` 失败并卡住启动。
   `pnpm check:engines` 零依赖，`pnpm check:simulation` 需 uvicorn + mininet，两者都无 root。
