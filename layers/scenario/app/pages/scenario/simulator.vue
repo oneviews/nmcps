@@ -862,6 +862,23 @@
 			:preferences="preferences"
 			@save="savePreferences"
 		/>
+		<!--
+			SNMP 采集面与 v2c 凭据（`NMCPS-ADR-0028` §7）：读数任何人可看，写动作按
+			`lab:snmp` 裁剪；密文只在开通 / 轮换响应里出现一次。
+		-->
+		<SimulatorSnmpModal
+			v-model:open="snmpOpen"
+			:state="snmpState"
+			:secret="snmpSecret"
+			:loading="snmpLoading"
+			:busy="snmpBusy"
+			:error="snmpError"
+			:can-manage="canSnmp"
+			@onboard="submitSnmp('onboard')"
+			@rotate="submitSnmp('rotate')"
+			@revoke="submitSnmp('revoke')"
+			@copy="copySnmpSecret"
+		/>
 		<SimulatorNodeFormModal
 			v-if="createKind"
 			v-model:open="createOpen"
@@ -949,6 +966,7 @@
 		LabIperfResult
 	} from "#layers/scenario/shared/types/labRun";
 	import type { LabSideTab } from "#layers/scenario/shared/types/labSideTabs";
+	import type { LabSnmpCredentialReveal, LabSnmpState } from "#layers/scenario/shared/types/labSnmp";
 	import type { MininetChannelCapabilities, MininetChannelInfo } from "#layers/scenario/shared/types/mininet";
 	import { topologyLinkKey } from "~~/app/utils/graph/topologyNormalize";
 	import { topologyPngBlobOf, topologyPngFilename } from "~~/app/utils/graph/topologyPngExport";
@@ -993,6 +1011,7 @@
 		LAB_CAPTURE_FALLBACK_FILENAME,
 		labSnifferActiveOf
 	} from "#layers/scenario/shared/types/labSniffer";
+	import { labSnmpRevealOf, labSnmpStateOf } from "#layers/scenario/shared/types/labSnmp";
 
 	definePageMeta({ sort: 1, icon: "carbon:flash" });
 
@@ -1056,6 +1075,11 @@
 	const canSniff = computed(() => capabilities.value?.sniffer === true);
 	/** 终端同样独立授权位（右键菜单的「打开 Webshell」按它裁剪，W12） */
 	const canTerminal = computed(() => capabilities.value?.terminal === true);
+	/**
+	 * SNMP 凭据是独立授权位（`NMCPS-ADR-0028` §6 D10）：`lab:read` / `lab:operate` 都
+	 * 推导不出它。没有它时弹窗仍可打开（读数不敏感），但开通 / 轮换 / 吊销都不渲染。
+	 */
+	const canSnmp = computed(() => capabilities.value?.snmp === true);
 
 	/**
 	 * 左侧设备栏（NMCPS-ADR-0022 W10）：类型图标要 `create`，栏顶的运行按钮要 `create` /
@@ -1418,6 +1442,92 @@
 	const canReconcile = computed(() => canCreate.value && canDelete.value);
 
 	/**
+	 * SNMP 采集面与 v2c 凭据（`NMCPS-ADR-0028` §7）。
+	 *
+	 * 三条写端点要 `lab:snmp`，`GET …/snmp/state` 与其它读同档（只要有会话即可）。
+	 * 密文只从开通 / 轮换的响应里来一次，`snmpSecret` 是它唯一的落点；`snmpState`
+	 * 没有密文字段，因此「刷新一下又把明文留在屏幕上」这条路不存在。
+	 */
+	const snmpOpen = ref(false);
+	const snmpState = ref<LabSnmpState | null>(null);
+	const snmpSecret = ref<LabSnmpCredentialReveal | null>(null);
+	const snmpLoading = ref(false);
+	const snmpBusy = ref(false);
+	const snmpError = ref<string>();
+
+	watch(snmpOpen, (value) => {
+		// 关掉弹窗就丢弃明文：下一次开通 / 轮换会再出示一次
+		if (!value) {
+			snmpSecret.value = null;
+			snmpError.value = undefined;
+		}
+	});
+
+	function openSnmp(): void {
+		snmpOpen.value = true;
+		snmpSecret.value = null;
+		snmpError.value = undefined;
+		void loadSnmpState();
+	}
+
+	async function loadSnmpState(): Promise<void> {
+		snmpLoading.value = true;
+		try {
+			snmpState.value = labSnmpStateOf(await api.get<unknown>("/api/mininet/snmp/state"));
+		} catch (caught) {
+			// 读不到就是「未知」：`null` 让弹窗如实显示读不到，不回落成「未开通」
+			snmpState.value = null;
+			snmpError.value = messageOf(caught);
+		} finally {
+			snmpLoading.value = false;
+		}
+	}
+
+	async function submitSnmp(action: "onboard" | "rotate" | "revoke"): Promise<void> {
+		if (!canSnmp.value || snmpBusy.value)
+			return;
+
+		snmpBusy.value = true;
+		snmpError.value = undefined;
+		snmpSecret.value = null;
+
+		try {
+			if (action === "revoke") {
+				await api.del("/api/mininet/snmp/credentials");
+				toast.add({ title: t("pages.scenario-simulator.snmp.revoked"), color: "success", icon: "carbon:checkmark" });
+			} else {
+				const reveal = labSnmpRevealOf(await api.post<unknown>(`/api/mininet/snmp/${action}`, {}));
+				// 拿不到密文就不算成功：这次动作的全部意义就是把串交给运维一次
+				if (!reveal)
+					throw new Error(t("pages.scenario-simulator.snmp.noSecret"));
+				snmpSecret.value = reveal;
+				toast.add({
+					title: t(action === "onboard" ? "pages.scenario-simulator.snmp.onboarded" : "pages.scenario-simulator.snmp.rotated"),
+					color: "success",
+					icon: "carbon:checkmark"
+				});
+			}
+
+			// 成功后重读读数：开通 / 轮换会换 `community_source` 与版本，吊销会回落部署默认串
+			await loadSnmpState();
+		} catch (caught) {
+			snmpError.value = messageOf(caught);
+		} finally {
+			snmpBusy.value = false;
+		}
+	}
+
+	async function copySnmpSecret(community: string): Promise<void> {
+		try {
+			await navigator.clipboard.writeText(community);
+			toast.add({ title: t("pages.scenario-simulator.snmp.copied"), color: "success", icon: "carbon:checkmark" });
+		} catch {
+			// 剪贴板被浏览器拒绝时如实提示手动复制 —— 不假装复制成功
+			toast.add({ title: t("pages.scenario-simulator.snmp.copyFailed"), color: "warning", icon: "carbon:warning-alt" });
+		}
+	}
+
+	/**
 	 * 「文件」菜单：导入拓扑 / 导出 JSON / 导出脚本。
 	 *
 	 * 导出走 `GET /api/mininet/export/{json|script}`（`lab:read`，任何人可见）：它只读上游，
@@ -1466,6 +1576,16 @@
 			icon: "carbon:data-check",
 			disabled: !canReconcile.value || reconcileBusy.value,
 			onSelect: () => askReconcile()
+		},
+		{
+			/*
+				SNMP 凭据（`NMCPS-ADR-0028` §7）：读数对任何会话可见，写动作在弹窗里
+				按 `lab:snmp` 裁剪，所以菜单项本身不置灰 —— 读不到能力位的会话仍能核对
+				「采集面开没开、agent 在不在跑、出问题的是哪台节点」。
+			*/
+			label: t("pages.scenario-simulator.menu.snmp"),
+			icon: "carbon:network-4",
+			onSelect: () => openSnmp()
 		},
 		{
 			// 设置（复刻旧「文件 → 设置」里仍属本页的两项默认值）

@@ -28,9 +28,10 @@ export default defineEventHandler(async (event): Promise<ApiResponse<MininetChan
 		operate: granted.has(LAB_PERMISSIONS.OPERATE),
 		delete: granted.has(LAB_PERMISSIONS.DELETE),
 		terminal: granted.has(LAB_PERMISSIONS.TERMINAL),
-		sniffer: granted.has(LAB_PERMISSIONS.SNIFFER)
+		sniffer: granted.has(LAB_PERMISSIONS.SNIFFER),
+		snmp: granted.has(LAB_PERMISSIONS.SNMP)
 	};
-	const writeEnabled = capabilities.create || capabilities.operate || capabilities.delete || capabilities.sniffer;
+	const writeEnabled = capabilities.create || capabilities.operate || capabilities.delete || capabilities.sniffer || capabilities.snmp;
 
 	setResponseStatus(event, 200);
 	setResponseHeader(event, "content-type", "application/json; charset=utf-8");

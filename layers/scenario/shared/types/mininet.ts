@@ -35,6 +35,8 @@ export interface MininetChannelCapabilities {
 	delete: boolean
 	terminal: boolean
 	sniffer: boolean
+	/** SNMP 凭据写面（`NMCPS-ADR-0028` §6 D10）：开通 / 轮换 / 吊销，独立授权 */
+	snmp: boolean
 }
 
 /**

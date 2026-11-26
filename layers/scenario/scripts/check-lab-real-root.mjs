@@ -1,6 +1,7 @@
 // layers/scenario/scripts/check-lab-real-root.mjs
-// `pnpm check:lab-real:root`：以 root 整跑 `check-lab-real.mjs`，让 `tc` 那一层真的断言
-// 而不是打 `⏭`（非 root 只能看台账里的 `options.bw`，看不到主机 netns 里的 htb 类）。
+// `pnpm check:lab-real:root`：以 root 整跑 `check-lab-real.mjs`，让 `tc` 与 SNMP 两层真的断言
+// 而不是打 `⏭`（非 root 只能看台账里的 `options.bw` / 配置串，看不到主机 netns 里的 htb 类与
+// `10.0.0.2:161` 的 agent）。
 //
 // 为什么需要这层包装：`sudo` 会重置环境变量，而 nvm 的 `node` 不在 sudo 的 `secure_path` 里 ——
 // `PATH` / `CHECK_REAL_MININET` / `REAL_MININET_BASE` 必须跟在 `sudo -A env …` 之后传。
@@ -29,7 +30,13 @@ const REAL_BASE = process.env.REAL_MININET_BASE ?? "http://127.0.0.1:8000";
  * 普通用户起的 BFF 再往同一分片追加就是 `EACCES` → 每个写端点回 503 `audit_unavailable`，
  * `check:ui` 的写用例全假红（实测 2026-11-22：11.4 四条 + 后续 Modal 卡死）。这层本来就是
  * 为了提权才存在，顺手把所有权还原是它自己的职责，不该让下一个人去猜「为什么刚才是绿的」。
+ *
+ * `services/mininet-api/.data` 是后端自己的产物目录（SNMP agent 的 profile / log，`NMCPS-ADR-0028`
+ * §6）：11.16 起 root 跑会在那里也留下 root 文件，一起还 —— 否则普通用户起的后端写 profile 就是
+ * `EACCES`，采集面直接起不来。
  */
+const DATA_DIRS = [".data", "services/mininet-api/.data"];
+
 function rootOwnedEntries(dir) {
 	if (!existsSync(dir))
 		return [];
@@ -49,6 +56,11 @@ function rootOwnedEntries(dir) {
 	return found;
 }
 
+/** 两个产物目录里 root 名下的条目（`.data` + 后端的 `.data`） */
+function rootOwnedArtifacts() {
+	return DATA_DIRS.flatMap((dir) => rootOwnedEntries(dir));
+}
+
 /** 已经是 root：自己动手 chown，还原给 `SUDO_UID:$SUDO_GID`（`sudo -i` 时可能没有） */
 function restoreDataOwnershipInProcess() {
 	const uid = Number(process.env.SUDO_UID ?? "");
@@ -56,7 +68,7 @@ function restoreDataOwnershipInProcess() {
 	if (!Number.isInteger(uid) || uid === 0)
 		return 0;
 
-	const entries = rootOwnedEntries(".data");
+	const entries = rootOwnedArtifacts();
 	for (const entry of entries)
 		chownSync(entry, uid, Number.isInteger(gid) ? gid : uid);
 	return entries.length;
@@ -67,7 +79,7 @@ function restoreDataOwnershipInProcess() {
  * 过期也只是再走一次 askpass，不会卡在等输入）。只碰 root 名下的条目，不动别人的文件。
  */
 function restoreDataOwnershipViaSudo() {
-	const owned = rootOwnedEntries(".data");
+	const owned = rootOwnedArtifacts();
 	if (owned.length === 0)
 		return 0;
 
@@ -132,7 +144,7 @@ if (isRoot) {
 		rmSync(TOKEN_FILE, { force: true });
 		const restored = restoreDataOwnershipInProcess();
 		if (restored > 0)
-			console.log(`  ⏎ 已把 ${restored} 个 root 名下的 .data 产物还给调用者（否则普通用户的写端点会 503 audit_unavailable）`);
+			console.log(`  ⏎ 已把 ${restored} 个 root 名下的产物还给调用者（否则普通用户的写端点会 503 audit_unavailable、采集面写不了 profile）`);
 	}
 	process.exit();
 }
@@ -160,8 +172,8 @@ try {
 		restored = restoreDataOwnershipViaSudo();
 	} catch (caught) {
 		// 还原失败不该盖掉被测结果，但必须说清楚：下一个人会撞上 503 audit_unavailable
-		console.warn(`  ⚠ 还原 .data 所有权失败（${caught?.message ?? caught}）：先看 \`find .data -user root\``);
+		console.warn(`  ⚠ 还原 .data 所有权失败（${caught?.message ?? caught}）：先看 \`find .data services/mininet-api/.data -user root\``);
 	}
 	if (restored > 0)
-		console.log(`  ⏎ 已把 ${restored} 个 root 名下的 .data 产物还给调用者（否则普通用户的写端点会 503 audit_unavailable）`);
+		console.log(`  ⏎ 已把 ${restored} 个 root 名下的产物还给调用者（否则普通用户的写端点会 503 audit_unavailable、采集面写不了 profile）`);
 }

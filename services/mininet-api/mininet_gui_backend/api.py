@@ -39,7 +39,7 @@ from mininet.clean import cleanup as mn_cleanup
 from mininet.node import RemoteController, Controller as ReferenceController, NOX, UserSwitch, OVSSwitch, OVSKernelSwitch, OVSBridge, Node
 from mininet_gui_backend.nodes import Ryu
 from mininet.link import TCLink
-from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect, Body
 from pydantic import BaseModel, Field
 from fastapi.responses import PlainTextResponse, Response
 
@@ -54,6 +54,7 @@ from mininet_gui_backend.engines import (
     register_builtin_engines,
 )
 from mininet_gui_backend.sessions import SessionStore
+from mininet_gui_backend.snmp import credentials as snmp_credentials
 from mininet_gui_backend.snmp import inventory as snmp_inventory
 from mininet_gui_backend.snmp import runtime as snmp_runtime
 from mininet_gui_backend.schema import Switch, Host, Controller, Nat, Router
@@ -1023,6 +1024,54 @@ def get_snmp_topology():
         _ledger_snmp_links(),
         snmp_runtime.runtime.status(),
     )
+
+
+class SnmpCredentialRequest(BaseModel):
+    """凭据写端点唯一的请求体（`NMCPS-ADR-0028` §6，D11）。
+
+    省略 `community` 就由服务端生成；显式值必须是强串（`validate_community()`）。
+    """
+
+    community: Optional[str] = None
+
+
+def _snmp_require_collection() -> None:
+    """D12：采集面没开（或本进程没有真网）时，凭据写进去也不会生效 —— 先拒，再谈落盘。"""
+    if not snmp_runtime.collection_enabled() or getattr(app, "net", None) is None:
+        raise HTTPException(status_code=409, detail="snmp_collection_disabled")
+
+
+def _snmp_credential_write(action: Any) -> dict:
+    """三段固定顺序：判定启用 → 落盘 → 让新串生效（D12）。
+
+    落盘失败不重启 agent（旧串继续服务，报 500）；重启只影响读数，不影响 200 ——
+    单节点起不来在 `nodes[*].status` 里看得见（与 D4 同口径）。
+    """
+    _snmp_require_collection()
+    try:
+        result = action(snmp_runtime.credential_store())
+    except snmp_credentials.CredentialError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    applied = snmp_runtime.runtime.apply_credentials(app.net)
+    return {**result, "applied": applied["applied"], "nodes": applied["status"].get("nodes", [])}
+
+
+@app.post("/api/mininet/snmp/onboard")
+def snmp_onboard(payload: Optional[SnmpCredentialRequest] = Body(default=None)):
+    """开通 v2c 凭据：响应含**一次性**密文，此后读端点只给元数据（D9）。"""
+    return _snmp_credential_write(lambda store: store.onboard(payload.community if payload else None))
+
+
+@app.post("/api/mininet/snmp/rotate")
+def snmp_rotate(payload: Optional[SnmpCredentialRequest] = Body(default=None)):
+    """轮换：密文换新、版本 +1；没开通回 404（与「不存在」同口径）。"""
+    return _snmp_credential_write(lambda store: store.rotate(payload.community if payload else None))
+
+
+@app.delete("/api/mininet/snmp/credentials")
+def snmp_revoke():
+    """吊销：删凭据，agent 回落部署默认 `LAB_SNMP_COMMUNITY` 并重启（D12）。"""
+    return _snmp_credential_write(lambda store: store.revoke())
 
 
 @app.get("/api/mininet/start")

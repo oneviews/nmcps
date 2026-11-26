@@ -113,7 +113,11 @@ def build_topology(
     这里只是把**仿真网台账**原样发布成可采集目标，邻接也来自台账链路。
     """
     port = int(status.get("port") or 161)
-    community = str(status.get("community") or "public")
+    # 开通凭据后 status.community 是 `None`（D9）：这里必须原样发布成 null，
+    # 不能 `or "public"` 兜底 —— 那会把一个错的社区串写进 NMS 的 seed 清单。
+    raw_community = status.get("community")
+    community = str(raw_community) if raw_community else None
+    credential_version = status.get("credential_version")
     agents = {str(item.get("id")): item for item in status.get("nodes") or []}
 
     published: List[Dict[str, Any]] = []
@@ -146,6 +150,7 @@ def build_topology(
     ]
     return {
         "community": community,
+        "credential_version": credential_version,
         "port": port,
         "enabled": bool(status.get("enabled")),
         "running": bool(status.get("running")),

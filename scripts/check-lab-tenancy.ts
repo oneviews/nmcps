@@ -62,10 +62,11 @@ check("同租户 tenant_admin 获得 create / operate / delete", () => {
 	assert.equal(hasLabPermission(admin, LAB_PERMISSIONS.DELETE), true);
 });
 
-check("tenant_admin 不隐含 terminal / sniffer", () => {
+check("tenant_admin 不隐含 terminal / sniffer / snmp", () => {
 	const admin = principal("t_a", [{ code: LAB_ROLE_CODES.TENANT_ADMIN, tenantId: "t_a" }]);
 	assert.equal(hasLabPermission(admin, LAB_PERMISSIONS.TERMINAL), false);
 	assert.equal(hasLabPermission(admin, LAB_PERMISSIONS.SNIFFER), false);
+	assert.equal(hasLabPermission(admin, LAB_PERMISSIONS.SNMP), false);
 });
 
 check("跨租户 tenant_admin 角色被丢弃（UP-RBAC-09）", () => {
@@ -103,6 +104,15 @@ check("lab_sniffer 仅授予 sniffer，不授予 operate", () => {
 	const user = principal("t_a", [{ code: LAB_ROLE_CODES.LAB_SNIFFER, tenantId: "t_a" }]);
 	assert.equal(hasLabPermission(user, LAB_PERMISSIONS.SNIFFER), true);
 	assert.equal(hasLabPermission(user, LAB_PERMISSIONS.OPERATE), false);
+});
+
+check("lab_snmp 仅授予 snmp，不授予 create / operate / delete", () => {
+	const user = principal("t_a", [{ code: LAB_ROLE_CODES.LAB_SNMP, tenantId: "t_a" }]);
+	assert.equal(hasLabPermission(user, LAB_PERMISSIONS.SNMP), true);
+	assert.equal(hasLabPermission(user, LAB_PERMISSIONS.CREATE), false);
+	assert.equal(hasLabPermission(user, LAB_PERMISSIONS.OPERATE), false);
+	assert.equal(hasLabPermission(user, LAB_PERMISSIONS.DELETE), false);
+	assert.deepEqual([...labPermissionsOf(user)].sort(), [LAB_PERMISSIONS.READ, LAB_PERMISSIONS.SNMP].sort());
 });
 
 check("未知角色编码被忽略", () => {
@@ -156,8 +166,8 @@ check("查询端点一律 lab:read，写端点一律不含 lab:read", () => {
 	}
 });
 
-check("写端点 37 条、查询端点 24 条（覆盖上游全部写动词）", () => {
-	assert.equal(MININET_ROUTES.filter((route) => route.method !== "GET").length, 37);
+check("写端点 40 条、查询端点 24 条（覆盖上游全部写动词）", () => {
+	assert.equal(MININET_ROUTES.filter((route) => route.method !== "GET").length, 40);
 	assert.equal(MININET_ROUTES.filter((route) => route.method === "GET").length, 24);
 });
 
@@ -173,6 +183,19 @@ check("抓包启停只认 lab:sniffer（不被 lab:operate 隐含）", () => {
 	for (const template of ["/sniffer/start", "/sniffer/stop"]) {
 		const route = MININET_ROUTES.find((item) => item.template === template);
 		assert.deepEqual([...(route?.permissions ?? [])], [LAB_PERMISSIONS.SNIFFER]);
+	}
+});
+
+check("SNMP 凭据三个写端点只认 lab:snmp（NMCPS-ADR-0028 §6 D10）", () => {
+	for (const [template, method] of [["/snmp/onboard", "POST"], ["/snmp/rotate", "POST"], ["/snmp/credentials", "DELETE"]] as const) {
+		const route = MININET_ROUTES.find((item) => item.template === template && item.method === method);
+		assert.ok(route, `缺少写端点 ${method} ${template}`);
+		assert.deepEqual([...route!.permissions], [LAB_PERMISSIONS.SNMP]);
+	}
+	// 读端点仍是 lab:read：凭据面不开新的读权限（D9 的密文不回传由上游保证）
+	for (const template of ["/snmp/state", "/snmp/topology"]) {
+		const route = MININET_ROUTES.find((item) => item.template === template);
+		assert.deepEqual([...(route?.permissions ?? [])], [LAB_PERMISSIONS.READ]);
 	}
 });
 

@@ -8,7 +8,8 @@
 //   五标签切换 → 真提示符 → 算术执行 →
 //   方向键行内编辑 → `Ctrl-L` 清屏后仍可用 → 粘贴整段执行 → `Ctrl+V` 不留 `v` →
 //   切标签不拆 socket → 收起右栏全断 → 双击链路改带宽（W13）并回读上游属性 →
-//   真后端 iperf 收尾并回读两侧读数（2026-11-23 补的 D1 缺口）。
+//   真后端 iperf 收尾并回读两侧读数（2026-11-23 补的 D1 缺口）→
+//   真机 SNMP v2c：部署默认串 snmpwalk 到对端、开通 / 轮换 / 吊销后新旧串的应答差异（11.16）。
 //
 // 门禁：默认**不跑**（脚本会建 h1 / h2 与一条链路、起停一个真网络），必须显式开门：
 //   CHECK_REAL_MININET=1 pnpm check:lab-real
@@ -23,7 +24,7 @@
 //   LAB_API_TOKEN=<token> REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root
 // 前置：`pnpm build:server`（消费 `.output/server/index.mjs`）+ 一个**空**的真后端
 // （`GET /api/mininet/start` 为 false 且 hosts / switches / routers / nats / controllers 全空）。
-// root 整跑（tc 那一层不再跳过，共 19 项）：`sudo -A env PATH=… CHECK_REAL_MININET=1 … node <本文件>`，
+// root 整跑（tc 与 SNMP 两层不再跳过，共 21 项）：`sudo -A env PATH=… CHECK_REAL_MININET=1 … node <本文件>`，
 // 完整命令见 `.clinerules/09-local-sudo.md`；`sudo` 会重置环境变量，所以那几个变量得跟在 `env` 之后。
 // 结束时脚本自己收尾：停网络、删掉它建的 `h1` / `h2`（连带那条自建链路）、删临时台账；
 // 不碰别人正在跑的拓扑 —— 所以空实例守卫是硬门，别为了「跑通」把它去掉。
@@ -145,6 +146,8 @@ const created = await call("POST", "/api/mininet/hosts", {
 	mac: "00:00:00:00:00:01"
 });
 let networkStarted = false;
+/** 11.16 自己开通的 SNMP 凭据：收尾必须吊销，把实例还原成部署默认串 */
+let snmpCredentialCreated = false;
 if (!created.ok) {
 	console.log(`❌ 建 ${NODE_ID} 失败（${created.status}）：${created.text.slice(0, 120)}`);
 	process.exit(1);
@@ -458,6 +461,86 @@ try {
 		+ ` h1进程=${pidBeforeRestart}→${pidAfterRestart} 运行中=${restartedForReal} 徽章=${afterRestart.badge}`
 	);
 
+	/*
+	 * SNMP v2c 真机验收（`NMCPS-ADR-0028` §6.3 的「Real machine」那一行，页面侧见 §7）：
+	 * agent 绑在**主机自己的 netns** 里（`10.0.0.2:161`），根 netns 没有 10.0.0.0/24 的地址，
+	 * 所以探针必须从另一台主机的 netns 发 —— `nsenter -t <h1 pid> -n snmpwalk …`，与 tc 那条
+	 * 断言踩的是同一个坑（见 `.clinerules/09-local-sudo.md`）。
+	 *
+	 * 凭据只从写端点的响应里出现一次（D9），而读端点在有凭据时把 `community` 置 `null`，
+	 * 所以这里只在**未开通**的实例上跑：自己开通 → 验串 → 轮换 → 验新串 / 旧串失效 → 吊销
+	 * → 部署默认串回来。已开通的实例上密文不可读，脚本不替运维轮换自己的凭据。
+	 */
+	const snmpWalkFrom = (hostPid, community, target) => {
+		try {
+			const out = execFileSync(
+				"nsenter",
+				["-t", String(hostPid), "-n", "snmpwalk", "-v2c", "-c", community, "-On", "-t", "1", "-r", "0", target, "1.3.6.1.2.1.1.5.0"],
+				{ encoding: "utf8", timeout: 20000 }
+			);
+			return { ok: true, out: out.trim(), sysName: /STRING: "?([^"\n]*)"?/.exec(out)?.[1] ?? "" };
+		} catch (error) {
+			return { ok: false, out: `${error.stdout ?? ""}${error.stderr ?? ""}`.trim(), sysName: "" };
+		}
+	};
+	const snmpState = await call("GET", "/api/mininet/snmp/state");
+	const snmpAgents = snmpState.json?.nodes ?? [];
+	const snmpH1 = snmpAgents.find((entry) => entry.id === NODE_ID);
+	const snmpH2 = snmpAgents.find((entry) => entry.id === NODE_ID_2);
+	const snmpRunnable = process.getuid?.() === 0
+		&& existsSync("/usr/bin/snmpwalk")
+		&& snmpState.ok && snmpState.json?.enabled === true && snmpState.json?.onboarded === false
+		&& typeof snmpH1?.pid === "number" && typeof snmpH2?.ip === "string";
+	if (snmpRunnable) {
+		const deployed = String(snmpState.json.community ?? "");
+		const baseline = snmpWalkFrom(snmpH1.pid, deployed, snmpH2.ip);
+		log(
+			"11.16 真机 SNMP：部署默认串从 h1 的 netns 走 h2:161 读回 sysName",
+			baseline.ok && baseline.sysName === NODE_ID_2,
+			`后端=${snmpState.json.community_source} 目标=${snmpH2.ip} 读数=${JSON.stringify(baseline.out.slice(0, 80))}`
+		);
+
+		// 开通：密文只在响应里，agent 全量重启后新串必须能读、部署默认串必须失效
+		const onboard = await call("POST", "/api/mininet/snmp/onboard", {}, 30000);
+		const secret = typeof onboard.json?.community === "string" ? onboard.json.community : "";
+		snmpCredentialCreated = secret.length > 0;
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		const withSecret = secret ? snmpWalkFrom(snmpH1.pid, secret, snmpH2.ip) : { ok: false, out: "", sysName: "" };
+		const deployedRejected = snmpWalkFrom(snmpH1.pid, deployed, snmpH2.ip);
+
+		// 轮换：版本 +1、拿到另一份密文，上一版必须失效（旧 agent 没被回收就会在这里露出来）
+		const rotated = await call("POST", "/api/mininet/snmp/rotate", {}, 30000);
+		const secret2 = typeof rotated.json?.community === "string" ? rotated.json.community : "";
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		const withSecret2 = secret2 ? snmpWalkFrom(snmpH1.pid, secret2, snmpH2.ip) : { ok: false, out: "", sysName: "" };
+		const previousRejected = secret ? snmpWalkFrom(snmpH1.pid, secret, snmpH2.ip) : { ok: false, out: "", sysName: "" };
+
+		// 吊销：agent 回落部署默认串（D12），读端点回到 `onboarded: false`
+		const revoked = await call("DELETE", "/api/mininet/snmp/credentials", undefined, 30000);
+		if (revoked.ok)
+			snmpCredentialCreated = false;
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		const backToDeployed = snmpWalkFrom(snmpH1.pid, deployed, snmpH2.ip);
+		const afterRevoke = await call("GET", "/api/mininet/snmp/state");
+		log(
+			"11.16 真机 SNMP 凭据：开通串可读且旧串无应答；轮换换串、上一版失效；吊销回部署串",
+			onboard.status === 200 && secret.startsWith("sim-") && withSecret.ok
+			&& withSecret.sysName === NODE_ID_2 && !deployedRejected.ok
+			&& rotated.status === 200 && rotated.json?.credential_version === 2
+			&& secret2.length > 0 && secret2 !== secret && withSecret2.sysName === NODE_ID_2 && !previousRejected.ok
+			&& revoked.ok && backToDeployed.ok && afterRevoke.json?.onboarded === false,
+			`开通=${onboard.status} 开通串=${JSON.stringify(withSecret.out.slice(0, 40))} 旧串=${deployedRejected.ok ? "仍有应答" : "无应答"}`
+			+ ` 轮换=${rotated.status} 版本=${rotated.json?.credential_version} 新串=${JSON.stringify(withSecret2.out.slice(0, 40))}`
+			+ ` 上一版=${previousRejected.ok ? "仍有应答" : "无应答"}`
+			+ ` 吊销=${revoked.status} 回部署串=${backToDeployed.ok} onboarded=${afterRevoke.json?.onboarded}`
+		);
+	} else {
+		console.log(`⏭  跳过真机 SNMP 断言：要 root + \`/usr/bin/snmpwalk\` + 后端 \`LAB_SNMP_ENABLED=1\` 且凭据未开通（已开通时密文不可读，脚本不覆盖运维自己的凭据）`
+			+ ` —— uid=${process.getuid?.()} snmpwalk=${existsSync("/usr/bin/snmpwalk")}`
+			+ ` 状态=${snmpState.status} enabled=${snmpState.json?.enabled} onboarded=${snmpState.json?.onboarded}`
+			+ ` agents=${JSON.stringify((snmpState.json?.nodes ?? []).map((entry) => ({ id: entry.id, pid: entry.pid, ip: entry.ip, status: entry.status })))}`);
+	}
+
 	log("右栏能切到 Webshell 标签", await openSideTab("Webshell"));
 
 	// ── 真 PTY：提示符由 bash（`PS1` 由上游设置）打印 ──
@@ -710,7 +793,10 @@ try {
 	await browser.close();
 	await stopBff(bff);
 	await closeUpstream(upstream);
-	// 收尾真后端：停网络（同时终止 PTY）→ 删掉自建的节点（链路随节点一起从台账消失）→ 删临时台账
+	// 收尾真后端：吊销 11.16 开通的凭据（回到部署默认串）→ 停网络（同时终止 PTY）→
+	// 删掉自建的节点（链路随节点一起从台账消失）→ 删临时台账
+	if (snmpCredentialCreated)
+		await call("DELETE", "/api/mininet/snmp/credentials").catch(() => undefined);
 	if (networkStarted)
 		await call("POST", "/api/mininet/stop").catch(() => undefined);
 	await call("DELETE", `/api/mininet/delete_node/${NODE_ID}`).catch(() => undefined);

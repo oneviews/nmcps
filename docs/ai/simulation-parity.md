@@ -127,7 +127,7 @@
 
 | 端点 | 语义 | 本仓 | 档 | 目标 |
 |---|---|---|---|---|
-| `POST /snmp/topology` | 生成可供 NMS 采集的 SNMP 拓扑 | 部分（`GET /api/mininet/snmp/topology` 台账投影 + 每节点 netns 内只读 v2c agent，`snmp/inventory.py` / `snmp/agent.py`，`NMCPS-ADR-0028`；写面未开） | **P0**（M2 首增量已落：`snmp/state` + `snmp/topology` 两端点） | 写面（onboard / v3）按 `lab:snmp` 另开增量 |
+| `POST /snmp/topology` | 生成可供 NMS 采集的 SNMP 拓扑 | 部分（`GET /api/mininet/snmp/topology` 台账投影 + 每节点 netns 内只读 v2c agent，`snmp/inventory.py` / `snmp/agent.py`，`NMCPS-ADR-0028`；写面已开单份 v2c 凭据：`POST /api/mininet/snmp/onboard` / `rotate` / `DELETE /credentials`，`lab:snmp`，`snmp/credentials.py`） | **P0**（M2 首增量已落：`snmp/state` + `snmp/topology` 两端点；第二增量已落凭据写面） | v3 与多账户按 `lab:snmp` 另开增量 |
 | `GET /snmp/tools` | 采集工具可用性 | — | P1 | `snmpwalk`/`snmpget` 探测 |
 | `POST/GET /snmp/onboard` | 开通/查询采集凭据 | — | P1 | `snmp/onboard.py`（含 v2c/v3） |
 | `GET /snmp/onboard/live` | 在线状态 | — | P1 | — |
@@ -227,7 +227,7 @@
 |---|---|---|
 | **M0 骨架** | 引擎注册表（`registry` + `base` + `dryrun`）、会话层、BFF 远程化（token + `/api/version` 握手）、`engines/{wired,wireless}` 分层与静态守卫 | `pnpm contracts:gen` + `pnpm check:lab-bff`（远端 baseUrl 用例）；**无 root 的 `dryrun` 引擎能让 CI 跑通全链路** |
 | **M1 有线全量** | §2.1 与 §2.2 的 P0（统一 node、runtime-inventory、metrics 基础、connectivity 矩阵；LLDP 已撤销，见 §五之三） | `check:lab-real`（90 真机）+ 前端拓扑/场景页端到端 |
-| **M2 SNMP 面** | `snmp/topology` + MIB 投影（按 7 类分批）、`snmp/onboard` | 外部 `snmpwalk` 取到一致 OID；`check:lab-bff` 加 SNMP 用例 |
+| **M2 SNMP 面** | `snmp/topology` + MIB 投影（按 7 类分批）、`snmp/onboard`（单份 v2c 凭据：开通 / 轮换 / 吊销 + `apply_credentials()` 重启） | 外部 `snmpwalk` 取到一致 OID；开通后用它采到、吊销后回落部署默认串；`check:lab-bff` ⑰ + `check:snmp` 凭据块 |
 | **M3 无线 + 频谱** | hwsim + `hostapd` + `radio` 读写 + `wireless-nodes`；频谱页（冲突检测纯函数 + 一键消解） | 改信道 → 回读一致 → 冲突消失；`check:lab-real` 增加无线用例（root） |
 | **M4 传输** | `links/{id}/tc`、链路动作、弱网（P1） | tc 类 `rate` 与请求值一致（需 root 断言） |
 | **M5 编排** | `configs/*`、`runtime/preview`、`build-plan`、`boot-progress` | 场景导入 → 预演 → 建网 → 进度可见 |

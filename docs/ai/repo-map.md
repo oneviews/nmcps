@@ -47,7 +47,7 @@ BFF 与上游**前缀同形**（`NMCPS-ADR-0022` D11）：同一串 `/api/minine
 | `pnpm check:lab-run` | 校验运行控制纯函数（运行态三态 / iperf 校验与请求体 / pingall 与 iperf 文本化） |
 | `pnpm check:lab-ws` | 校验 `/mininet-ws/*` 纯函数（四通道登记表 / `target` 形状 / 上游地址 / 票归一 / 监控帧 / PTY 文本清洗） |
 | `pnpm check:lab-terminal` | 校验 Webshell 按键 → PTY 字节的等价性（真 `bash` + 伪终端，需 POSIX；裁决见 `NMCPS-ADR-0025`） |
-| `pnpm check:lab-real` | 真 Mininet 端到端手验（五标签右栏 + 真 PTY 键盘）；默认跳过，`CHECK_REAL_MININET=1` 才跑，需要 root 后端 `:8000` 与 `build:server` |
+| `pnpm check:lab-real` | 真 Mininet 端到端手验（五标签右栏 + 真 PTY 键盘 + 真 iperf + 真 `snmpwalk`）；默认跳过，`CHECK_REAL_MININET=1` 才跑，需要 root 后端 `:8000` 与 `build:server` |
 | `pnpm check:lab-real:root` | 同一手验的提权包装（`layers/scenario/scripts/check-lab-real-root.mjs`）：组装 `PATH` / `CHECK_REAL_MININET` / `REAL_MININET_BASE` 后走 `sudo -A env`，root 下 tc 层真断言 |
 | `pnpm contracts:gen` | 重新生成 Mininet OpenAPI 快照 |
 | `pnpm contracts:check` | 校验快照是否过期 |

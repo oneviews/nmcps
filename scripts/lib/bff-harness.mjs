@@ -555,6 +555,68 @@ export async function startUpstream(port) {
 		.find((bucket) => Object.hasOwn(mininetState[bucket], id));
 
 	/**
+	 * SNMP 凭据（`NMCPS-ADR-0028` §7）：假上游只保留**编排**的那一份。
+	 * `state` 里的 `community` 只在未开通时回部署默认串 —— 与上游 D9 同口径，
+	 * 已开通的密文仅在开通 / 轮换的响应里出现一次。
+	 */
+	const mininetSnmp = {
+		enabled: true,
+		port: 161,
+		onboarded: false,
+		version: 0,
+		community: null,
+		createdAt: null,
+		rotatedAt: null,
+		seq: 0
+	};
+	const mininetSnmpNodesOf = () => mininetRun.started
+		? Object.entries(mininetState.hosts).map(([id, host]) => ({
+			id,
+			type: "host",
+			ip: host.ip ?? null,
+			pid: 1000,
+			port: mininetSnmp.port,
+			status: "running",
+			error: null
+		}))
+		: [];
+	const mininetSnmpStateOf = () => ({
+		enabled: mininetSnmp.enabled,
+		running: mininetRun.started,
+		port: mininetSnmp.port,
+		community: mininetSnmp.onboarded ? null : "public",
+		community_source: mininetSnmp.onboarded ? "credential" : "deployment",
+		onboarded: mininetSnmp.onboarded,
+		credential_version: mininetSnmp.onboarded ? mininetSnmp.version : null,
+		credential_created_at: mininetSnmp.onboarded ? mininetSnmp.createdAt : null,
+		credential_rotated_at: mininetSnmp.onboarded ? mininetSnmp.rotatedAt : null,
+		credential_error: null,
+		started_at: mininetRun.started ? 1 : null,
+		error: null,
+		nodes: mininetSnmpNodesOf()
+	});
+	/** 开通 / 轮换共用一个生成器：每次换串，页面据此断言「轮换确实换了值」 */
+	const mininetSnmpOnboard = () => {
+		mininetSnmp.seq += 1;
+		mininetSnmp.community = `sim-checkui-${String(mininetSnmp.seq).padStart(8, "0")}`;
+		mininetSnmp.onboarded = true;
+		mininetSnmp.version += 1;
+		const now = `2026-11-26T00:00:0${mininetSnmp.version}Z`;
+		mininetSnmp.createdAt ??= now;
+		if (mininetSnmp.version > 1)
+			mininetSnmp.rotatedAt = now;
+		return {
+			community: mininetSnmp.community,
+			onboarded: true,
+			credential_version: mininetSnmp.version,
+			created_at: mininetSnmp.createdAt,
+			rotated_at: mininetSnmp.rotatedAt,
+			applied: true,
+			nodes: mininetSnmpNodesOf()
+		};
+	};
+
+	/**
 	 * 交换机流表（ADR-0022 W2b）：`{ sw1: [ "<原文行>", … ] }`，行序即上游
 	 * `DELETE /flows/{sw}/{flow_id}` 的 1 基序号。故意**不放进 `mininetState`** ——
 	 * 那里每个键都会落进「单段路径 = 集合」的分支，`GET /flows` 会被误当成集合读。
@@ -772,7 +834,10 @@ export async function startUpstream(port) {
 		{ id: "r_lab_sniffer", tenant_id: "t_default", name: "实验台抓包", code: "lab_sniffer", description: "抓包启停与 pcap 下载（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T10:00:00+08:00", updated_at: "2026-11-16T10:00:00+08:00", deleted_at: null },
 		// 终端授权（NMCPS-ADR-0022 D6）：与抓包同一条纪律 —— 没有这条角色，自检账号的
 		// Network Tools 里只会有日志 / 监控两个标签页，Webshell 的正向分支永远测不到。
-		{ id: "r_lab_terminal", tenant_id: "t_default", name: "实验台终端", code: "lab_terminal", description: "Webshell 进入节点终端（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-17T10:00:00+08:00", updated_at: "2026-11-17T10:00:00+08:00", deleted_at: null }
+		{ id: "r_lab_terminal", tenant_id: "t_default", name: "实验台终端", code: "lab_terminal", description: "Webshell 进入节点终端（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-17T10:00:00+08:00", updated_at: "2026-11-17T10:00:00+08:00", deleted_at: null },
+		// SNMP 凭据（NMCPS-ADR-0028 §6 D10）：`lab:snmp` 同样单独授予 —— 自检账号没有这条
+		// 角色时，SNMP 弹窗的写按钮永远不渲染，「已开通再开通回 409」这类分支测不到。
+		{ id: "r_lab_snmp", tenant_id: "t_default", name: "实验台 SNMP", code: "lab_snmp", description: "SNMP 凭据开通 / 轮换 / 吊销（NMCPS-ADR-0028 D10）", enabled: true, is_system: false, created_at: "2026-11-26T10:00:00+08:00", updated_at: "2026-11-26T10:00:00+08:00", deleted_at: null }
 	];
 
 	/**
@@ -794,6 +859,8 @@ export async function startUpstream(port) {
 		{ id: "sr-alice-sniffer", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_sniffer", created_at: "2026-11-16T10:00:00+08:00" },
 		// 终端单独授权（D6）：同上，`lab:terminal` 也不由 `tenant_admin` 推导
 		{ id: "sr-alice-terminal", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_terminal", created_at: "2026-11-17T10:00:00+08:00" },
+		// SNMP 单独授权（D10）：`lab:snmp` 不由 `tenant_admin` 推导
+		{ id: "sr-alice-snmp", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_snmp", created_at: "2026-11-26T10:00:00+08:00" },
 		{ id: "sr-bob", subject_type: "user", subject_id: "u_bob", role_id: "r_tenant_admin", created_at: "2026-11-04T09:01:00+08:00" },
 		{ id: "sr-orphan", subject_type: "user", subject_id: "u_ghost", role_id: "r_tenant_admin", created_at: "2026-11-04T09:02:00+08:00" }
 	];
@@ -2243,6 +2310,30 @@ export async function startUpstream(port) {
 					return send(200, { status: "ok" });
 				}
 
+				// SNMP 凭据（NMCPS-ADR-0028 §7）：三条写的成败与真实上游同口径 ——
+				// 已开通再开通 409、未开通轮换 / 吊销 404，页面据此区分「按钮点错」与「网挂错」。
+				if (collection === "snmp" && segments[1] === "onboard") {
+					if (mininetSnmp.onboarded)
+						return send(409, { detail: "snmp_credentials_exist" });
+					return send(200, mininetSnmpOnboard());
+				}
+
+				if (collection === "snmp" && segments[1] === "rotate") {
+					if (!mininetSnmp.onboarded)
+						return send(404, { detail: "snmp_credentials_missing" });
+					return send(200, mininetSnmpOnboard());
+				}
+
+				if (req.method === "DELETE" && collection === "snmp" && segments[1] === "credentials") {
+					if (!mininetSnmp.onboarded)
+						return send(404, { detail: "snmp_credentials_missing" });
+					mininetSnmp.onboarded = false;
+					mininetSnmp.community = null;
+					mininetSnmp.createdAt = null;
+					mininetSnmp.rotatedAt = null;
+					return send(200, { ...mininetSnmpStateOf(), applied: true });
+				}
+
 				// 流表（ADR-0022 W2b）：三条写都真改表 —— 页面写完重读 `GET /flows/{sw}`
 				// 必须看得见变化，否则「加流成功」就成了空口断言。
 				if (collection === "flows") {
@@ -2433,6 +2524,10 @@ export async function startUpstream(port) {
 				});
 				return res.end(mininetSniffer.pcap);
 			}
+			// SNMP 读数（NMCPS-ADR-0028 §7）：`community` 只回部署默认串，
+			// 已开通时恒 `null` —— 页面若试图从 state 里取密文，这里会立刻暴露。
+			if (segments[0] === "snmp" && segments[1] === "state")
+				return send(200, mininetSnmpStateOf());
 			// 地址规划（ADR-0022 W9）：真实上游在**未启动**时回 400（`network must be started`），
 			// 正文是 `{ generated_at, nodes: [{ id, type, intfs: [{ name, mac, ipv4, ipv6 }] }] }`。
 			// 形状照抄上游：页面把它原样落成 JSON 下载，这里少一个字段，「正文即上游原文」
@@ -2655,6 +2750,7 @@ export async function startUpstream(port) {
 	server.mininetLinkState = mininetLinkState;
 	server.mininetRun = mininetRun;
 	server.mininetSniffer = mininetSniffer;
+	server.mininetSnmp = mininetSnmp;
 	// 抓包实时流（NMCPS-ADR-0022 D6）：连上就推 `MININET_SNIFFER_LIVE` 那两帧
 	server.mininetSocketLog = attachSnifferSocket(server, { events: MININET_SNIFFER_LIVE });
 

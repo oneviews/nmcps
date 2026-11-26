@@ -325,6 +325,12 @@ async function startMininet(port) {
 	};
 
 	/**
+	 * SNMP 凭据态（NMCPS-ADR-0028 §6）：`onboarded` + 递增 `version` 让 ⑰ 能区分
+	 * 「开通 → 409 重复」「轮换 → 版本 +1」「未开通轮换 / 吊销 → 404」三种真后端形状。
+	 */
+	const snmp = { onboarded: false, version: 0 };
+
+	/**
 	 * iperf 应答（NMCPS-ADR-0026 §5）：默认回真后端的成功形状 `{ client, server }`；
 	 * `reply` 可切成真后端会回的失败形状（504 客户端超时 / 409 已在跑），供 BFF 层取证
 	 * 「状态码与上游原话原样透传」。
@@ -568,6 +574,31 @@ async function startMininet(port) {
 			return send(200, { active: sniffer.active });
 		}
 
+		// SNMP 凭据面（NMCPS-ADR-0028 §6 D11/D12）：形状与真实后端一致 ——
+		// 开通 / 轮换回**一次性**社区串 + 版本号，重复开通 409、未开通轮换 / 吊销 404。
+		// 「写盘 → 重启 agent」由上游负责；BFF 只转发并透传状态码，因此这里只需状态机。
+		if (path === "/api/mininet/snmp/onboard" && req.method === "POST") {
+			if (snmp.onboarded)
+				return send(409, { detail: "snmp credentials already exist" });
+			snmp.onboarded = true;
+			snmp.version += 1;
+			return send(200, { status: "ok", community: `community-${snmp.version}`, version: snmp.version });
+		}
+
+		if (path === "/api/mininet/snmp/rotate" && req.method === "POST") {
+			if (!snmp.onboarded)
+				return send(404, { detail: "snmp credentials missing" });
+			snmp.version += 1;
+			return send(200, { status: "ok", community: `community-${snmp.version}`, version: snmp.version });
+		}
+
+		if (path === "/api/mininet/snmp/credentials" && req.method === "DELETE") {
+			if (!snmp.onboarded)
+				return send(404, { detail: "snmp credentials missing" });
+			snmp.onboarded = false;
+			return send(200, { status: "ok", revoked: true });
+		}
+
 		// pcap 下载：真实后端回 `Response(content=…, media_type="application/vnd.tcpdump.pcap")`
 		if (path === "/api/mininet/sniffer/export" && req.method === "GET") {
 			res.writeHead(200, {
@@ -712,6 +743,8 @@ async function startMininet(port) {
 	// 台账对账（⑭）要能直接铺上游事实 / 注入读失败，暴露可变拓扑
 	server.topology = topology;
 	server.sniffer = sniffer;
+	// SNMP 凭据态（NMCPS-ADR-0028 §6）：⑰ 直接读 / 复位上游事实
+	server.snmp = snmp;
 	// 运行态 / 延迟注入（NMCPS-ADR-0026 D1 / D4）：⑮ 要直接改上游事实
 	server.runState = runState;
 	server.delays = delays;
@@ -739,6 +772,7 @@ async function startIam(port) {
 		erin: { id: "u_reader", username: "erin", tenantId: "t_lab", roleId: "r_user" },
 		frank: { id: "u_terminal", username: "frank", tenantId: "t_lab", roleId: "r_terminal" },
 		grace: { id: "u_sniffer", username: "grace", tenantId: "t_lab", roleId: "r_sniffer" },
+		ivy: { id: "u_snmp", username: "ivy", tenantId: "t_lab", roleId: "r_snmp" },
 		platform: { id: "u_platform", username: "platform", tenantId: null, roleId: "r_platform" }
 	};
 	const roles = {
@@ -747,6 +781,7 @@ async function startIam(port) {
 		r_user: { code: "tenant_user", tenantId: "t_lab" },
 		r_terminal: { code: "lab_terminal", tenantId: "t_lab" },
 		r_sniffer: { code: "lab_sniffer", tenantId: "t_lab" },
+		r_snmp: { code: "lab_snmp", tenantId: "t_lab" },
 		r_platform: { code: "platform_admin", tenantId: null }
 	};
 	const state = { failRoles: false, log: [] };
@@ -876,7 +911,7 @@ async function startIam(port) {
 
 	log("⓪ 白名单条目可从源码抽取（抽取为空即红）", whitelist.length > 0, `${whitelist.length} 条`);
 	log("⓪ 查询端点 24 条且权限位都是 lab:read", reads.length === 24 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
-	log("⓪ 写端点 37 条且都带非读权限位", writes.length === 37 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 写端点 40 条且都带非读权限位", writes.length === 40 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
 	log("⓪ full_reset / import_json 为双权限（lab:delete + lab:create）", dual.length === 2 && dual.every((entry) => entry.permissions.includes("lab:delete") && entry.permissions.includes("lab:create")), dual.map((entry) => `${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无");
 	log("⓪ 白名单 ⊆ Mininet OpenAPI 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.map((entry) => `${entry.method} ${entry.upstream}`).join(", ") || `${whitelist.length}/${whitelist.length}`);
 }
@@ -899,7 +934,7 @@ try {
 
 		const channel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
 		log("① 未配租户实例的 channel 仍 200 且 configured=false", channel.status === 200 && channel.json?.data?.configured === false, `${channel.status} ${describe(channel.json?.data?.configured)}`);
-		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.endpointCount === 61, describe(channel.json?.data));
+		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包/SNMP 仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.capabilities?.snmp === false && channel.json?.data?.endpointCount === 64, describe(channel.json?.data));
 		log("① channel 不回传 baseUrl", !JSON.stringify(channel.json ?? {}).includes(mininetBase), describe(channel.json?.data));
 
 		const noPath = await request(port, "/api/mininet");
@@ -1935,6 +1970,107 @@ try {
 			"⑯ 会话写端点进审计（post /sessions 有 allowed + succeeded）",
 			audit.some((entry) => entry.result === "allowed") && audit.some((entry) => entry.result === "succeeded"),
 			`entries=${audit.length}`
+		);
+	});
+
+	// ⑰ SNMP 凭据面（`NMCPS-ADR-0028` §6 D8–D12）：三个写端点只认 `lab:snmp`，
+	// 能力位独立授权（不由 operate / create 推导），租户管理员一律 403 且不触达上游。
+	//
+	// 假上游只维护「已开通 / 版本号」状态机：断言的是 BFF 的权限位分档与状态码透传，
+	// 真后端的写盘 / 0600 权限 / agent 重启由 `pnpm check:snmp` 覆盖。
+	const snmpLedgerFile = `.data/check-lab-bff-snmp-${process.pid}.json`;
+	rmSync(snmpLedgerFile, { force: true });
+	mininet.snmp.onboarded = false;
+	mininet.snmp.version = 0;
+
+	const snmpWrites = ["/snmp/onboard", "/snmp/rotate", "/snmp/credentials"];
+	const snmpRoutes = whitelist.filter((entry) => snmpWrites.includes(entry.template));
+	const snmpReads = whitelist.filter((entry) => entry.template === "/snmp/state" || entry.template === "/snmp/topology");
+	log(
+		"⑰ 3 条 SNMP 凭据写端点只登记 lab:snmp（读端点仍 lab:read）",
+		snmpRoutes.length === 3
+		&& snmpRoutes.every((entry) => entry.permissions.join() === "lab:snmp")
+		&& snmpReads.length === 2
+		&& snmpReads.every((entry) => entry.permissions.join() === "lab:read"),
+		`writes=${snmpRoutes.map((entry) => `${entry.method} ${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无"} reads=${snmpReads.length}`
+	);
+
+	await withBff(labEnv({
+		NUXT_MININET_INSTANCES: JSON.stringify({ [LAB_TENANT]: { baseUrl: mininetBase } }),
+		NUXT_LAB_LEDGER_FILE: snmpLedgerFile,
+		NUXT_LAB_LEDGER_SEED: JSON.stringify([{ ...DEFAULT_LEDGER[0], id: "net_snmp", resources: { nodes: [], links: [] } }])
+	}), async (port) => {
+		const snmpUser = await login(port, "ivy");
+		const snmpChannel = await request(port, "/api/mininet/channel", { cookie: snmpUser.cookie });
+		const capabilities = snmpChannel.json?.data?.capabilities ?? {};
+		const bits = Object.entries(capabilities).filter(([, granted]) => granted === true).map(([name]) => name);
+		log(
+			"⑰ lab_snmp 的 channel 与租户管理员恰好差一个能力位（只有 snmp=true，且 writeEnabled）",
+			snmpChannel.status === 200
+			&& capabilities.snmp === true
+			&& bits.join() === "read,snmp"
+			&& snmpChannel.json?.data?.writeEnabled === true
+			&& snmpChannel.json?.data?.readOnly === false
+			&& snmpChannel.json?.data?.endpointCount === 64,
+			`${snmpChannel.status} bits=${describe(bits)}`
+		);
+
+		const admin = await login(port);
+		const adminBefore = mininet.log.length;
+		const denied = await request(port, "/api/mininet/snmp/onboard", {
+			cookie: admin.cookie,
+			method: "POST",
+			body: JSON.stringify({})
+		});
+		const adminTouched = mininet.log.length - adminBefore;
+		log(
+			"⑰ 租户管理员（无 lab:snmp）→ 403 lab_permission_denied 且零上游请求",
+			denied.status === 403 && denied.json?.message === "lab_permission_denied" && adminTouched === 0,
+			`${denied.status} ${describe(denied.json?.message)} upstream=${adminTouched}`
+		);
+
+		const before = mininet.log.length;
+		const onboarded = await request(port, "/api/mininet/snmp/onboard", {
+			cookie: snmpUser.cookie,
+			method: "POST",
+			body: JSON.stringify({})
+		});
+		const onboardHit = mininet.log.slice(before).filter((entry) => entry.method === "POST" && entry.path === "/api/mininet/snmp/onboard");
+		log(
+			"⑰ lab:snmp 开通 → 200，出站 POST /api/mininet/snmp/onboard 且回一次性社区串",
+			onboarded.status === 200 && onboarded.json?.data?.community === "community-1" && onboardHit.length === 1,
+			`${onboarded.status} community=${describe(onboarded.json?.data?.community)} hits=${onboardHit.length}`
+		);
+
+		// 上一条 403 若曾摸到上游，这里会是 409（已存在）——所以「重复开通回 409」同时证明 403 真的没出站
+		const again = await request(port, "/api/mininet/snmp/onboard", { cookie: snmpUser.cookie, method: "POST", body: JSON.stringify({}) });
+		log(
+			"⑰ 重复开通 → 409 原样透传（上游 snmp_credentials_exist 不被折成 500）",
+			again.status === 409 && String(again.json?.message ?? "").includes("already exist"),
+			`${again.status} ${describe(again.json?.message)}`
+		);
+
+		const rotated = await request(port, "/api/mininet/snmp/rotate", { cookie: snmpUser.cookie, method: "POST", body: JSON.stringify({}) });
+		log(
+			"⑰ 轮换 → 200 且社区串变了、版本 +1",
+			rotated.status === 200 && rotated.json?.data?.version === 2 && rotated.json?.data?.community !== onboarded.json?.data?.community,
+			`${rotated.status} version=${describe(rotated.json?.data?.version)}`
+		);
+
+		const revokeBefore = mininet.log.length;
+		const revoked = await request(port, "/api/mininet/snmp/credentials", { cookie: snmpUser.cookie, method: "DELETE" });
+		const revokeHit = mininet.log.slice(revokeBefore).find((entry) => entry.method === "DELETE" && entry.path === "/api/mininet/snmp/credentials");
+		log(
+			"⑰ 吊销 → 200 revoked=true，出站 DELETE /api/mininet/snmp/credentials（无请求体）",
+			revoked.status === 200 && revoked.json?.data?.revoked === true && !!revokeHit && (revokeHit.body ?? "") === "",
+			`${revoked.status} ${revokeHit?.method} ${revokeHit?.path} body=${describe(revokeHit?.body)}`
+		);
+
+		const rotateAfter = await request(port, "/api/mininet/snmp/rotate", { cookie: snmpUser.cookie, method: "POST", body: JSON.stringify({}) });
+		log(
+			"⑰ 吊销后再轮换 → 404 原样透传（snmp_credentials_missing，不伪装成 400 / 500）",
+			rotateAfter.status === 404 && String(rotateAfter.json?.message ?? "").includes("missing"),
+			`${rotateAfter.status} ${describe(rotateAfter.json?.message)}`
 		);
 	});
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """SNMP 采集面自检（`NMCPS-ADR-0028`，M2 首增量）。
 
-只依赖标准库：不需要 root、不需要 mininet、不需要 net-snmp。覆盖五块 ——
+只依赖标准库：不需要 root、不需要 mininet、不需要 net-snmp。覆盖六块 ——
 BER / PDU 往返、MIB 投影与 GETNEXT 单调、节点档案抽取、回环 UDP 端到端
-（含错社区无响应）、真子进程入口（`-m … snmp.agent` 的参数解析 + SIGTERM + 端口释放）。
+（含错社区无响应）、真子进程入口（`-m … snmp.agent` 的参数解析 + SIGTERM + 端口释放）、
+单份 v2c 凭据的盘上事实与 `apply_credentials()` 重启面（`NMCPS-ADR-0028` §6）。
 真机 `snmpwalk` 验收不在本脚本里，见 ADR §5。
 """
 
@@ -24,7 +25,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "mininet-api"))
 
-from mininet_gui_backend.snmp import agent, ber, inventory  # noqa: E402
+from mininet_gui_backend.snmp import agent, ber, credentials, inventory  # noqa: E402
 from mininet_gui_backend.snmp import mib as snmp_mib  # noqa: E402
 from mininet_gui_backend.snmp import runtime as snmp_runtime  # noqa: E402
 
@@ -507,6 +508,212 @@ def check_runtime() -> None:
     )
 
 
+def _mode(path: Path) -> int:
+    return path.stat().st_mode & 0o777
+
+
+def _expect_error(fn):
+    """跑一次写操作，把异常原样返回（类型与 code 由调用方断言）。"""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 - 类型不对也要报出来
+        return exc
+    return None
+
+
+def check_credentials() -> None:
+    """单份 v2c 凭据（`NMCPS-ADR-0028` §6 D8–D12）。
+
+    断言的是**盘上的事实**与状态读数的一致性：0600 / 0700、`public_view()` 不含密文、
+    重复开通 409、未开通轮换 / 吊销 404、轮换版本 +1、吊销后回落部署默认串，
+    以及新串真的出现在 agent 的命令行上（`apply_credentials()`）。
+    """
+    previous = {
+        name: os.environ.get(name)
+        for name in ("LAB_SNMP_ENABLED", "LAB_SNMP_COMMUNITY", "LAB_SNMP_STATE_DIR")
+    }
+    original_popen = snmp_runtime.subprocess.Popen
+    original_which = snmp_runtime.shutil.which
+    original_geteuid = os.geteuid
+    captured: dict[str, list[list[str]]] = {"cmd": []}
+
+    class FakeProcess:
+        pid = 4242
+
+        def __init__(self, cmd, **_kwargs):
+            captured["cmd"].append(list(cmd))
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):  # noqa: ARG002 - 与 Popen 同形
+            return 0
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["LAB_SNMP_ENABLED"] = "1"
+            os.environ["LAB_SNMP_COMMUNITY"] = "deploy-community-1"
+            os.environ["LAB_SNMP_STATE_DIR"] = tmp
+            store = snmp_runtime.credential_store()
+            runtime = snmp_runtime.SnmpRuntime()
+
+            before = runtime.status()
+            log(
+                "未开通：状态回部署默认串且 community_source=deployment",
+                before.get("onboarded") is False
+                and before.get("community") == "deploy-community-1"
+                and before.get("community_source") == "deployment"
+                and before.get("credential_version") is None,
+                f"community={before.get('community')} source={before.get('community_source')}",
+            )
+
+            first = store.onboard()
+            path = snmp_runtime.credentials_path()
+            log(
+                "开通：凭据文件 0600、目录 0700、社区串为服务端生成的 sim- 前缀",
+                path.is_file()
+                and _mode(path) == 0o600
+                and _mode(path.parent) == 0o700
+                and str(first.get("community", "")).startswith(credentials.GENERATED_PREFIX)
+                and first.get("credential_version") == 1,
+                f"mode={oct(_mode(path))} dir={oct(_mode(path.parent))} version={first.get('credential_version')}",
+            )
+
+            view = store.public_view()
+            log(
+                "public_view() 不含密文（D9：读端点的读者只要 lab:read）",
+                "community" not in view
+                and view.get("onboarded") is True
+                and view.get("credential_version") == 1
+                and str(first.get("community")) not in json.dumps(view),
+                f"keys={sorted(view)}",
+            )
+
+            onboarded_status = runtime.status()
+            log(
+                "status() 开通后 community=None（密文不回传），source=credential",
+                onboarded_status.get("community") is None
+                and onboarded_status.get("community_source") == "credential"
+                and onboarded_status.get("onboarded") is True
+                and str(first.get("community")) not in json.dumps(onboarded_status),
+                f"source={onboarded_status.get('community_source')}",
+            )
+
+            duplicate = _expect_error(lambda: store.onboard())
+            log(
+                "重复开通 → CredentialExists（409 snmp_credentials_exist）",
+                isinstance(duplicate, credentials.CredentialExists)
+                and duplicate.status_code == 409
+                and duplicate.code == "snmp_credentials_exist",
+                f"error={type(duplicate).__name__}",
+            )
+
+            rotated = store.rotate()
+            record = snmp_runtime.credential_record() or {}
+            log(
+                "轮换：版本 +1、密文换新、rotated_at 落盘",
+                rotated.get("credential_version") == 2
+                and rotated.get("community") != first.get("community")
+                and bool(record.get("rotated_at"))
+                and record.get("created_at") == first.get("created_at"),
+                f"version={rotated.get('credential_version')}",
+            )
+
+            weak = {
+                value: _expect_error(lambda value=value: credentials.validate_community(value))
+                for value in ("public", "short", "has space")
+            }
+            named = credentials.validate_community("Mpls2026-lab")
+            log(
+                "弱串（默认串 / 太短 / 带空白）回 400 snmp_community_weak，可读强串放行",
+                all(isinstance(error, credentials.WeakCommunity) and error.status_code == 400 for error in weak.values())
+                and named == "Mpls2026-lab",
+                f"errors={','.join(type(error).__name__ for error in weak.values())}",
+            )
+            net = SimpleNamespace(nameToNode={"h1": StubNode("h1", "10.0.0.1", pid=4242)})
+            snmp_runtime.subprocess.Popen = FakeProcess
+            snmp_runtime.shutil.which = lambda _name: "/usr/bin/nsenter"
+            os.geteuid = lambda: 0
+            captured["cmd"].clear()
+            applied = runtime.apply_credentials(net)
+            first_cmd = captured["cmd"][0] if captured["cmd"] else []
+            log(
+                "apply_credentials() 全量重启，新串出现在 agent 命令行 --community 上",
+                applied.get("applied") is True
+                and "--community" in first_cmd
+                and first_cmd[first_cmd.index("--community") + 1] == rotated.get("community")
+                and applied.get("status", {}).get("community") is None,
+                f"applied={applied.get('applied')} argc={len(first_cmd)}",
+            )
+
+            explicit = store.rotate("Mpls2026-lab")
+            captured["cmd"].clear()
+            runtime.apply_credentials(net)
+            second_cmd = captured["cmd"][0] if captured["cmd"] else []
+            log(
+                "显式轮换的串同样进命令行，且旧串不再出现",
+                explicit.get("credential_version") == 3
+                and second_cmd[second_cmd.index("--community") + 1] == "Mpls2026-lab"
+                and str(rotated.get("community")) not in " ".join(second_cmd),
+                f"version={explicit.get('credential_version')}",
+            )
+
+            revoked = store.revoke()
+            after = runtime.status()
+            log(
+                "吊销：文件消失、状态回落部署默认串",
+                revoked.get("onboarded") is False
+                and not path.exists()
+                and after.get("community") == "deploy-community-1"
+                and after.get("community_source") == "deployment",
+                f"exists={path.exists()} source={after.get('community_source')}",
+            )
+
+            missing = {
+                "rotate": _expect_error(store.rotate),
+                "revoke": _expect_error(store.revoke),
+            }
+            log(
+                "未开通时轮换 / 吊销 → CredentialMissing（404 snmp_credentials_missing）",
+                all(
+                    isinstance(error, credentials.CredentialMissing)
+                    and error.status_code == 404
+                    and error.code == "snmp_credentials_missing"
+                    for error in missing.values()
+                ),
+                f"errors={','.join(sorted(str(error.code) for error in missing.values()))}",
+            )
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{not json", encoding="utf-8")
+            broken_view = store.public_view()
+            log(
+                "凭据文件损坏：状态里看得见 credential_error，采集回落部署默认串（不静默）",
+                broken_view.get("onboarded") is False
+                and broken_view.get("credential_error") == "snmp_credentials_unwritable"
+                and snmp_runtime.effective_community() == "deploy-community-1",
+                f"error={broken_view.get('credential_error')} community={snmp_runtime.effective_community()}",
+            )
+
+            log(
+                "凭据目录默认落在服务根的 .data/snmp 下（不放仓库根 / tmp）",
+                '".data" / "snmp"' in inspect.getsource(snmp_runtime.state_dir),
+                f"SERVICE_ROOT={snmp_runtime.SERVICE_ROOT}",
+            )
+    finally:
+        snmp_runtime.subprocess.Popen = original_popen
+        snmp_runtime.shutil.which = original_which
+        os.geteuid = original_geteuid
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def main() -> int:
     check_ber()
     table = check_mib()
@@ -515,6 +722,7 @@ def main() -> int:
     check_loopback(table)
     check_agent_process()
     check_runtime()
+    check_credentials()
 
     failed = [label for label, ok in results if not ok]
     print(f"\n结果：{len(results) - len(failed)} 通过 / {len(failed)} 失败")

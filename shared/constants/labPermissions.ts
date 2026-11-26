@@ -17,7 +17,8 @@ export const LAB_PERMISSIONS = {
 	OPERATE: "lab:operate",
 	DELETE: "lab:delete",
 	TERMINAL: "lab:terminal",
-	SNIFFER: "lab:sniffer"
+	SNIFFER: "lab:sniffer",
+	SNMP: "lab:snmp"
 } as const;
 
 export type LabPermission = (typeof LAB_PERMISSIONS)[keyof typeof LAB_PERMISSIONS];
@@ -27,6 +28,7 @@ export const LAB_ROLE_CODES = {
 	TENANT_ADMIN: "tenant_admin",
 	LAB_TERMINAL: "lab_terminal",
 	LAB_SNIFFER: "lab_sniffer",
+	LAB_SNMP: "lab_snmp",
 	PLATFORM_ADMIN: "platform_admin"
 } as const;
 
@@ -77,7 +79,7 @@ export function hasLabTenantScope(principal: LabPrincipal): boolean {
  *
  * - 有租户 → 至少拥有 `lab:read`（D3 的租户普通用户默认值）；
  * - `tenant_admin` 仅在 `role.tenantId === principal.tenantId` 时生效；
- * - `lab_terminal` / `lab_sniffer` 只授予各自权限位，不隐含操作权限；
+ * - `lab_terminal` / `lab_sniffer` / `lab_snmp` 只授予各自权限位，不隐含操作权限；
  * - `platform_admin` 与未知角色一律不授予任何权限；
  * - 平台主体（`tenantId: null`）返回空集合（D5）。
  */
@@ -107,6 +109,10 @@ export function labPermissionsOf(principal: LabPrincipal): ReadonlySet<LabPermis
 				break;
 			case LAB_ROLE_CODES.LAB_SNIFFER:
 				permissions.add(LAB_PERMISSIONS.SNIFFER);
+				break;
+			case LAB_ROLE_CODES.LAB_SNMP:
+				// SNMP 凭据面（NMCPS-ADR-0028 §6 D10）：独立授权，不由 operate 推导
+				permissions.add(LAB_PERMISSIONS.SNMP);
 				break;
 			default:
 				// 未知角色 / platform_admin：不授予运行态权限

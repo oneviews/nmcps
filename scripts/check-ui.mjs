@@ -4767,7 +4767,7 @@ if (upstreamPort) {
 			channel?.status() === 200
 			&& channelJson?.data?.configured === true
 			&& channelJson?.data?.capabilities?.operate === true
-			&& channelJson?.data?.endpointCount === 61
+			&& channelJson?.data?.endpointCount === 64
 			&& !channelRaw.includes(String(upstreamPort)),
 			channel
 				? `${channel.status()} configured=${channelJson?.data?.configured} operate=${channelJson?.data?.capabilities?.operate} 端点=${channelJson?.data?.endpointCount} 泄露端口=${channelRaw.includes(String(upstreamPort))}`
@@ -5940,14 +5940,15 @@ if (upstreamPort) {
 
 		const fileItems = await fileMenuLabels();
 		log(
-			"11.5 工具栏最左的「文件」菜单：导入 / 导出 JSON / 导出脚本 / 导出 PNG / 地址规划 / 台账对账 / 设置七项齐全",
-			fileItems.length === 7
+			"11.5 工具栏最左的「文件」菜单：导入 / 导出 JSON / 导出脚本 / 导出 PNG / 地址规划 / 台账对账 / SNMP 采集 / 设置八项齐全",
+			fileItems.length === 8
 			&& fileItems.some((label) => label.includes("导入拓扑"))
 			&& fileItems.some((label) => label.includes("导出 JSON"))
 			&& fileItems.some((label) => label.includes("导出 Python 脚本"))
 			&& fileItems.some((label) => label.includes("导出拓扑 PNG"))
 			&& fileItems.some((label) => label.includes("导出地址规划"))
 			&& fileItems.some((label) => label.includes("台账对账"))
+			&& fileItems.some((label) => label.includes("SNMP 采集"))
 			&& fileItems.some((label) => label.includes("设置")),
 			`菜单项=${JSON.stringify(fileItems)}`
 		);
@@ -6362,6 +6363,7 @@ if (upstreamPort) {
 			"导出拓扑 PNG",
 			"导出地址规划（JSON）",
 			"台账对账…",
+			"SNMP 采集…",
 			"设置…"
 		];
 		log(
@@ -6881,6 +6883,130 @@ if (upstreamPort) {
 			`只读说明=${nodeReadOnlyProbe.note.slice(0, 48) || "无"} 保存按钮=${nodeReadOnlyProbe.submit}`
 		);
 
+		// 11.15 SNMP 采集与 v2c 凭据（NMCPS-ADR-0028 §7）：读数来自 `GET /snmp/state`，
+		// 开通 / 轮换 / 吊销要 `lab:snmp`；密文只在开通 / 轮换的响应里出现一次。这里把
+		// 四件事钉成机器事实：动作真的打到上游（写日志计数）、出示的串只在响应里、
+		// 吊销第一次点击不发 DELETE、没有能力位时三个写按钮都不渲染。
+		await labContext.grantPermissions(["clipboard-read", "clipboard-write"], { origin: labBase }).catch(() => {});
+		const snmpBaseline = {
+			onboard: mininetWriteCount("POST", "/api/mininet/snmp/onboard"),
+			rotate: mininetWriteCount("POST", "/api/mininet/snmp/rotate"),
+			revoke: mininetWriteCount("DELETE", "/api/mininet/snmp/credentials")
+		};
+		const snmpProbe = () => labPage.evaluate(() => {
+			const value = document.querySelector("[data-testid='mininet-snmp-secret-value']");
+			return {
+				panel: !!document.querySelector("[data-testid='mininet-snmp-panel']"),
+				enabled: (document.querySelector("[data-testid='mininet-snmp-enabled']")?.textContent ?? "").trim(),
+				source: (document.querySelector("[data-testid='mininet-snmp-community-source']")?.textContent ?? "").trim(),
+				credential: (document.querySelector("[data-testid='mininet-snmp-credential']")?.textContent ?? "").trim(),
+				secret: value instanceof HTMLInputElement ? value.value.trim() : "",
+				hint: (document.querySelector("[data-testid='mininet-snmp-secret']")?.textContent ?? "").replace(/\s+/g, " ").trim(),
+				onboard: document.querySelectorAll("[data-testid='mininet-snmp-onboard']").length,
+				rotate: document.querySelectorAll("[data-testid='mininet-snmp-rotate']").length,
+				revoke: document.querySelectorAll("[data-testid='mininet-snmp-revoke']").length,
+				readonly: (document.querySelector("[data-testid='mininet-snmp-readonly']")?.textContent ?? "").replace(/\s+/g, " ").trim()
+			};
+		});
+		const openSnmpPanel = async () => {
+			const opened = await pickFileItem("SNMP 采集…");
+			await labPage.waitForSelector("[data-testid='mininet-snmp-panel']", { timeout: 10000 }).catch(() => {});
+			await labPage.waitForTimeout(400);
+			return opened;
+		};
+
+		const snmpOpened = await openSnmpPanel();
+		const snmpInitial = await snmpProbe();
+		log(
+			"11.15 SNMP 弹窗：读 GET /snmp/state 显示未开通 + 部署默认串，只给「开通凭据」一个写入口",
+			snmpOpened && snmpInitial.panel
+			&& snmpInitial.enabled === "已开启"
+			&& snmpInitial.source === "部署默认串"
+			&& snmpInitial.credential.includes("未开通")
+			&& snmpInitial.onboard === 1 && snmpInitial.rotate === 0 && snmpInitial.revoke === 0
+			&& !snmpInitial.secret,
+			`采集面=${snmpInitial.enabled} 来源=${snmpInitial.source} 凭据=${snmpInitial.credential} 开通=${snmpInitial.onboard} 轮换=${snmpInitial.rotate} 密文=${snmpInitial.secret}`
+		);
+
+		const snmpOnboarded = await clickIfPresent("[data-testid='mininet-snmp-onboard']");
+		await labPage.waitForTimeout(1500);
+		const snmpAfterOnboard = await snmpProbe();
+		const snmpFirstSecret = snmpAfterOnboard.secret;
+		log(
+			"11.15 开通凭据：POST /snmp/onboard 一次，密文只在弹窗出示（带「只显示这一次」说明），读数转为编排凭据",
+			snmpOnboarded && snmpFirstSecret.length > 0
+			&& snmpAfterOnboard.hint.includes("只显示这一次")
+			&& snmpAfterOnboard.source === "编排凭据"
+			&& snmpAfterOnboard.credential.includes("第 1 版")
+			&& mininetWriteCount("POST", "/api/mininet/snmp/onboard") === snmpBaseline.onboard + 1,
+			`密文=${snmpFirstSecret || "无"} 来源=${snmpAfterOnboard.source} 凭据=${snmpAfterOnboard.credential} 写=${mininetWriteCount("POST", "/api/mininet/snmp/onboard") - snmpBaseline.onboard}`
+		);
+
+		const snmpCopyClicked = await clickIfPresent("[data-testid='mininet-snmp-copy']");
+		await labPage.waitForTimeout(400);
+		const snmpClipboard = await labPage.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+		log(
+			"11.15 复制按钮把社区串写进剪贴板（不只是页面上放一段只读文本）",
+			snmpCopyClicked && snmpFirstSecret.length > 0 && snmpClipboard === snmpFirstSecret,
+			`剪贴板=${snmpClipboard || "空"} 密文=${snmpFirstSecret || "无"}`
+		);
+
+		const snmpRotated = await clickIfPresent("[data-testid='mininet-snmp-rotate']");
+		await labPage.waitForTimeout(1500);
+		const snmpAfterRotate = await snmpProbe();
+		log(
+			"11.15 轮换凭据：POST /snmp/rotate 一次，出示的是新串（版本递增），旧串被替换",
+			snmpRotated && snmpAfterRotate.secret.length > 0
+			&& snmpAfterRotate.secret !== snmpFirstSecret
+			&& snmpAfterRotate.credential.includes("第 2 版")
+			&& mininetWriteCount("POST", "/api/mininet/snmp/rotate") === snmpBaseline.rotate + 1,
+			`新串=${snmpAfterRotate.secret || "无"} 旧串=${snmpFirstSecret || "无"} 凭据=${snmpAfterRotate.credential}`
+		);
+
+		// 「只显示这一次」是结构性的：关掉弹窗后页面丢弃 `snmpSecret`，重开只走
+		// `GET /snmp/state`，而读数模型里根本没有密文字段 —— 所以重开后密文块必须消失。
+		await labPage.keyboard.press("Escape");
+		await labPage.waitForTimeout(500);
+		const snmpReopened = await openSnmpPanel();
+		const snmpAfterReopen = await snmpProbe();
+		log(
+			"11.15 关掉再打开：密文块不再出现（读数只有元数据，密文只在动作响应里出现一次）",
+			snmpReopened && snmpAfterReopen.panel
+			&& !snmpAfterReopen.secret
+			&& snmpAfterReopen.hint === ""
+			&& snmpAfterReopen.source === "编排凭据"
+			&& snmpAfterReopen.credential.includes("第 2 版"),
+			`密文=${snmpAfterReopen.secret || "无"} 密文块=${snmpAfterReopen.hint || "无"} 来源=${snmpAfterReopen.source}`
+		);
+
+		const snmpRevokeArmed = await clickIfPresent("[data-testid='mininet-snmp-revoke']");
+		await labPage.waitForTimeout(400);
+		const snmpArmedProbe = await labPage.evaluate(() => ({
+			warning: !!document.querySelector("[data-testid='mininet-snmp-revoke-warning']"),
+			confirm: document.querySelectorAll("[data-testid='mininet-snmp-revoke-confirm']").length
+		}));
+		log(
+			"11.15 吊销要两步：第一次点击只摆出后果说明，不发 DELETE",
+			snmpRevokeArmed && snmpArmedProbe.warning && snmpArmedProbe.confirm === 1
+			&& mininetWriteCount("DELETE", "/api/mininet/snmp/credentials") === snmpBaseline.revoke,
+			`警告=${snmpArmedProbe.warning} 确认按钮=${snmpArmedProbe.confirm} DELETE=${mininetWriteCount("DELETE", "/api/mininet/snmp/credentials") - snmpBaseline.revoke}`
+		);
+
+		const snmpRevokeConfirmed = await clickIfPresent("[data-testid='mininet-snmp-revoke-confirm']");
+		await labPage.waitForTimeout(1500);
+		const snmpAfterRevoke = await snmpProbe();
+		log(
+			"11.15 确认吊销：DELETE /snmp/credentials 一次，密文清空、读数回到部署默认串",
+			snmpRevokeConfirmed
+			&& snmpAfterRevoke.source === "部署默认串"
+			&& snmpAfterRevoke.credential.includes("未开通")
+			&& !snmpAfterRevoke.secret
+			&& mininetWriteCount("DELETE", "/api/mininet/snmp/credentials") === snmpBaseline.revoke + 1,
+			`来源=${snmpAfterRevoke.source} 凭据=${snmpAfterRevoke.credential} 密文=${snmpAfterRevoke.secret || "空"} DELETE=${mininetWriteCount("DELETE", "/api/mininet/snmp/credentials") - snmpBaseline.revoke}`
+		);
+		await labPage.keyboard.press("Escape");
+		await labPage.waitForTimeout(300);
+
 		// 两种形态各一条：只读会话（实验台操作员）与只有 `lab:operate` 的会话（租户管理员）。
 		// 两者都不含 `lab:terminal`，所以 Webshell 一律不出现 —— 这是「终端不由 operate 推导」的
 		// 可见证据；只读会话连「连通」也不出现，因为探测 / 测速 / 抓包读数都要写位。
@@ -6933,6 +7059,25 @@ if (upstreamPort) {
 			&& operatePanel.runState && operatePanel.ping && operatePanel.iperf && !operatePanel.sniffer,
 			`tabs=${JSON.stringify(operateProbe.labels)} 运行态=${operatePanel.runState} 探测=${operatePanel.ping} 测速=${operatePanel.iperf} 抓包=${operatePanel.sniffer}`
 		);
+
+		// SNMP 的权限位裁剪（`NMCPS-ADR-0028` §7）：单个动作一个入口、能力位决定渲染。
+		// 把 `lab:snmp` 拿掉后弹窗仍可读（台账读数不敏感），但三个写按钮一个都不许出现 ——
+		// 不能先渲染再等 BFF 403，那是把权限边界推迟到失败的请求上。
+		await overrideChannel({ read: true, create: false, operate: false, delete: false, terminal: false, sniffer: false });
+		const snmpDeniedOpened = await openSnmpPanel();
+		const snmpDenied = await snmpProbe();
+		await labPage.keyboard.press("Escape");
+		await labPage.waitForTimeout(200);
+		log(
+			"11.15 没有 lab:snmp 时弹窗仍可读，但开通 / 轮换 / 吊销都不渲染，并写明只读原因",
+			snmpDeniedOpened && snmpDenied.panel
+			&& snmpDenied.onboard === 0 && snmpDenied.rotate === 0 && snmpDenied.revoke === 0
+			&& snmpDenied.readonly.includes("lab:snmp"),
+			`按钮 开通=${snmpDenied.onboard} 轮换=${snmpDenied.rotate} 吊销=${snmpDenied.revoke} 只读=${snmpDenied.readonly.slice(0, 40) || "无"}`
+		);
+		await labPage.unroute("**/api/mininet/channel");
+		await labPage.reload({ waitUntil: "networkidle" });
+		await labPage.waitForTimeout(600);
 
 		await labContext.close();
 	} finally {

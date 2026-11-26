@@ -1033,6 +1033,24 @@
         "title": "SessionNodeCreate",
         "type": "object"
       },
+      "SnmpCredentialRequest": {
+        "description": "凭据写端点唯一的请求体（`NMCPS-ADR-0028` §6，D11）。\n\n省略 `community` 就由服务端生成；显式值必须是强串（`validate_community()`）。",
+        "properties": {
+          "community": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Community"
+          }
+        },
+        "title": "SnmpCredentialRequest",
+        "type": "object"
+      },
       "Switch": {
         "properties": {
           "controller": {
@@ -2383,6 +2401,111 @@
           }
         },
         "summary": "Sniffer Stop"
+      }
+    },
+    "/api/mininet/snmp/credentials": {
+      "delete": {
+        "description": "吊销：删凭据，agent 回落部署默认 `LAB_SNMP_COMMUNITY` 并重启（D12）。",
+        "operationId": "snmp_revoke_api_mininet_snmp_credentials_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Snmp Revoke"
+      }
+    },
+    "/api/mininet/snmp/onboard": {
+      "post": {
+        "description": "开通 v2c 凭据：响应含**一次性**密文，此后读端点只给元数据（D9）。",
+        "operationId": "snmp_onboard_api_mininet_snmp_onboard_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SnmpCredentialRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snmp Onboard"
+      }
+    },
+    "/api/mininet/snmp/rotate": {
+      "post": {
+        "description": "轮换：密文换新、版本 +1；没开通回 404（与「不存在」同口径）。",
+        "operationId": "snmp_rotate_api_mininet_snmp_rotate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SnmpCredentialRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snmp Rotate"
       }
     },
     "/api/mininet/snmp/state": {

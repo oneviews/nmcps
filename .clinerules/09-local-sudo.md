@@ -65,7 +65,7 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
   并检查 askpass helper 存在可执行 —— 手写这条命令最容易漏变量（漏 `PATH` = `sudo: node: command not found`，
   漏门禁变量 = 打 `⏭` 却被读成「已验」）。**`REAL_MININET_BASE` 的缺省就是 `http://127.0.0.1:8000`，
   本机也用它**（2026-11-25 实测 `REAL_MININET_BASE=http://127.0.0.1:8000 pnpm check:lab-real:root`
-  19/19 全绿，含 tc 真断言）。两处曾经的误判要分清：
+  19/19 全绿；2026-11-26 新增 11.16 真 `snmpwalk` 两条后 **21/21 全绿**，含 tc 与 SNMP 真断言）。两处曾经的误判要分清：
   - `curl http://127.0.0.1:8000/...` 回 nginx 的 400「plain HTTP to HTTPS port」**不是端口被占**，是本机
     `http_proxy` 把回环请求也送去了公司代理。验证直连要 `curl --noproxy '*'`；Node 内置 fetch 只在
     `NODE_USE_ENV_PROXY` 打开时才走代理（本机没开），所以脚本自己不受影响。
@@ -74,10 +74,11 @@ sudo -S -p '' id -u < .clinerules/.sudo.local
     `LAB_API_TOKEN=<token> REAL_MININET_BASE=http://192.168.1.90:8000 pnpm check:lab-real:root` ——
     包装脚本把 token 落成 `.data` 下的 0600 临时文件、只把 `LAB_TOKEN_FILE=<路径>` 传给 root 进程
     （`ps` 里看不到明文），被测脚本据此给准备 / 收尾的直连带 `x-lab-token`、给 BFF 配同值
-    `NUXT_MININET_TOKEN`，收尾自动删文件。实测 2026-11-25：token 后端 + 网卡地址 **19/19 全绿**（含 tc 真断言）。
+    `NUXT_MININET_TOKEN`，收尾自动删文件。实测 2026-11-25：token 后端 + 网卡地址 **19/19 全绿**（当时还没有 SNMP 两条）。
   实例非空时脚本会在空实例守卫处报错退出（实测 2026-11-23：什么都没测就 `EXIT=1`，极易被读成「用例挂了」），
   跑前先 `POST /api/mininet/full_reset`。要手工复现等价命令
-  （2026-11-20 实测 root 下 18/18 全绿；2026-11-23 新增真 iperf 用例、2026-11-25 复验后 19/19 全绿）：
+  （2026-11-20 实测 root 下 18/18 全绿；2026-11-23 新增真 iperf 用例、2026-11-25 复验后 19/19；
+  2026-11-26 新增 11.16 真 `snmpwalk`（部署串 / 开通 / 轮换 / 吊销）后 21/21 全绿）：
   ```bash
   NODE_BIN=$(dirname "$(command -v node)")
   SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A env \

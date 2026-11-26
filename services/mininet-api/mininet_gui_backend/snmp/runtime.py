@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from mininet_gui_backend.snmp import inventory
+from mininet_gui_backend.snmp import credentials, inventory
 
 LOG = logging.getLogger("mininet_gui_backend.snmp")
 
@@ -55,7 +55,43 @@ def port() -> int:
 
 
 def community() -> str:
+    """部署默认串（D3）：没有编排出来的凭据时就是它，也是吊销后的回落值。"""
     return os.environ.get("LAB_SNMP_COMMUNITY", "").strip() or DEFAULT_COMMUNITY
+
+
+def credentials_path() -> Path:
+    return state_dir() / "credentials.json"
+
+
+def credential_store() -> "credentials.CredentialStore":
+    """每次读盘都新建一份：凭据是**盘上**的事实，不缓存在进程里。"""
+    return credentials.CredentialStore(credentials_path())
+
+
+def credential_record() -> Optional[Dict[str, Any]]:
+    """盘上的完整凭据（含密文）；没开通回 `None`，文件坏了抛 `CredentialStoreUnavailable`。"""
+    return credential_store().read()
+
+
+def effective_community() -> str:
+    """agent 真正要用的社区串：凭据优先，否则部署默认（`NMCPS-ADR-0028` §6 D9）。
+
+    文件损坏时回落部署默认串并记一条 warning —— 采集不中断，但 `status()` 里的
+    `credential_error` 会让「编排出来的串其实没生效」看得见，而不是静默降级。
+    """
+    try:
+        record = credential_record()
+    except credentials.CredentialError as exc:
+        LOG.warning("snmp credential file is unusable, falling back to the deployment community: %s", exc)
+        return community()
+    if record is None:
+        return community()
+    return str(record.get("community") or "").strip() or community()
+
+
+def collection_enabled() -> bool:
+    """凭据写入的前置条件（D12）：采集面没开时写进去的串永远不会生效。"""
+    return enabled()
 
 
 def state_dir() -> Path:
@@ -168,7 +204,7 @@ class SnmpRuntime:
             "--port",
             str(port()),
             "--community",
-            community(),
+            effective_community(),
         ]
         env = dict(os.environ)
         # 子进程要 `import mininet_gui_backend.snmp.agent`：包在 `services/mininet-api/` 下，
@@ -232,6 +268,17 @@ class SnmpRuntime:
     def running(self) -> bool:
         return any(proc.poll() is None for proc in self._procs.values())
 
+    def apply_credentials(self, net: Any) -> Dict[str, Any]:
+        """凭据落盘后让新串生效（`NMCPS-ADR-0028` §6 D12）。
+
+        「全量重启」是刻意的：agent 的社区串只在命令行上出现一次，没有热更新
+        通道；逐条重启只会多出「有些节点还用旧串」的中间态。`applied` 表示是否
+        真的重启过 —— 采集面关着或没有在跑的网络时为 `False`，状态照常可读。
+        """
+        restarted = enabled() and net is not None
+        status = self.start_for_net(net)
+        return {"applied": restarted, "status": status}
+
     def status(self) -> Dict[str, Any]:
         nodes: List[Dict[str, Any]] = []
         for node_id, record in sorted(self._nodes.items()):
@@ -241,11 +288,17 @@ class SnmpRuntime:
                 entry["status"] = "stopped"
                 entry["error"] = f"agent exited with code {proc.returncode}"
             nodes.append(entry)
+        view = credential_store().public_view()
+        onboarded = bool(view.get("onboarded"))
         return {
             "enabled": enabled(),
             "running": self.running(),
             "port": port(),
-            "community": community(),
+            # 开通后不回传密文（D9）：读端点的读者只要 `lab:read`。未开通时这里是
+            # 部署默认串 —— 它本来就在 `LAB_SNMP_COMMUNITY` 里，不是编排出来的秘密。
+            "community": None if onboarded else community(),
+            "community_source": "credential" if onboarded else "deployment",
+            **view,
             "started_at": self._started_at,
             "error": self._last_error,
             "nodes": nodes,

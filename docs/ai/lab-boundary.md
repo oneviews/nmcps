@@ -16,8 +16,8 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   完整写法与禁令（不要 `echo "$PASS" | sudo`）见 `.clinerules/09-local-sudo.md`。
 - 整跑 `check:lab-real` 用同一套写法，但 `sudo` 会重置环境变量，`PATH`（nvm 的 `node`）/ `CHECK_REAL_MININET` /
   `REAL_MININET_BASE` 都要跟在 `sudo -A env …` 之后。**用包装脚本 `pnpm check:lab-real:root`**（`layers/scenario/scripts/check-lab-real-root.mjs`）：
-  它组装好这几个变量并透出被测脚本的退出码，root 下 tc 那一层不再跳过（2026-11-20 实测 18/18 全绿；
-  2026-11-23 新增真 iperf 用例后共 19 项）。
+  它组装好这几个变量并透出被测脚本的退出码，root 下 tc / SNMP 两层不再跳过（2026-11-20 实测 18/18 全绿；
+  2026-11-23 新增真 iperf 用例后 19 项；2026-11-26 新增 11.16 真 `snmpwalk` 两条后共 21 项，root 整跑 21/21）。
 - 主机的接口在**它自己的 netns** 里：根 netns 里 `tc qdisc show dev h1-eth0` 什么都不打印，要先 `GET /api/mininet/interfaces`
   拿 pid，再 `SUDO_ASKPASS="$PWD/.clinerules/sudo-askpass.sh" sudo -A nsenter -t <pid> -n tc class show dev h1-eth0`。
 - TCLink 用的是 **`htb`**（不是 `tbf`）：`bw=10` 落成 `class htb 5:1 root prio 0 rate 10Mbit ceil 10Mbit`（2026-11-20 实测），
@@ -27,17 +27,20 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   写断言时不要按「`h1` 在前」找连线、也不要固定用 `h1` 的 pid 去 `nsenter` 看别的接口 ——
   `check:lab-real` 的 W13 就因此假红过一次（双击落空 → `PUT /links` 没发 → 后两条跟着红）；
   现在按「两个节点 id 都在这条连线的无障碍名称里」定位，再按接口名前缀（`h2-eth0` → `h2`）取 pid。
-- root 跑完会在 `.data` 留下 **root 名下**的产物（当日审计分片 `.data/audit/lab-audit-<日期>.jsonl`）。
-  普通用户的 BFF 再往同一分片追加就 `EACCES` → 所有写端点 `503 audit_unavailable`，而读端点照常 200 ——
-  `check:ui` 的 11.4 写用例会整段假红（2026-11-22 实测）。包装脚本现在在 `finally` 里把 `.data` 下 root 名下的
-  文件 chown 回调用者；先看 `find .data -user root`，再怀疑代码。
+- root 跑完会在 `.data` 留下 **root 名下**的产物（当日审计分片 `.data/audit/lab-audit-<日期>.jsonl`），
+  也会在 `services/mininet-api/.data/snmp/` 留下 root 的 agent 档案 / 日志。普通用户的 BFF 再往同一分片追加就
+  `EACCES` → 所有写端点 `503 audit_unavailable`，而读端点照常 200 ——
+  `check:ui` 的 11.4 写用例会整段假红（2026-11-22 实测）。包装脚本现在在 `finally` 里把**这两个目录**下 root 名下的
+  文件 chown 回调用者；先看 `find .data services/mininet-api/.data -user root`，再怀疑代码。
 
 ## SNMP 采集面（`NMCPS-ADR-0028`，2026-11-26）
 
 - 每个节点一条 agent 进程，由 `snmp/runtime.py` 用 `nsenter -t <node pid> -n -- python -m mininet_gui_backend.snmp.agent` 拉进**节点自己的 netns**，端口在 netns 内绑 161（`LAB_SNMP_PORT`），所以宿主 `snmpd` 继续占根 netns 的 161 也不冲突。
 - 前提三条都成立才会起：`LAB_SNMP_ENABLED=1`、后端以 root 跑（`os.geteuid() == 0`）、节点有 `pid`（Mininet 要 `start()` 才有）。任一不满足只在状态里记 `unavailable` + 原因，不会让起网失败（D4）。
 - 产物在 `services/mininet-api/.data/snmp/`（`SERVICE_ROOT` 是 `services/mininet-api`，不是仓库根）：`<node>.json` 档案（0600）、`<node>.log`（agent 的 stdout / stderr）。root 跑过之后这些文件属 root，普通用户的 BFF 再写会 `EACCES`；收尾照 `09-local-sudo.md` 的规矩 chown 回调用者 —— **两处都要**：`sudo -A chown -R "$(id -u):$(id -g)" .data services/mininet-api/.data`。
-- 真采集验收 2026-11-26 已在 90 上闭环（`NMCPS-ADR-0028` §5 有实测输出）：`apt-get install snmp` 装上 net-snmp（`/usr/bin/snmpwalk`），root 后端带 `LAB_SNMP_ENABLED=1` 起网后，`nsenter -t <node pid> -n -- snmpwalk -v2c -c public 127.0.0.1 1.3.6.1.2.1.1` 回 `sysName=<节点 id>`、`ifDescr` / `ipAdEntAddr` 与台账一致；从另一个节点的 netns 打 `10.0.0.x` 同样通（跨仿真网可达）。节点 netns 里没有路由到根 netns 的通路，所以**别在宿主上直接 `snmpwalk 10.0.0.1`** —— 那是「从外部 NMS 采集」的形态，本机拓扑没有接外部网。`pnpm check:snmp`（回环客户端 + 真子进程入口，28 项）仍是唯一无需 root 的自动检查。
+- 凭据（`NMCPS-ADR-0028` §6 D8–D12）：全服务只有**一份**可管理的 SNMP v2c 社区串，落在 `services/mininet-api/.data/snmp/credential.json`（文件 0600、目录 0700、原子写）。未开通时采集用部署默认串（`LAB_SNMP_COMMUNITY`，缺省 `public`，`community_source: deployment`）；开通后串由服务端生成（`sim-` 前缀）或按强度校验接受显式值，**不回传** —— `GET /api/mininet/snmp/state` 只给 `onboarded` / `credential_version` / `created_at` / `rotated_at` / `credential_error`，`community` 恒 `null`。开通 / 轮换 / 吊销是三条 `lab:snmp` 写端点（`POST /snmp/onboard`、`POST /snmp/rotate`、`DELETE /snmp/credentials`），写成功后 `apply_credentials()` 全量重启 agent 才生效；重启失败只记在 `nodes[*].status`，不回滚写。文件损坏时状态里给 `credential_error`，采集回落部署默认串 —— 不静默、也不把后端弄红。root 与本机用户混跑时同样要 chown 回 `.data` 所有者，否则开通会 503。
+
+- 真采集验收 2026-11-26 已在 90 上闭环（`NMCPS-ADR-0028` §5 有实测输出）：`apt-get install snmp` 装上 net-snmp（`/usr/bin/snmpwalk`），root 后端带 `LAB_SNMP_ENABLED=1` 起网后，`nsenter -t <node pid> -n -- snmpwalk -v2c -c public 127.0.0.1 1.3.6.1.2.1.1` 回 `sysName=<节点 id>`、`ifDescr` / `ipAdEntAddr` 与台账一致；从另一个节点的 netns 打 `10.0.0.x` 同样通（跨仿真网可达）。节点 netns 里没有路由到根 netns 的通路，所以**别在宿主上直接 `snmpwalk 10.0.0.1`** —— 那是「从外部 NMS 采集」的形态，本机拓扑没有接外部网。`pnpm check:snmp`（回环客户端 + 真子进程入口 + 凭据存储 / `apply_credentials()` 重启面，41 项）仍是唯一无需 root 的自动检查；`pnpm check:lab-real:root` 的 11.16 两条把 ADR-0028 §6.3「Real machine」那一行做成自动断言（部署串可读 → 开通串可读且旧串无应答 → 轮换换串 → 吊销回部署串），条件不满足（非 root / 无 `snmpwalk` / 采集面没开 / 实例已开通）时打 `⏭`，跳过不算已验。
 
 ## 本机 `:8000` 必须跑本仓代码（2026-11-18 现场）
 
@@ -74,7 +77,7 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 ## 全量并入与旧前端退役（NMCPS-ADR-0022）
 
 - 目标：把旧 Vite 前端（`mininet_gui_frontend`）全部能力并入 `/scenario/simulator`，验收后删除该前端，`services/mininet-api` 只留纯后端。
-- 37 条写端点按 `(method, 模板)` 逐条登记进 `MININET_ROUTES`，一个端点一个权限位：`lab:create`（建网 / 加节点加链 / 建会话）、`lab:operate`（改网络、链路通断、pingall、iperf、流表、停会话）、`lab:delete`（删节点 / 删会话）、`lab:sniffer`（抓包启停）；`full_reset` 与 `import_json` 需 `lab:delete` + `lab:create` 双权限。
+- 40 条写端点按 `(method, 模板)` 逐条登记进 `MININET_ROUTES`，一个端点一个权限位：`lab:create`（建网 / 加节点加链 / 建会话）、`lab:operate`（改网络、链路通断、pingall、iperf、流表、停会话）、`lab:delete`（删节点 / 删会话）、`lab:sniffer`（抓包启停）、`lab:snmp`（SNMP 凭据开通 / 轮换 / 吊销，`NMCPS-ADR-0028` §6）；`full_reset` 与 `import_json` 需 `lab:delete` + `lab:create` 双权限。
 - `GET /api/mininet/channel` 的 `writeEnabled` / `capabilities` 按会话计算；页面先读能力位再渲染，不再恒为 `false`。
 - 写操作先写审计 outbox（`.data/audit/lab-audit.jsonl`）再执行；写盘失败回 `503 audit_unavailable`。同一网络同时只允许一个在途写操作（`409 lab_operation_in_progress`）。
 - 四个 WebSocket 走同源 `/mininet-ws/*`：`POST /api/mininet/ws-ticket` 签 60 秒一次性 HMAC 票，绑定 `sub` / `tid` / `kind` / `target`；票过期、重放、绑定不符一律 `401 lab_ws_ticket_invalid`。四条通道全部落地（`sniffer` / `terminal` / `logs` / `monitor`）：验票、连上游、透传与审计只有一份实现 `layers/scenario/server/utils/bff/labWsRelay.ts` 的 `createLabWsRelay(kind)`，每个路由文件只有一行；`target` 语义按通道登记（抓包=网络 id 可空、终端=节点、监控=`<node>:<intf>`、日志必须为空），票据签出前判形状与台账，会话开始 / 结束各记一条审计（`duration_ms`，**不记**终端输入 / 日志正文 / 抓包载荷）。通道登记表在 `layers/scenario/shared/constants/labWs.ts`（`LAB_WS_UPSTREAMS`），未登记种类回 `400 lab_ws_kind_invalid`；票是一次性的（`jti` 内存表，多实例部署需落台账）。终端是唯一有上行的通道，上游握手期间的上行帧排队到 `open` 再发。
@@ -92,11 +95,11 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   `build:server` 产物实测）：`GET /api/lab/channel` 落到主网关回 `404 bff_resource_not_allowed`，`/lab-ws/*` 已无路由、
   普通 GET 不会升级（`GET /mininet-ws/logs` 无升级头回 `426 Upgrade Required`）。
 - 浏览器入口只有 `/api/mininet/**`；上游基址在 `runtimeConfig.mininet.instances`（`NUXT_MININET_INSTANCES`，租户 → 实例 JSON）。未配置实例的租户回 `503 tenant_runtime_unavailable`，不会回退全局 `baseUrl`。
-- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **61 条**端点：24 条查询 + 37 条写（ADR-0022 W1；其中 12 条是 2.0 会话入口 `/sessions/**` → `/api/simulation/**`，NMCPS-DESIGN-008 M1）；查询里的 `GET /nodes` 是统一节点投影（M1.1：五类分表 → `/api/mininet/nodes`，与会话侧 `/sessions/{id}/nodes` 同形），页面拓扑只打它 + `/links` 两条；`PATCH /links/{src_id}/{dst_id}/state` 是链路运行态通断（`up` / `down` / `toggle`，`lab:operate`，与改属性的 `PUT /links` 分成两条端点）。导出另走静态路由（`export/[kind].get.ts` + `LAB_EXPORT_UPSTREAMS`，`json` / `script` / `pcap` 三种，权限位与内容类型逐条登记），不占白名单条目。未登记路径回 404、动词不符回 405。
+- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **64 条**端点：24 条查询 + 40 条写（ADR-0022 W1；其中 12 条是 2.0 会话入口 `/sessions/**` → `/api/simulation/**`，NMCPS-DESIGN-008 M1；3 条是 `NMCPS-ADR-0028` §6 的 SNMP 凭据写面 `/snmp/onboard`、`/snmp/rotate`、`DELETE /snmp/credentials`，只认 `lab:snmp`）；查询里的 `GET /nodes` 是统一节点投影（M1.1：五类分表 → `/api/mininet/nodes`，与会话侧 `/sessions/{id}/nodes` 同形），页面拓扑只打它 + `/links` 两条；`PATCH /links/{src_id}/{dst_id}/state` 是链路运行态通断（`up` / `down` / `toggle`，`lab:operate`，与改属性的 `PUT /links` 分成两条端点）。导出另走静态路由（`export/[kind].get.ts` + `LAB_EXPORT_UPSTREAMS`，`json` / `script` / `pcap` 三种，权限位与内容类型逐条登记），不占白名单条目。未登记路径回 404、动词不符回 405。
 - BFF 出站不读 `nmcps_at`、不转 `Bearer`、不转发 cookie；只带 `accept` / `user-agent` / `x-request-id`。
 - `GET /api/mininet/channel` 返回 `configured` / `readOnly` / `writeEnabled` / `capabilities` / `endpointCount`，**按会话计算**，不回传上游地址。
 - 已开放：四条 WebSocket（抓包实时流 `/mininet-ws/sniffer`、Webshell `/mininet-ws/terminal`、日志 `/mininet-ws/logs`、监控 `/mininet-ws/monitor`，均经一次性票）、抓包启停（`lab:sniffer`）与 pcap 下载、导出 JSON / 脚本与 `import_json`（W4）、写操作（按权限位）、旧前端退役（W6：纯后端 + CORS 关闭 + `legacy-mininet-gui-final` 标签）。页面对全部写动作与三条观测面板都先读能力位再渲染。
-- `pnpm build:server && pnpm check:lab-bff` 验证 160 项通道契约（含台账租户隔离、资源清单、401/403/503 与上游零命中，⑧ 覆盖链路通断的 PATCH 出站 / 请求体原样 / 无 `lab:operate` 403 零命中，⑩ 覆盖导出 `text/plain` / BFF 文件名 / 未登记种类 400 / 导入 multipart 与清单并集，⑪ 覆盖 pcap 的 `lab:sniffer` 门禁与二进制直出、抓包启停、`full_reset` 的 confirm 闸门与清单清空，⑫ 覆盖 WebSocket 票的权限 / 种类 / 目标绑定、无票与篡改与重放三条 401、实时帧透传与上游零 cookie、会话审计不含载荷，⑬ 覆盖终端 / 日志 / 监控三条通道的 target 形状与台账收窄、终端上行回显与 `Ctrl-C` 控制字节、日志逐行原文、监控 `node:intf` 查询串与采样，⑭ 覆盖台账对账的 403 / 400（缺确认、确认不符）/ 409 / 上游读失败不落盘 / 清单整体重写与幽灵 id 清除 / 两条审计 / 不在白名单）。`pnpm check:lab-flows` 另有 21 项纯函数断言（草稿三条校验 / 请求体省略规则 / 清流请求体留空不发 `match` / 行号口径），`pnpm check:lab-run` 有 13 项（运行态三态归一 / iperf 两端与秒数校验 / 请求体省略规则 / `pingall` 与 iperf 结果文本化），`pnpm check:lab-ws` 有 21 项（四通道登记表与权限位 / `target` 四种形状 / 上游地址拼接 / 票与监控帧归一 / PTY 文本清洗），三者都不启 Nitro、不碰上游。
+- `pnpm build:server && pnpm check:lab-bff` 验证 168 项通道契约（含台账租户隔离、资源清单、401/403/503 与上游零命中，⑧ 覆盖链路通断的 PATCH 出站 / 请求体原样 / 无 `lab:operate` 403 零命中，⑩ 覆盖导出 `text/plain` / BFF 文件名 / 未登记种类 400 / 导入 multipart 与清单并集，⑪ 覆盖 pcap 的 `lab:sniffer` 门禁与二进制直出、抓包启停、`full_reset` 的 confirm 闸门与清单清空，⑫ 覆盖 WebSocket 票的权限 / 种类 / 目标绑定、无票与篡改与重放三条 401、实时帧透传与上游零 cookie、会话审计不含载荷，⑬ 覆盖终端 / 日志 / 监控三条通道的 target 形状与台账收窄、终端上行回显与 `Ctrl-C` 控制字节、日志逐行原文、监控 `node:intf` 查询串与采样，⑭ 覆盖台账对账的 403 / 400（缺确认、确认不符）/ 409 / 上游读失败不落盘 / 清单整体重写与幽灵 id 清除 / 两条审计 / 不在白名单，⑰ 覆盖 SNMP 凭据三条写端点的 `lab:snmp` 门禁、`snmp` 能力位不由写位推导、租户管理员 403 零上游，以及 409 / 404 的原样透传）。`pnpm check:lab-flows` 另有 21 项纯函数断言（草稿三条校验 / 请求体省略规则 / 清流请求体留空不发 `match` / 行号口径），`pnpm check:lab-run` 有 13 项（运行态三态归一 / iperf 两端与秒数校验 / 请求体省略规则 / `pingall` 与 iperf 结果文本化），`pnpm check:lab-ws` 有 21 项（四通道登记表与权限位 / `target` 四种形状 / 上游地址拼接 / 票与监控帧归一 / PTY 文本清洗），三者都不启 Nitro、不碰上游。
 - 拓扑编辑（`/scenario/simulator`，ADR-0022 W2 / W2b）只走 `/api/mininet/**`：新增 / 删除节点、连线、拖动落库（`POST /node_position`）、OpenFlow 版本、流表读数（`GET /flows/{switch}`）与流表写入（`POST /flows` 加流、`DELETE /flows/{switch}/{flow_id}` 删单条、`DELETE /flows` 批量删流 —— `match` 留空即清整表，填了只删命中项）；删单条的 `flow_id` 是上游按「含 `actions=` 的行」数的 1 基序号，页面必须按同一口径计（`labFlowRowsOf()`）。`TopologyCanvas` 的 `draggable` 必须跟 `capabilities.operate` 走，否则拖动会「看起来成功但没落库」。
 - 运行控制（W3）同样只走 `/api/mininet/**`：`POST /start`（`lab:create`）、`POST /stop`（`lab:operate`，确认弹窗）、`POST /pingall` / `POST /iperf`（`lab:operate`）。运行态只读 `GET /start` 的裸布尔：读到 `false` 才写「已停止」，读不到一律「未知」且四个动作全部禁用 —— 把「读不到」当成「没启动」会让启动按钮对着已在跑的网络发请求，再拿上游 400 当失败。这条「三态读数、`null` 一律禁用」不只属于实验台，是全站交互约束，口径以 `NMCPS-ARCH-006`（`layers/content/collections/cn/architecture/1.architecture/ui-architecture.md`）§4.2 为准，本节只记实验台怎么落地。四个动作互斥（上游单实例），失败原话（400 / 403 / 409 / 503）逐字显示。
 - 台账对账（`NMCPS-ADR-0023`）是唯一的「只改台账、不转发上游写」端点：`POST /api/mininet/networks/{id}/sync`（静态路由 `networks/[id]/sync.post.ts`，**不在** `MININET_ROUTES` 里），双权限 `lab:create` + `lab:delete`、逐字确认 `{ confirm: "<network_id>" }`、先审计后执行、同网络单写锁；读 `/hosts` `/switches` `/routers` `/nats` `/controllers` 与 `/links` 后**整体重写**资源清单，任一读取失败原样回上游状态且不落盘。
@@ -138,7 +141,7 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
 
 - **隔离级别 A**：每个租户独立 Mininet 实例 / 容器 / 网络命名空间，不共享 `app.net`；单实例只能叫「global lease」，不得宣称隔离。
 - **租户来源**：只从 BFF 签名会话取，`x-tenant-id`、请求体与查询参数一律不参与归属；P1 前不开放写操作。
-- **权限矩阵**：`shared/constants/labPermissions.ts` 是唯一真源。租户普通用户默认 `lab:read`，租户管理员额外 `lab:create` / `lab:operate` / `lab:delete`；`lab:terminal` 与 `lab:sniffer` 必须单独授权。
+- **权限矩阵**：`shared/constants/labPermissions.ts` 是唯一真源。租户普通用户默认 `lab:read`，租户管理员额外 `lab:create` / `lab:operate` / `lab:delete`；`lab:terminal` / `lab:sniffer` / `lab:snmp` 必须单独授权（各自对应 IAM 角色 `lab_terminal` / `lab_sniffer` / `lab_snmp`，不由任何写位推导）。
 - **角色校验**：租户角色必须满足 `role.tenant_id === 会话 tenant_id`（UP-RBAC-09）；平台管理员默认没有运行态访问权。
 - **资源边界**：BFF 台账记录 `tenant_id` / `engine` / `upstream_id`，上游 `sim_id`、节点 ID、链路 ID 都不是权限凭据；跨租户统一 404。
 - **单网络**：同一租户同一引擎同时最多一张运行中网络，第二次创建 / 启动回 `409`。

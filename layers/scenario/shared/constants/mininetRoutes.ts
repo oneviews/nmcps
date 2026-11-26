@@ -24,7 +24,8 @@ export type MininetPermission
 		| "lab:operate"
 		| "lab:delete"
 		| "lab:terminal"
-		| "lab:sniffer";
+		| "lab:sniffer"
+		| "lab:snmp";
 
 export interface MininetRoute {
 	/** 上游动词 */
@@ -69,7 +70,7 @@ export function isLongOperationRoute(route: Pick<MininetRoute, "method" | "templ
 }
 
 /**
- * 白名单本体（24 条查询 + 37 条写端点，其中 12 条是 2.0 会话入口）。
+ * 白名单本体（24 条查询 + 40 条写端点，其中 12 条是 2.0 会话入口）。
  *
  * 刻意**不登记**：
  * - `export_json` / `export_script` / `sniffer/export`：响应是文本 / pcap 二进制，
@@ -152,6 +153,13 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 	// ── 抓包启停（lab:sniffer，独立授权） ──
 	{ method: "POST", template: "/sniffer/start", upstream: "/api/mininet/sniffer/start", permissions: ["lab:sniffer"] },
 	{ method: "POST", template: "/sniffer/stop", upstream: "/api/mininet/sniffer/stop", permissions: ["lab:sniffer"] },
+
+	// ── SNMP 凭据面（lab:snmp，独立授权；`NMCPS-ADR-0028` §6 D10） ──
+	// 开通 / 轮换的响应含**一次性**社区串，吊销后回落部署默认串（同 ADR D9 / D12）。
+	// 三个都是写端点，因此不出现 `lab:read`；`lab_snmp` 角色不隐含 create / operate / delete。
+	{ method: "POST", template: "/snmp/onboard", upstream: "/api/mininet/snmp/onboard", permissions: ["lab:snmp"] },
+	{ method: "POST", template: "/snmp/rotate", upstream: "/api/mininet/snmp/rotate", permissions: ["lab:snmp"] },
+	{ method: "DELETE", template: "/snmp/credentials", upstream: "/api/mininet/snmp/credentials", permissions: ["lab:snmp"] },
 
 	// ── 2.0 会话入口（`/api/simulation/**`，NMCPS-DESIGN-008 M1） ──
 	// 与上面那批的差别只有两点：上游前缀不同（`upstream` 以 `/api/simulation` 开头，

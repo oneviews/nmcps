@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.simulation
 status: baseline
-version: 0.1.0
+version: 0.1.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -22,7 +22,7 @@ dependsOn:
   - NMCPS-ARCH-001
   - NMCPS-DESIGN-006
 createdAt: "2026-11-25"
-updatedAt: "2026-11-25"
+updatedAt: "2026-11-26"
 icon: "carbon:network-4"
 tags:
   - "Domain"
@@ -128,14 +128,14 @@ Adding or removing nodes / links, flows, `pingall` / `iperf` do **not** touch th
 
 ## 7. Phases and acceptance
 
-| Phase | Scope | Exit criteria |
-| :--- | :--- | :--- |
-| M0 | Engine registry, session layer, BFF remote access (token + handshake), engine layering and the static guard | Contracts generated + BFF self-check; the root-free `dryrun` engine drives the whole chain in CI |
-| M1 | Unified node / link CRUD, session paths in the whitelist, ledger `session_id` ownership, unified read path | Self-check counts plus a real-host regression (start/stop, bandwidth edit, real iperf) |
-| M2 | SNMP surface (topology projection, onboarding credentials) | An external `snmpwalk` returns matching OIDs |
-| M3 | Wireless + spectrum (hwsim / `hostapd` / radio read-write) | Change a channel → read back the same value → the conflict disappears (requires root) |
-| M4 | Transmission (link tc, link actions, weak network) | The htb class `rate` equals the requested value (requires root) |
-| M5 | Orchestration (scenario configs, preview, build progress) | Import → preview → build → visible progress |
+| Phase | Scope | Exit criteria | Status (2026-11-26) |
+| :--- | :--- | :--- | :--- |
+| M0 | Engine registry, session layer, BFF remote access (token + handshake), engine layering and the static guard | Contracts generated + BFF self-check; the root-free `dryrun` engine drives the whole chain in CI | Closed |
+| M1 | Unified node / link CRUD, session paths in the whitelist, ledger `session_id` ownership, unified read path | Self-check counts plus a real-host regression (start/stop, bandwidth edit, real iperf) | Closed (including the M1.1 unified read path) |
+| M2 | SNMP surface (topology projection, onboarding credentials) | An external `snmpwalk` returns matching OIDs | Collection side closed (`NMCPS-ADR-0028`); the credential side `snmp/onboard` has not started and needs `lab:snmp` first (`NMCPS-ADR-0027` D5) |
+| M3 | Wireless + spectrum (hwsim / `hostapd` / radio read-write) | Change a channel → read back the same value → the conflict disappears (requires root) | Not started (`ap` / `station` creation still answers 501) |
+| M4 | Transmission (link tc, link actions, weak network) | The htb class `rate` equals the requested value (requires root) | Partial: bandwidth edits through `PUT /links` work and were verified on a real host; link actions and weak-network shaping are not done |
+| M5 | Orchestration (scenario configs, preview, build progress) | Import → preview → build → visible progress | Not started |
 
 Dependency order: M0 → M1 → (M2 ∥ M3) → M4 → M5. M3 must not precede M1: wireless needs the unified node model and the full runtime inventory.
 
@@ -155,3 +155,4 @@ Dependency order: M0 → M1 → (M2 ∥ M3) → M4 → M5. M3 must not precede M
 | Date | Version | Change |
 | :--- | :--- | :--- |
 | 2026-11-25 | 0.1.0 | First version: the simulation engine surface baseline (session as resource root, engine abstraction, unified node projection, outward channel and capability bits, ledger runtime state, phase boundaries). Covers the landed M0 / M1 / M1.1 and the entry points of the remaining phases. |
+| 2026-11-26 | 0.1.1 | §7 gains a "Status" column: M0 / M1 closed, M2 collection side closed (`NMCPS-ADR-0028`) while the credential side `snmp/onboard` has not started (needs `lab:snmp`), M3 not started, M4 limited to working bandwidth edits, M5 not started. |
