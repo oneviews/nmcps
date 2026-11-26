@@ -23,7 +23,7 @@
 // 通道、白名单、openapi 快照与 `--refresh-simulator-snapshot` 一并删除；实验通道的守卫
 // 在 `pnpm check:lab-bff`，不在本脚本。
 import { existsSync } from "node:fs";
-import { closeUpstream, freePort, HOST, IAM_ROLE_SEED, IAM_SUBJECT_ROLE_SEED, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { closeUpstream, freePort, HOST, IAM_POLICY_SEED, IAM_ROLE_SEED, IAM_SUBJECT_ROLE_SEED, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 // ── 前置自检：先说自己缺什么，而不是让第一条断言替我们报错 ──────────────
 if (!existsSync(SERVER_ENTRY)) {
@@ -524,7 +524,9 @@ try {
 		log("iam/policies 的 keyword 在服务端生效（页面才能走服务端分页）", policyKeyword.json?.data?.total === 1 && policyKeyword.json?.data?.list?.[0]?.code === "tenant.readonly", `total=${describe(policyKeyword.json?.data?.total)}`);
 
 		const policyIgnoredFilter = await request(exitPort, "/api/iam/policies?page=1&page_size=10&code=tenant.readonly");
-		log("iam/policies 的 code 过滤被上游静默忽略（页面不提供该筛选项）", policyIgnoredFilter.json?.data?.total === 3, `total=${describe(policyIgnoredFilter.json?.data?.total)}`);
+		// 与 iam/roles 同理：断言的是「`code` 参数被上游忽略」，总数只是种子条数（`IAM_POLICY_SEED.length`），
+		// 加策略不必再改这一行。
+		log("iam/policies 的 code 过滤被上游静默忽略（页面不提供该筛选项）", policyIgnoredFilter.json?.data?.total === IAM_POLICY_SEED.length, `total=${describe(policyIgnoredFilter.json?.data?.total)} expect=${IAM_POLICY_SEED.length}`);
 
 		const policyBadDocument = await request(exitPort, "/api/iam/policies", {
 			method: "POST",

@@ -537,6 +537,23 @@ export const IAM_SUBJECT_ROLE_SEED = [
 ];
 
 /**
+ * 新代策略假数据（`GET /iam/policies`，2026-11-04 实测字段）：给 `/system/policy` 两栏自查用。
+ * 三条硬要求，否则用例测不出真伪：
+ *   - `keyword` 真的命中 name / code（`code` / `policy_type` / `enabled` 传了被静默忽略，UP-RBAC-06）；
+ *   - 分页字段是 `page_size`（不是 `pageSize`），`total` 要能分页；
+ *   - 留一条「删除回 `200 {code:400}`」的样本（`pol_role_reader_isp_a`），把 UP-RBAC-05 的
+ *     失败通道固定进假上游，否则「删除失败」分支永远测不到。
+ *
+ * 与角色种子同理导出：`scripts/check-bff.mjs` 按 `IAM_POLICY_SEED.length` 断言「`code` 过滤被忽略」
+ * 的总数，加一条策略不必再改字面量。
+ */
+export const IAM_POLICY_SEED = [
+	{ id: "pol_platform_full", tenant_id: "tnt_default", name: "平台全权限", code: "platform.full_access", policy_type: "system", document: "[{\"Action\":[\"*\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]", description: "平台内置全权限策略", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
+	{ id: "pol_tenant_reader", tenant_id: "tnt_default", name: "租户只读", code: "tenant.readonly", policy_type: "custom", document: "[{\"Action\":[\"read\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]", description: "自查用自建策略", enabled: true, is_system: false, created_at: "2026-11-04T09:00:00+08:00", updated_at: "2026-11-04T09:00:00+08:00", deleted_at: null },
+	{ id: "pol_role_reader_isp_a", tenant_id: "t_isp_a", name: "ISP-A 角色只读", code: "isp.role.readonly", policy_type: "custom", document: "[]", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:10:00+08:00", updated_at: "2026-11-04T09:10:00+08:00", deleted_at: null }
+];
+
+/**
  * 假上游：覆盖裸 JSON、已是信封、业务错误、慢响应、Header 回显、健康探针与 SSE 流。
  * `/auth/*` 模拟新建 iam 服务（信封为 `{ code, msg, data }`）：登录签发 `at-N` / `rt-N`，
  * `whoami` 只认签发过的访问令牌 —— 浏览器自查靠它走完「登录 → 会话 → 自助安全设置」全流程。
@@ -869,25 +886,14 @@ export async function startUpstream(port) {
 	/** 精确匹配的字符串筛选（空串 = 不筛）：上游对枚举参数是精确匹配，这里照样板做 */
 	const matchesText = (value, expected) => expected === "" || String(value ?? "") === expected;
 
-	// 夹具种子在模块级导出（`IAM_ROLE_SEED` / `IAM_ROLE_POLICY_SEED` / `IAM_SUBJECT_ROLE_SEED`），
-	// 这里每次深拷贝一份：写端点会 push / splice，共用一个数组会让多次 `startUpstream()` 互相污染。
+	// 夹具种子在模块级导出（`IAM_ROLE_SEED` / `IAM_POLICY_SEED` / `IAM_ROLE_POLICY_SEED` /
+	// `IAM_SUBJECT_ROLE_SEED`），这里每次深拷贝一份：写端点会 push / splice，共用一个数组会让
+	// 多次 `startUpstream()` 互相污染。
 	const iamRoles = IAM_ROLE_SEED.map((item) => ({ ...item }));
 	const iamRolePolicies = IAM_ROLE_POLICY_SEED.map((item) => ({ ...item }));
 	const iamSubjectRoles = IAM_SUBJECT_ROLE_SEED.map((item) => ({ ...item }));
 
-	/**
-	 * 新代策略假数据（`GET /iam/policies`，2026-11-04 实测字段）：给 `/system/policy` 两栏自查用。
-	 * 三条硬要求，否则用例测不出真伪：
-	 *   - `keyword` 真的命中 name / code（`code` / `policy_type` / `enabled` 传了被静默忽略，UP-RBAC-06）；
-	 *   - 分页字段是 `page_size`（不是 `pageSize`），`total` 要能分页；
-	 *   - 留一条「删除回 `200 {code:400}`」的样本（`pol_role_reader_isp_a`），把 UP-RBAC-05 的
-	 *     失败通道固定进假上游，否则「删除失败」分支永远测不到。
-	 */
-	const iamPolicies = [
-		{ id: "pol_platform_full", tenant_id: "tnt_default", name: "平台全权限", code: "platform.full_access", policy_type: "system", document: "[{\"Action\":[\"*\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]", description: "平台内置全权限策略", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
-		{ id: "pol_tenant_reader", tenant_id: "tnt_default", name: "租户只读", code: "tenant.readonly", policy_type: "custom", document: "[{\"Action\":[\"read\"],\"Effect\":\"Allow\",\"Resource\":[\"*\"]}]", description: "自查用自建策略", enabled: true, is_system: false, created_at: "2026-11-04T09:00:00+08:00", updated_at: "2026-11-04T09:00:00+08:00", deleted_at: null },
-		{ id: "pol_role_reader_isp_a", tenant_id: "t_isp_a", name: "ISP-A 角色只读", code: "isp.role.readonly", policy_type: "custom", document: "[]", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:10:00+08:00", updated_at: "2026-11-04T09:10:00+08:00", deleted_at: null }
-	];
+	const iamPolicies = IAM_POLICY_SEED.map((item) => ({ ...item }));
 
 	/** 分页信封：与审计域一致（`page` / `pageSize` 按请求原样回显） */
 	const paged = (records, url) => {
