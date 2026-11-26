@@ -121,7 +121,7 @@ The BFF (Nitro) has exactly two egress channels: the primary upstream (`runtimeC
 2. **Only register what a page actually calls**, authorised entry by entry through capability bits (`lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`); adding an entry obliges a same-batch update of the matching `NMCPS-DESIGN-*` data-source table.
 3. **Permanently excluded entries need a new ADR to unlock**: in-node arbitrary command execution (`execute`), headless browser (`browser`), integrity inspection (`integrity`), device library (`devices`), standalone probes (`test`), SNMP onboarding (`snmp/onboard`), external monitoring stack (`nms/vmagent`). These are verdicts R1–R7 of `NMCPS-ADR-0027`, not "not done yet".
 
-The whitelist is not a hand-copied constant: `check:lab-bff` ⓪ reconciles it line by line as "22 queries + 37 writes = 59", while `check:engines` / `check:simulation` guard the engine face and the external backend; any added or renamed endpoint must change the whitelist and its assertions in the same batch.
+The whitelist is not a hand-copied constant: `check:lab-bff` ⓪ reconciles it line by line as "24 queries + 37 writes = 61", while `check:engines` / `check:simulation` guard the engine face and the external backend; any added or renamed endpoint must change the whitelist and its assertions in the same batch.
 
 ### 6.4 Write capability bits
 

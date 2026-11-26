@@ -66,9 +66,9 @@
 //      一旦会 git commit / git push，就会改动被核对的对象。
 //
 // 重采样（两条路，都不需要手抄日志）：
-//   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance / lab-terminal / lab-api 六步，把真实输出尾部写回
+//   `--write-fixtures`   本地重跑 lint / typecheck / i18n / governance / lab-terminal / lab-api / snmp 七步，把真实输出尾部写回
 //                        样本并封存清单；某步 exit≠0 就跳过该 key（失败输出绝不当样本）。
-//   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部八个 key，
+//   `--from-ci [run-id]` 从该次运行的产物（ci.yml 里 `tee` 落盘的那份）回填，覆盖全部九个 key，
 //                        包含本地跑不了的 bff / ui；步骤名与 job 名取自这次的 `gh run view`。
 // 两条路都会在写回后立刻把正则回放一遍，措辞漂移当场就报；任一不过退出码 1。
 // `--seal --reason "…"` 是应急入口（只重封清单、不碰样本）：它能给任意字节盖章，所以正常流程里
@@ -168,6 +168,13 @@ const CI_ARTIFACTS = [
 		file: "lab-api.log",
 		step: "Mininet API source guard",
 		tail: 8
+	},
+	{
+		key: "snmp",
+		artifact: "check-logs-quality",
+		file: "snmp.log",
+		step: "SNMP agent self-check",
+		tail: 10
 	}
 ];
 
@@ -201,7 +208,7 @@ function manifestDiff(before, after) {
 	return out;
 }
 
-/** 盘上七份样本的清单快照（还没落盘） */
+/** 盘上八份样本的清单快照（还没落盘） */
 function snapshotManifest() {
 	const rows = {};
 	for (const key of fixtureKeysOnDisk())
@@ -225,7 +232,7 @@ function seal(rows = snapshotManifest()) {
 // `--seal --reason "…"`：只重封清单、不跑任何命令 —— 应急入口，样本正常不该由人来写。
 // 没给理由就拒绝封存（盘上清单保持原样、⑯ 继续红），给了就把理由整理成现成的 commit message。
 if (process.argv.includes("--seal")) {
-	console.log("⚠️  --seal 是应急入口：正常重采请用 --write-fixtures（本地六步）或 --from-ci [run-id]（全部八份）。");
+	console.log("⚠️  --seal 是应急入口：正常重采请用 --write-fixtures（本地七步）或 --from-ci [run-id]（全部九份）。");
 	console.log("    它能给任何字节盖章，也就能把篡改合法化，所以这次封存必须留下理由（--reason），");
 	console.log(`    理由是写给人看的：它被排成 commit message 草稿，不进清单结构（清单仍只有 ${fixtureKeysOnDisk().length} 条 key）。`);
 	const argv = process.argv.slice(2);
@@ -271,7 +278,9 @@ if (process.argv.includes("--write-fixtures")) {
 		// 需要 POSIX 的 `pty` 与 bash：非 POSIX 平台会跳过（缺小结行 → 这一步在本地就该红）
 		{ key: "lab-terminal", cmd: "pnpm check:lab-terminal", tail: 8 },
 		// 零第三方依赖的源码守卫（与 CI 的 `lab-api` 步骤同一条命令）
-		{ key: "lab-api", cmd: "python3 scripts/check-mininet-api.py --source-only", tail: 8 }
+		{ key: "lab-api", cmd: "python3 scripts/check-mininet-api.py --source-only", tail: 8 },
+		// SNMP 采集面（与 CI 的 `snmp` 步骤同一条命令；真子进程用例要几秒，无 root）
+		{ key: "snmp", cmd: "python3 scripts/check-snmp.py", tail: 10 }
 	];
 	// 先跑完、再统一落盘：check:governance 会跑本脚本读样本，跑到一半改样本会让它假红
 	const collected = [];

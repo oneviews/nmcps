@@ -20,10 +20,11 @@
 #   bff         → `107/107 项通过`
 #   ui          → `297/297 项通过`
 #   lab-terminal → `6/6 项通过（真实 bash + PTY）`
-#   lab-api     → `源码守卫 3/3 组通过`（`--source-only`，无 Mininet 依赖）
+#   lab-api     → `源码守卫 4/4 组通过`（`--source-only`，无 Mininet 依赖）
+#   snmp        → `结果：28 通过 / 0 失败`（`check:snmp` 的小结；条数随用例增减变化，不写死）
 set -eu
 
-KEYS='lint typecheck i18n governance bff ui lab-terminal lab-api'
+KEYS='lint typecheck i18n governance bff ui lab-terminal lab-api snmp'
 
 # 表本体：case 分支即数据，新增步骤 = 加一个 key + 在 ci.yml 加一个调用点
 lookup() {
@@ -52,9 +53,14 @@ lookup() {
 			printf '%s\n' '[0-9]+/[0-9]+ 项通过（真实 bash \+ PTY）'
 			;;
 		lab-api)
-			# Mininet 后端源码守卫（`--source-only`）：三组断言跑完才有这一行，
+			# Mininet 后端源码守卫（`--source-only`）：四组断言跑完才有这一行，
 			# 某组被跳过、脚本退化到只打印计数、或 import 失败被当成「跳过」都在这里显形。
 			printf '%s\n' '源码守卫 [0-9]+/[0-9]+ 组通过'
+			;;
+		snmp)
+			# SNMP 采集面自检（`NMCPS-ADR-0028`）：条数不写死（加用例不该改表），
+			# 但失败数必须是 0 —— 只匹配「结果：N 通过」时，`/ 3 失败` 的行照样命中。
+			printf '%s\n' '结果：[0-9]+ 通过 / 0 失败'
 			;;
 		*)
 			return 1

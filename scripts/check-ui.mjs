@@ -4767,7 +4767,7 @@ if (upstreamPort) {
 			channel?.status() === 200
 			&& channelJson?.data?.configured === true
 			&& channelJson?.data?.capabilities?.operate === true
-			&& channelJson?.data?.endpointCount === 59
+			&& channelJson?.data?.endpointCount === 61
 			&& !channelRaw.includes(String(upstreamPort)),
 			channel
 				? `${channel.status()} configured=${channelJson?.data?.configured} operate=${channelJson?.data?.capabilities?.operate} 端点=${channelJson?.data?.endpointCount} 泄露端口=${channelRaw.includes(String(upstreamPort))}`

@@ -54,6 +54,8 @@ from mininet_gui_backend.engines import (
     register_builtin_engines,
 )
 from mininet_gui_backend.sessions import SessionStore
+from mininet_gui_backend.snmp import inventory as snmp_inventory
+from mininet_gui_backend.snmp import runtime as snmp_runtime
 from mininet_gui_backend.schema import Switch, Host, Controller, Nat, Router
 from mininet_gui_backend.flow_rules import FlowRuleCreate, FlowRuleDelete, build_flow, build_flow_match
 from mininet_gui_backend.utils import (
@@ -233,6 +235,7 @@ async def lifespan(app: FastAPI):
     app.net = _build_network()
     yield
     # stop
+    snmp_runtime.stop_on_shutdown()
     _startup_cleanup()
 
 from mininet_gui_backend import __version__ as BACKEND_VERSION
@@ -957,6 +960,71 @@ def list_edges():
             })
     return edges
 
+def _start_snmp_collection() -> None:
+    """起网成功后拉起采集面；失败只写状态，不影响起网（`NMCPS-ADR-0028` D4）。"""
+    try:
+        snmp_runtime.runtime.start_for_net(app.net)
+    except Exception as exc:  # pragma: no cover - 防御式
+        logging.getLogger(__name__).warning("snmp collection failed to start: %s", exc)
+
+
+def _stop_snmp_collection() -> None:
+    """停网 / 重置 / 进程退出时回收；agent 的 netns 随节点消失，先于 `mn -c`。"""
+    try:
+        snmp_runtime.runtime.stop_all()
+    except Exception as exc:  # pragma: no cover - 防御式
+        logging.getLogger(__name__).warning("snmp collection failed to stop: %s", exc)
+
+
+def _ledger_snmp_nodes() -> List[dict]:
+    """五类台账 → NMS seed；只取 id / type / name / ip / mac，不猜接口。"""
+    rows: List[dict] = []
+    for kind, collection in (
+        ("controller", app.controllers),
+        ("switch", app.switches),
+        ("host", app.hosts),
+        ("nat", app.nats),
+        ("router", app.routers),
+    ):
+        for item in collection.values():
+            data = item.model_dump() if hasattr(item, "model_dump") else vars(item)
+            rows.append(
+                {
+                    "id": data.get("id") or "",
+                    "type": data.get("type") or kind,
+                    "name": data.get("name") or data.get("id") or "",
+                    "ip": data.get("ip") or "",
+                    "mac": data.get("mac") or "",
+                }
+            )
+    return rows
+
+
+def _ledger_snmp_links() -> List[dict]:
+    rows: List[dict] = []
+    for key in app.links:
+        nodes = list(key)
+        if len(nodes) == 2:
+            rows.append({"from": nodes[0], "to": nodes[1]})
+    return rows
+
+
+@app.get("/api/mininet/snmp/state")
+def get_snmp_state():
+    """采集面读数：开关 / 运行态 / 每节点 agent 状态（三态，读不到不回落）。"""
+    return snmp_runtime.runtime.status()
+
+
+@app.get("/api/mininet/snmp/topology")
+def get_snmp_topology():
+    """台账投影：给外部 NMS 的 seed 清单（节点 + 链路 + 采集参数）。"""
+    return snmp_inventory.build_topology(
+        _ledger_snmp_nodes(),
+        _ledger_snmp_links(),
+        snmp_runtime.runtime.status(),
+    )
+
+
 @app.get("/api/mininet/start")
 def get_network_started():
     net = getattr(app, "net", None)
@@ -986,6 +1054,7 @@ def start_network():
             switch.start([])
     app.net.is_started = True
     _apply_all_router_configurations()
+    _start_snmp_collection()
     return {"status": "ok"}
 
 @app.post("/api/mininet/stop")
@@ -999,6 +1068,7 @@ async def stop_network():
     app.iperf_running = False
 
     await _stop_mininet_with_timeout()
+    _stop_snmp_collection()
 
     # Cleanup (mn -c)
     mn_cleanup()
@@ -1063,6 +1133,7 @@ async def full_reset_network():
     clear_log_file()
 
     await _stop_mininet_with_timeout()
+    _stop_snmp_collection()
     mn_cleanup()
 
     app.controllers = dict()

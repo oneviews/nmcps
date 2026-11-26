@@ -32,6 +32,13 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   `check:ui` 的 11.4 写用例会整段假红（2026-11-22 实测）。包装脚本现在在 `finally` 里把 `.data` 下 root 名下的
   文件 chown 回调用者；先看 `find .data -user root`，再怀疑代码。
 
+## SNMP 采集面（`NMCPS-ADR-0028`，2026-11-26）
+
+- 每个节点一条 agent 进程，由 `snmp/runtime.py` 用 `nsenter -t <node pid> -n -- python -m mininet_gui_backend.snmp.agent` 拉进**节点自己的 netns**，端口在 netns 内绑 161（`LAB_SNMP_PORT`），所以宿主 `snmpd` 继续占根 netns 的 161 也不冲突。
+- 前提三条都成立才会起：`LAB_SNMP_ENABLED=1`、后端以 root 跑（`os.geteuid() == 0`）、节点有 `pid`（Mininet 要 `start()` 才有）。任一不满足只在状态里记 `unavailable` + 原因，不会让起网失败（D4）。
+- 产物在 `services/mininet-api/.data/snmp/`（`SERVICE_ROOT` 是 `services/mininet-api`，不是仓库根）：`<node>.json` 档案（0600）、`<node>.log`（agent 的 stdout / stderr）。root 跑过之后这些文件属 root，普通用户的 BFF 再写会 `EACCES`；收尾照 `09-local-sudo.md` 的规矩 chown 回调用者 —— **两处都要**：`sudo -A chown -R "$(id -u):$(id -g)" .data services/mininet-api/.data`。
+- 真采集验收 2026-11-26 已在 90 上闭环（`NMCPS-ADR-0028` §5 有实测输出）：`apt-get install snmp` 装上 net-snmp（`/usr/bin/snmpwalk`），root 后端带 `LAB_SNMP_ENABLED=1` 起网后，`nsenter -t <node pid> -n -- snmpwalk -v2c -c public 127.0.0.1 1.3.6.1.2.1.1` 回 `sysName=<节点 id>`、`ifDescr` / `ipAdEntAddr` 与台账一致；从另一个节点的 netns 打 `10.0.0.x` 同样通（跨仿真网可达）。节点 netns 里没有路由到根 netns 的通路，所以**别在宿主上直接 `snmpwalk 10.0.0.1`** —— 那是「从外部 NMS 采集」的形态，本机拓扑没有接外部网。`pnpm check:snmp`（回环客户端 + 真子进程入口，28 项）仍是唯一无需 root 的自动检查。
+
 ## 本机 `:8000` 必须跑本仓代码（2026-11-18 现场）
 
 - 现场 `:8000` 的 uvicorn 是 11-15 20:39 启动的，cwd 在仓库外的旧副本 `/home/user/project/mininet/mininet-gui-backend`；该副本 `api.py` 里 `switch_fail_mode` / `failMode` **一次都没出现**（ADR-0024 之前的代码），所以交换机仍是 Mininet 默认 `failMode='secure'` + 零控制器。
@@ -85,7 +92,7 @@ Mininet 是**有状态、特权、单实例**的实验床，不是普通只读�
   `build:server` 产物实测）：`GET /api/lab/channel` 落到主网关回 `404 bff_resource_not_allowed`，`/lab-ws/*` 已无路由、
   普通 GET 不会升级（`GET /mininet-ws/logs` 无升级头回 `426 Upgrade Required`）。
 - 浏览器入口只有 `/api/mininet/**`；上游基址在 `runtimeConfig.mininet.instances`（`NUXT_MININET_INSTANCES`，租户 → 实例 JSON）。未配置实例的租户回 `503 tenant_runtime_unavailable`，不会回退全局 `baseUrl`。
-- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **59 条**端点：22 条查询 + 37 条写（ADR-0022 W1；其中 12 条是 2.0 会话入口 `/sessions/**` → `/api/simulation/**`，NMCPS-DESIGN-008 M1）；查询里的 `GET /nodes` 是统一节点投影（M1.1：五类分表 → `/api/mininet/nodes`，与会话侧 `/sessions/{id}/nodes` 同形），页面拓扑只打它 + `/links` 两条；`PATCH /links/{src_id}/{dst_id}/state` 是链路运行态通断（`up` / `down` / `toggle`，`lab:operate`，与改属性的 `PUT /links` 分成两条端点）。导出另走静态路由（`export/[kind].get.ts` + `LAB_EXPORT_UPSTREAMS`，`json` / `script` / `pcap` 三种，权限位与内容类型逐条登记），不占白名单条目。未登记路径回 404、动词不符回 405。
+- `layers/scenario/shared/constants/mininetRoutes.ts` 登记 **61 条**端点：24 条查询 + 37 条写（ADR-0022 W1；其中 12 条是 2.0 会话入口 `/sessions/**` → `/api/simulation/**`，NMCPS-DESIGN-008 M1）；查询里的 `GET /nodes` 是统一节点投影（M1.1：五类分表 → `/api/mininet/nodes`，与会话侧 `/sessions/{id}/nodes` 同形），页面拓扑只打它 + `/links` 两条；`PATCH /links/{src_id}/{dst_id}/state` 是链路运行态通断（`up` / `down` / `toggle`，`lab:operate`，与改属性的 `PUT /links` 分成两条端点）。导出另走静态路由（`export/[kind].get.ts` + `LAB_EXPORT_UPSTREAMS`，`json` / `script` / `pcap` 三种，权限位与内容类型逐条登记），不占白名单条目。未登记路径回 404、动词不符回 405。
 - BFF 出站不读 `nmcps_at`、不转 `Bearer`、不转发 cookie；只带 `accept` / `user-agent` / `x-request-id`。
 - `GET /api/mininet/channel` 返回 `configured` / `readOnly` / `writeEnabled` / `capabilities` / `endpointCount`，**按会话计算**，不回传上游地址。
 - 已开放：四条 WebSocket（抓包实时流 `/mininet-ws/sniffer`、Webshell `/mininet-ws/terminal`、日志 `/mininet-ws/logs`、监控 `/mininet-ws/monitor`，均经一次性票）、抓包启停（`lab:sniffer`）与 pcap 下载、导出 JSON / 脚本与 `import_json`（W4）、写操作（按权限位）、旧前端退役（W6：纯后端 + CORS 关闭 + `legacy-mininet-gui-final` 标签）。页面对全部写动作与三条观测面板都先读能力位再渲染。

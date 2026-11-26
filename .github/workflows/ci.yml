@@ -95,6 +95,18 @@ jobs:
           sh scripts/ci-summary.sh "mininet api source guard" ci-logs/lab-api.log --expect "$(sh scripts/ci-expectations.sh lab-api)" || status=1
           exit $status
 
+      # SNMP 采集面自检（`NMCPS-ADR-0028`）：纯 stdlib、无 root、无 mininet，与源码守卫同属
+      # 「后端不装依赖也能跑」的一类。单独一步而不是塞进上一步，是因为它自己有 28 条断言
+      # （含真子进程起停：`--profile` / `--port` / `--community` 生效、SIGTERM 退出码 0、
+      # 端口释放），混进源码守卫的日志后红在哪一层只能翻全量日志，且两边的结论键会互相盖住。
+      - name: SNMP agent self-check
+        run: |
+          set +e
+          python3 scripts/check-snmp.py 2>&1 | tee ci-logs/snmp.log
+          status=${PIPESTATUS[0]}
+          sh scripts/ci-summary.sh "snmp agent self-check" ci-logs/snmp.log --expect "$(sh scripts/ci-expectations.sh snmp)" || status=1
+          exit $status
+
       # 产物同时是回归样本的来源：`node scripts/check-ci-summary.mjs --from-ci <run-id>`
       # 直接下载这里的日志回填 scripts/fixtures/ci-logs/*.log（bff / ui 只能这样取，别再手抄）。
       - name: Upload quality check logs
@@ -108,6 +120,7 @@ jobs:
             ci-logs/i18n.log
             ci-logs/governance.log
             ci-logs/lab-api.log
+            ci-logs/snmp.log
           if-no-files-found: ignore
 
   runtime:

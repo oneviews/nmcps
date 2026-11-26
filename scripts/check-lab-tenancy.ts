@@ -156,9 +156,9 @@ check("查询端点一律 lab:read，写端点一律不含 lab:read", () => {
 	}
 });
 
-check("写端点 37 条、查询端点 22 条（覆盖上游全部写动词）", () => {
+check("写端点 37 条、查询端点 24 条（覆盖上游全部写动词）", () => {
 	assert.equal(MININET_ROUTES.filter((route) => route.method !== "GET").length, 37);
-	assert.equal(MININET_ROUTES.filter((route) => route.method === "GET").length, 22);
+	assert.equal(MININET_ROUTES.filter((route) => route.method === "GET").length, 24);
 });
 
 check("破坏性重建需要 lab:delete + lab:create 双权限", () => {

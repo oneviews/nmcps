@@ -123,7 +123,7 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 2. **只登记页面真正调用的条目**，按能力位（`lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`）逐条授权；新增条目须同批更新 `NMCPS-DESIGN-*` 的数据源表。
 3. **永久排除项需另立 ADR 才能解锁**：节点内任意命令执行（`execute`）、无头浏览器（`browser`）、完整性巡检（`integrity`）、设备库读写（`devices`）、独立探测工具（`test`）、SNMP 开通（`snmp/onboard`）、外部监控栈（`nms/vmagent`）。这些是 `NMCPS-ADR-0027` R1–R7 的裁决，不是「还没做」。
 
-白名单不是手抄常量：`check:lab-bff` ⓪ 按「22 条查询 + 37 条写 = 59」逐行对账，`check:engines` / `check:simulation` 守卫引擎面与外置后端；新增或改名端点必须同批改白名单与断言。
+白名单不是手抄常量：`check:lab-bff` ⓪ 按「24 条查询 + 37 条写 = 61」逐行对账，`check:engines` / `check:simulation` 守卫引擎面与外置后端；新增或改名端点必须同批改白名单与断言。
 
 ### 6.4 写能力位
 

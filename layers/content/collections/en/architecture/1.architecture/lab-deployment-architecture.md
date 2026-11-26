@@ -58,7 +58,7 @@ The criteria come from code, not preference: `services/mininet-api/mininet_gui_b
 | :--- | :--- | :--- | :--- |
 | Mininet API (`uvicorn mininet_gui_backend.api:app`) | `127.0.0.1:8000` (`pnpm dev:lab-api`) | Only the BFF (loopback on the same host, or a BFF host on the controlled network) | Binding a non-loopback address **requires** `LAB_API_TOKEN`, see §4 |
 | Nitro BFF | `:3000` | Browsers (same origin) | The upstream base URL lives only in Nitro runtime config; `proxyToMininet()` is the only egress |
-| SNMP agent (M2, not implemented) | `:161` (UDP) | NMS collectors | Fights the host `snmpd` for the same port, see §7 |
+| SNMP agent (first M2 increment, inside each node) | `:161` (UDP) inside the node netns; `LAB_SNMP_PORT` overrides | NMS collectors | One agent per node, running in its own netns, so the host `:161` stays free and the host `snmpd` may keep the root namespace — see `NMCPS-ADR-0028` |
 
 Three hard constraints:
 
@@ -142,7 +142,7 @@ Until each item below lands, neither this document nor the UI may claim it is su
 | :--- | :--- | :--- |
 | Startup shape on the lab host: systemd `User=labrun` + `AmbientCapabilities` (`CAP_NET_ADMIN` / `CAP_NET_RAW`), or a direct root start | To confirm | Install script, file ownership, `.data` permissions (see §6.3) |
 | A dedicated image (custom `regulatory.db` / DFS) | To confirm | Decides whether this repo ships an install script only, or a full image plus acceptance |
-| SNMP `:161` versus the host `snmpd` (the M2 in-process agent) | To decide | Port mapping or disabling the host agent |
+| SNMP `:161` versus the host `snmpd` (the M2 in-process agent) | Decided (`NMCPS-ADR-0028`) | Each agent binds `:161` inside its node's own netns, never on the host; the root-namespace proxy shape is rejected |
 | Per-tenant instance orchestration (containers / netns / quotas) | To decide | Orchestration lives in the deployment plane; the BFF only consumes the registry |
 
 ---

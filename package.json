@@ -13,6 +13,7 @@
 		"dev:lab-api": "python3 -m uvicorn mininet_gui_backend.api:app --app-dir services/mininet-api --host 127.0.0.1 --port 8000",
 		"lab:check": "python3 scripts/check-mininet-api.py",
 		"check:engines": "node scripts/check-engines.mjs",
+		"check:snmp": "python3 scripts/check-snmp.py",
 		"check:simulation": "python3 scripts/check-simulation-api.py",
 		"check:lab-bff": "node layers/scenario/scripts/check-lab-bff.mjs",
 		"check:lab-tenancy": "tsx scripts/check-lab-tenancy.ts",

@@ -2385,6 +2385,40 @@
         "summary": "Sniffer Stop"
       }
     },
+    "/api/mininet/snmp/state": {
+      "get": {
+        "description": "采集面读数：开关 / 运行态 / 每节点 agent 状态（三态，读不到不回落）。",
+        "operationId": "get_snmp_state_api_mininet_snmp_state_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Snmp State"
+      }
+    },
+    "/api/mininet/snmp/topology": {
+      "get": {
+        "description": "台账投影：给外部 NMS 的 seed 清单（节点 + 链路 + 采集参数）。",
+        "operationId": "get_snmp_topology_api_mininet_snmp_topology_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Snmp Topology"
+      }
+    },
     "/api/mininet/start": {
       "get": {
         "operationId": "get_network_started_api_mininet_start_get",

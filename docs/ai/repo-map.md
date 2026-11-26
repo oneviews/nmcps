@@ -88,6 +88,11 @@ BFF 与上游**前缀同形**（`NMCPS-ADR-0022` D11）：同一串 `/api/minine
 - M1 已落地：`wired` 引擎接管统一节点 / 链路 CRUD（适配 legacy `api.Host` 等模型与 `create_*`，不重写建网），
   BFF 白名单新增 12 条 `/api/mininet/sessions/**` → `/api/simulation/**`（权限位 + 台账 `session_id` 归属 + 审计）。
   更新类操作（位置 / IP / 默认路由 / OpenFlow / 流表 / 统计 / 抓包 / 导出）仍在 1.x；页面尚未切换，见 M1.1。
+- M2 首增量（SNMP 采集面，`NMCPS-ADR-0028`）：`services/mininet-api/mininet_gui_backend/snmp/**`（自写 stdlib
+  只读 v2c agent，每节点 netns 一份）+ 两个台账投影 GET（`/api/mininet/snmp/{state,topology}`，BFF 同名、
+  `lab:read`）。自检：`pnpm check:snmp`（零依赖、无 root；CI 里是独立步骤 `SNMP agent self-check`，结论键
+  `snmp` + 样本 `scripts/fixtures/ci-logs/snmp.log`）。真采集由外部 NMS 直连
+  节点 IP，不经 BFF（2026-11-26 在 90 上以 net-snmp `snmpwalk` 闭环，见 ADR-0028 §5）。
 
 ## 禁止事项
 

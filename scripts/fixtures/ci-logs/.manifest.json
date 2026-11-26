@@ -23,6 +23,10 @@
 		"sha256": "a58f23e70b88ac73f5d98754f6da6418a2b6977e04ed79afabe66a66a6a2bb1a",
 		"source": "CI run 45295921703 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-24 回填）"
 	},
+	"snmp": {
+		"sha256": "6b3e50ece7a827eb9490415f9e58caeeb99be639a562748a7fa1b9a0161f9f03",
+		"source": "本地 `python3 scripts/check-snmp.py` 真实输出尾部（2026-11-26 重采）"
+	},
 	"typecheck": {
 		"sha256": "1d3d49b4362cf9fe26fe12ae6f5b24422430a821f0791064b5359c58445034ec",
 		"source": "CI run 45295921703 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-24 回填）"

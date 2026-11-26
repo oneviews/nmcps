@@ -127,7 +127,7 @@
 
 | 端点 | 语义 | 本仓 | 档 | 目标 |
 |---|---|---|---|---|
-| `POST /snmp/topology` | 生成可供 NMS 采集的 SNMP 拓扑 | — | **P0** | `snmp/topology.py`：把台账投影成 MIB 视图 |
+| `POST /snmp/topology` | 生成可供 NMS 采集的 SNMP 拓扑 | 部分（`GET /api/mininet/snmp/topology` 台账投影 + 每节点 netns 内只读 v2c agent，`snmp/inventory.py` / `snmp/agent.py`，`NMCPS-ADR-0028`；写面未开） | **P0**（M2 首增量已落：`snmp/state` + `snmp/topology` 两端点） | 写面（onboard / v3）按 `lab:snmp` 另开增量 |
 | `GET /snmp/tools` | 采集工具可用性 | — | P1 | `snmpwalk`/`snmpget` 探测 |
 | `POST/GET /snmp/onboard` | 开通/查询采集凭据 | — | P1 | `snmp/onboard.py`（含 v2c/v3） |
 | `GET /snmp/onboard/live` | 在线状态 | — | P1 | — |
@@ -288,7 +288,7 @@
 
 | 项 | 位置 | 验收 |
 |---|---|---|
-| 上游统一读 | `api.py` 的 `GET /api/mininet/nodes` → `engines/wired.py` 的 `unified_nodes()`（五类分表的投影：`id/type/name/x/y` 提出、其余进 `attributes`）；会话侧 `WiredEngine.list_nodes()` 先过 `_bound()` 再复用同一投影 | `pnpm lab:check` 38 条 HTTP 路径；`check:engines` 7/7 不变 |
+| 上游统一读 | `api.py` 的 `GET /api/mininet/nodes` → `engines/wired.py` 的 `unified_nodes()`（五类分表的投影：`id/type/name/x/y` 提出、其余进 `attributes`）；会话侧 `WiredEngine.list_nodes()` 先过 `_bound()` 再复用同一投影 | `pnpm lab:check` 40 条 HTTP 路径；`check:engines` 7/7 不变 |
 | 白名单 | `mininetRoutes.ts` 新增 `GET /nodes`（`lab:read`），查询 21 → **22**、总计 **58** 条 | `check:lab-bff` ⓪ 计数 + ②「GET /nodes 转发上游并回统一投影」 |
 | 页面 | `simulator.vue` 的 `load()` 由五张分表并发改为一条 `/api/mininet/nodes` + `/links`；`rawUnifiedNodesOf()` 只认画布支持的五个 kind（`ap`/`station` 到 M3 才进 `NODE_KIND_ICONS`），字段从 `attributes` 摊平 | `check:ui` 297/297（假上游 `scripts/lib/bff-harness.mjs` 同步给出 `/nodes`） |
 

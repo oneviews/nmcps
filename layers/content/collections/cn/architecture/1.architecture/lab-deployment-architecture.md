@@ -59,7 +59,7 @@ tags:
 | :--- | :--- | :--- | :--- |
 | Mininet API（`uvicorn mininet_gui_backend.api:app`） | `127.0.0.1:8000`（`pnpm dev:lab-api`） | 只有 BFF（同机回环，或受控内网里的 BFF 主机） | 绑非回环地址**必须**设 `LAB_API_TOKEN`，见 §四 |
 | Nitro BFF | `:3000` | 浏览器（同源） | 上游基址只在 Nitro 运行时配置里；`proxyToMininet()` 是唯一出站点 |
-| SNMP agent（M2，未落地） | `:161`（UDP） | NMS 采集端 | 与宿主 `snmpd` 抢同一端口，见 §七 |
+| SNMP agent（M2 首增量，节点内） | 节点 netns 内 `:161`（UDP；`LAB_SNMP_PORT` 可改） | NMS 采集端 | 每节点一份、跑在自己的 netns 里，不占宿主 `:161`；宿主 `snmpd` 可继续使用根 netns，见 `NMCPS-ADR-0028` |
 
 三条硬约束：
 
@@ -143,7 +143,7 @@ BFF 侧同值配置 `NUXT_MININET_TOKEN`：出站只以请求头带它，WebSock
 | :--- | :--- | :--- |
 | 90 的启动形态：systemd `User=labrun` + `AmbientCapabilities`（`CAP_NET_ADMIN` / `CAP_NET_RAW`）还是 root 直启 | 待确认 | 安装脚本、文件属主、`.data` 权限（见 §六第 3 条） |
 | 专用镜像（自定义 `regulatory.db` / DFS） | 待确认 | 决定本仓只交安装脚本，还是整套镜像与验收 |
-| SNMP `:161` 与宿主 `snmpd` 冲突（M2 的进程内 agent） | 待裁决 | 端口映射或禁用宿主 agent |
+| SNMP `:161` 与宿主 `snmpd` 冲突（M2 的进程内 agent） | 已裁决（`NMCPS-ADR-0028`） | 每个 agent 在节点自己的 netns 内绑 `:161`，不占宿主端口；根 netns 代理形态被否决 |
 | 每租户实例编排（容器 / netns / 配额） | 待裁决 | 编排在部署面，BFF 只消费注册表 |
 
 ---

@@ -69,7 +69,7 @@ export function isLongOperationRoute(route: Pick<MininetRoute, "method" | "templ
 }
 
 /**
- * 白名单本体（22 条查询 + 37 条写端点，其中 12 条是 2.0 会话入口）。
+ * 白名单本体（24 条查询 + 37 条写端点，其中 12 条是 2.0 会话入口）。
  *
  * 刻意**不登记**：
  * - `export_json` / `export_script` / `sniffer/export`：响应是文本 / pcap 二进制，
@@ -105,6 +105,12 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 	// ── 抓包读数（只读；启停需 lab:sniffer） ──
 	{ method: "GET", template: "/sniffer/state", upstream: "/api/mininet/sniffer/state", permissions: ["lab:read"] },
 	{ method: "GET", template: "/sniffer/history", upstream: "/api/mininet/sniffer/history", permissions: ["lab:read"] },
+
+	// ── SNMP 采集面读数（只读，`NMCPS-ADR-0028` §3） ──
+	// `state` 是采集面自己的三态读数（关 / 运行 / 不可用），`topology` 是台账投影出的 NMS seed。
+	// 两者都不改上游状态，因此只要 `lab:read`；snmpwalk 这类真采集由外部 NMS 直连节点，不经 BFF。
+	{ method: "GET", template: "/snmp/state", upstream: "/api/mininet/snmp/state", permissions: ["lab:read"] },
+	{ method: "GET", template: "/snmp/topology", upstream: "/api/mininet/snmp/topology", permissions: ["lab:read"] },
 
 	// ── 建网与加节点 / 加链路（lab:create） ──
 	{ method: "POST", template: "/start", upstream: "/api/mininet/start", permissions: ["lab:create"] },

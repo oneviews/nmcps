@@ -30,8 +30,8 @@ API_PATH = SERVICE_DIR / "mininet_gui_backend" / "api.py"
 if not API_PATH.exists():
     raise SystemExit(f"缺少 Mininet 后端源码：{SERVICE_DIR}")
 
-# 源码守卫分三组：组名进 ✅ 行，最后的 `3/3` 由这张表算出来，漏跑一组会当场报错。
-SOURCE_GROUPS = ("链路生命周期", "停网 / 重建前等待", "iperf 子进程")
+# 源码守卫分四组：组名进 ✅ 行，最后的 `4/4` 由这张表算出来，漏跑一组会当场报错。
+SOURCE_GROUPS = ("链路生命周期", "停网 / 重建前等待", "iperf 子进程", "SNMP 采集面挂点")
 passed: list[str] = []
 
 
@@ -170,10 +170,39 @@ def check_iperf_guard(source_of) -> None:
     )
 
 
+# NMCPS-ADR-0028 D4：采集面只跟网络起停。四个挂点缺一个就会留下「网停了 agent 还在」
+# 或「进程退出后 root 名下的 agent 还占着节点 netns」，而 `--source-only` 不 import 后端，
+# 只能靠这里看住；`_start_snmp_collection()` 自己的 try/except 同样钉住 —— 采集失败不得让起网失败。
+def check_snmp_hooks(source_of) -> None:
+    if "_start_snmp_collection()" not in source_of("start_network"):
+        raise SystemExit(
+            "start_network() 没在起网成功后调 _start_snmp_collection()："
+            "LAB_SNMP_ENABLED=1 时采集面永远起不来（NMCPS-ADR-0028 D4）"
+        )
+    for name in ("stop_network", "full_reset_network"):
+        if "_stop_snmp_collection()" not in source_of(name):
+            raise SystemExit(
+                f"{name}() 没调 _stop_snmp_collection()：agent 会带着已消失的节点 netns 留在进程表里"
+                "（NMCPS-ADR-0028 D4）"
+            )
+    if "snmp_runtime.stop_on_shutdown()" not in source_of("lifespan"):
+        raise SystemExit(
+            "lifespan 退出路径没调 snmp_runtime.stop_on_shutdown()："
+            "后端停掉后 root 名下的 agent 仍占着节点端口（NMCPS-ADR-0028 D4）"
+        )
+    helper_src = source_of("_start_snmp_collection")
+    if "try:" not in helper_src or "except Exception" not in helper_src:
+        raise SystemExit(
+            "_start_snmp_collection() 没有 try/except 包住 start_for_net()："
+            "采集面起不来会让整张网的 start 失败（NMCPS-ADR-0028 D4）"
+        )
+    _pass("SNMP 采集面挂点", "采集面只挂起网 / 停网 / 全量重建 / 进程退出，且失败不影响起网（NMCPS-ADR-0028 D4）")
+
+
 # `--source-only`：不 import 后端（CI 没有 fastapi / starlette / mininet），只读 `api.py` 文本。
 if SOURCE_ONLY:
     api_text = API_PATH.read_text(encoding="utf-8")
-    for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard):
+    for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard, check_snmp_hooks):
         check(lambda name, text=api_text: _function_source(text, name))
     if passed != list(SOURCE_GROUPS):
         raise SystemExit(f"源码守卫只跑了 {len(passed)}/{len(SOURCE_GROUPS)} 组：{passed}")
@@ -211,6 +240,11 @@ if not http_paths:
 
 if not ws_paths:
     raise SystemExit("Mininet 后端没有暴露任何 /api/mininet/ WebSocket 路由")
+
+# NMCPS-ADR-0028 §3：采集面只有两条只读端点，缺一条 BFF 的 `/snmp/**` 就没有上游。
+for required in ("/api/mininet/snmp/state", "/api/mininet/snmp/topology"):
+    if required not in http_paths:
+        raise SystemExit(f"Mininet 后端缺少 {required}：SNMP 采集面的状态 / 台账投影端点被删（NMCPS-ADR-0028）")
 
 # NMCPS-ADR-0022 D9 / W6：旧前端退役后浏览器只经 BFF 访问，后端不再需要 CORS。
 # 留着 `CORSMiddleware(allow_origins=["*"])` 等于给任意网页开一扇直连特权后端的门，
@@ -383,7 +417,7 @@ finally:
 print("✅ 链路通断只改运行态：未启动 400 / 未知链路 404 / toggle 由服务端取反（NMCPS-ADR-0027 §4 R8）")
 
 # 与 `--source-only` 跑的是同一批断言，这里只是换个取源码的方式（inspect 而不是切文本）。
-for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard):
+for check in (check_link_lifecycle, check_idle_guard, check_iperf_guard, check_snmp_hooks):
     check(lambda name: inspect.getsource(getattr(lab_api, name)))
 
 if passed != list(SOURCE_GROUPS):

@@ -1,0 +1,13 @@
+# key: snmp
+# source: 本地 `python3 scripts/check-snmp.py` 真实输出尾部（2026-11-26 重采）
+# 更新方式：node scripts/check-ci-summary.mjs --write-fixtures
+✅ 回环 UDP：错社区被静默丢弃（不回错误响应）
+✅ 真实子进程：--profile / --port 生效（sysName == 台账 id、日志报同一端口） — port=34911 attempts=1 sysName=b'h1'
+✅ 真实子进程：--community 覆盖默认值（public 被丢、s3cret 应答） — public=无响应 s3cret=应答
+✅ 真实子进程：SIGTERM 后退出码 0（信号处理器优雅收尾，不是被 kill） — exit=0
+✅ 真实子进程：退出后端口释放 — port=34911 可重新绑定
+✅ 未设 LAB_SNMP_ENABLED 时 start_for_net() 是 no-op — enabled=False running=False
+✅ 启用后空网仍无 agent，状态读数是三态字段齐全的纯数据 — port=161 community=public
+✅ lifespan 退出钩子可重复调用（stop_on_shutdown 幂等）
+✅ agent 子进程的 PYTHONPATH 指向服务根（可 import mininet_gui_backend） — SERVICE_ROOT=/home/user/project/nmcps2/services/mininet-api
+结果：28 通过 / 0 失败
