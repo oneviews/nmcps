@@ -561,9 +561,10 @@ try {
 		log("iam/roles 的 keyword 在服务端生效（页面才能走服务端分页）", roleKeyword.json?.data?.total === 1 && roleKeyword.json?.data?.list?.[0]?.code === "tenant.viewer", `total=${describe(roleKeyword.json?.data?.total)}`);
 
 		const roleIgnoredFilter = await request(exitPort, "/api/iam/roles?page=1&page_size=10&enabled=false");
-		// 5 条 = 平台管理员 / 租户管理员 / ISP-A 只读 + 实验台两枚角色（`tenant_admin` / `lab_sniffer`，
-		// NMCPS-ADR-0022 W5 加入夹具）。断言的是「enabled 参数被上游忽略」，所以总数跟着夹具走。
-		log("iam/roles 的 enabled 过滤被上游静默忽略（页面不提供该筛选项）", roleIgnoredFilter.json?.data?.total === 6, `total=${describe(roleIgnoredFilter.json?.data?.total)}`);
+		// 7 条 = 平台管理员 / 租户管理员 / ISP-A 只读 + 实验台四枚角色（`tenant_admin` / `lab_sniffer` /
+		// `lab_terminal` / `lab_snmp`；NMCPS-ADR-0022 W5、NMCPS-ADR-0028 §6 D10 加入夹具）。
+		// 断言的是「enabled 参数被上游忽略」，所以总数跟着夹具走 —— 加角色就要同步这一行。
+		log("iam/roles 的 enabled 过滤被上游静默忽略（页面不提供该筛选项）", roleIgnoredFilter.json?.data?.total === 7, `total=${describe(roleIgnoredFilter.json?.data?.total)}`);
 
 		const roleDuplicate = await request(exitPort, "/api/iam/roles", {
 			method: "POST",
@@ -607,8 +608,9 @@ try {
 		log("摘除不存在的策略仍 200（DetachPolicy 幂等）", detachIdempotent.status === 200 && detachIdempotent.json?.code === 0, `${detachIdempotent.status} ${describe(detachIdempotent.json?.code)}`);
 
 		const subjectRoles = await request(exitPort, "/api/iam/subject-roles?page=1&page_size=10");
-		// 5 条 = alice 三条（`tenant_admin` + 实验台 `tenant_admin` + `lab_sniffer`）/ bob / 孤儿绑定
-		log("iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做）", subjectRoles.json?.data?.total === 6 && subjectRoles.json?.data?.list?.[0]?.role_id === "r_tenant_admin", `total=${describe(subjectRoles.json?.data?.total)}`);
+		// 7 条 = alice 五条（`tenant_admin` + 实验台 `tenant_admin` / `lab_sniffer` / `lab_terminal` /
+		// `lab_snmp`）/ bob / 孤儿绑定。加一条夹具绑定同样要同步这里。
+		log("iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做）", subjectRoles.json?.data?.total === 7 && subjectRoles.json?.data?.list?.[0]?.role_id === "r_tenant_admin", `total=${describe(subjectRoles.json?.data?.total)}`);
 
 		const assignCreated = await request(exitPort, "/api/iam/subject-roles/AssignRole", {
 			method: "POST",
