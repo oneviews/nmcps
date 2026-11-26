@@ -23,7 +23,7 @@
 // 通道、白名单、openapi 快照与 `--refresh-simulator-snapshot` 一并删除；实验通道的守卫
 // 在 `pnpm check:lab-bff`，不在本脚本。
 import { existsSync } from "node:fs";
-import { closeUpstream, freePort, HOST, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
+import { closeUpstream, freePort, HOST, IAM_ROLE_SEED, IAM_SUBJECT_ROLE_SEED, SERVER_ENTRY, startBff, startUpstream, stopBff } from "./lib/bff-harness.mjs";
 
 // ── 前置自检：先说自己缺什么，而不是让第一条断言替我们报错 ──────────────
 if (!existsSync(SERVER_ENTRY)) {
@@ -561,10 +561,10 @@ try {
 		log("iam/roles 的 keyword 在服务端生效（页面才能走服务端分页）", roleKeyword.json?.data?.total === 1 && roleKeyword.json?.data?.list?.[0]?.code === "tenant.viewer", `total=${describe(roleKeyword.json?.data?.total)}`);
 
 		const roleIgnoredFilter = await request(exitPort, "/api/iam/roles?page=1&page_size=10&enabled=false");
-		// 7 条 = 平台管理员 / 租户管理员 / ISP-A 只读 + 实验台四枚角色（`tenant_admin` / `lab_sniffer` /
-		// `lab_terminal` / `lab_snmp`；NMCPS-ADR-0022 W5、NMCPS-ADR-0028 §6 D10 加入夹具）。
-		// 断言的是「enabled 参数被上游忽略」，所以总数跟着夹具走 —— 加角色就要同步这一行。
-		log("iam/roles 的 enabled 过滤被上游静默忽略（页面不提供该筛选项）", roleIgnoredFilter.json?.data?.total === 7, `total=${describe(roleIgnoredFilter.json?.data?.total)}`);
+		// 断言的是「enabled 参数被上游忽略」，所以总数必须等于夹具种子条数（`IAM_ROLE_SEED.length`，
+		// 含实验台 `tenant_admin` / `lab_sniffer` / `lab_terminal` / `lab_snmp`）。写法按 `.length`
+		// 而不是写死数字：2026-11-26 加 `lab_snmp` 时正因写死 6 让 CI 的 Gateway contract checks 假红。
+		log("iam/roles 的 enabled 过滤被上游静默忽略（页面不提供该筛选项）", roleIgnoredFilter.json?.data?.total === IAM_ROLE_SEED.length, `total=${describe(roleIgnoredFilter.json?.data?.total)} expect=${IAM_ROLE_SEED.length}`);
 
 		const roleDuplicate = await request(exitPort, "/api/iam/roles", {
 			method: "POST",
@@ -608,9 +608,9 @@ try {
 		log("摘除不存在的策略仍 200（DetachPolicy 幂等）", detachIdempotent.status === 200 && detachIdempotent.json?.code === 0, `${detachIdempotent.status} ${describe(detachIdempotent.json?.code)}`);
 
 		const subjectRoles = await request(exitPort, "/api/iam/subject-roles?page=1&page_size=10");
-		// 7 条 = alice 五条（`tenant_admin` + 实验台 `tenant_admin` / `lab_sniffer` / `lab_terminal` /
-		// `lab_snmp`）/ bob / 孤儿绑定。加一条夹具绑定同样要同步这里。
-		log("iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做）", subjectRoles.json?.data?.total === 7 && subjectRoles.json?.data?.list?.[0]?.role_id === "r_tenant_admin", `total=${describe(subjectRoles.json?.data?.total)}`);
+		// 总数同样跟种子走（`IAM_SUBJECT_ROLE_SEED.length`：alice 五条 + bob + 孤儿绑定），
+		// `list[0]` 仍是 alice 的 `r_tenant_admin`。加一条绑定不必再改断言。
+		log("iam/subject-roles 放行（关系行含 subject_id / role_id，按角色反查由页面做）", subjectRoles.json?.data?.total === IAM_SUBJECT_ROLE_SEED.length && subjectRoles.json?.data?.list?.[0]?.role_id === "r_tenant_admin", `total=${describe(subjectRoles.json?.data?.total)} expect=${IAM_SUBJECT_ROLE_SEED.length}`);
 
 		const assignCreated = await request(exitPort, "/api/iam/subject-roles/AssignRole", {
 			method: "POST",

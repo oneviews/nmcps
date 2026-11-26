@@ -479,6 +479,63 @@ function nestTopologyGraph(flat) {
 	};
 }
 
+// ── IAM 夹具种子（`GET /iam/roles` / `/iam/role-policies` / `/iam/subject-roles`）──
+// 导出给 `scripts/check-bff.mjs`：那里的 iam 两条断言按 `.length` 走，不再把总数写死 ——
+// 加一条角色 / 一条绑定只改这里，不会再让 CI 的 Gateway contract checks 假红（2026-11-26 实测过一次）。
+// `startUpstream()` 每次深拷贝一份，写端点（建 / 删角色、挂 / 摘策略、授 / 撤角色）改的是副本。
+/**
+ * 新代角色假数据（`GET /iam/roles`，2026-11-04 实测字段）：给 `/system/permission` 两栏自查用。
+ * 三条硬要求，否则用例测不出真伪：
+ *   - `keyword` 真的命中 name / code（`enabled` / `tenant_id` 传了被静默忽略，UP-RBAC-06）；
+ *   - 分页字段是 `page_size`，`total` 要能分页；
+ *   - 留一条「删除回 `200 {code:400}`」的样本（`r_tenant_viewer_isp_a`），把 UP-RBAC-05 的
+ *     失败通道固定进假上游，否则「删除失败」分支永远测不到。
+ */
+export const IAM_ROLE_SEED = [
+	{ id: "r_platform_admin", tenant_id: null, name: "平台管理员", code: "platform.admin", description: "平台内置角色", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
+	{ id: "r_tenant_admin", tenant_id: "tnt_default", name: "租户管理员", code: "tenant.admin", description: "租户内置角色", enabled: true, is_system: true, created_at: "2026-11-03T19:00:00+08:00", updated_at: "2026-11-03T19:00:00+08:00", deleted_at: null },
+	{ id: "r_tenant_viewer_isp_a", tenant_id: "t_isp_a", name: "ISP-A 只读", code: "tenant.viewer", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:20:00+08:00", updated_at: "2026-11-04T09:20:00+08:00", deleted_at: null },
+	// 实验台管理角色（NMCPS-ADR-0021 / NMCPS-ADR-0022）：`labPermissionsOf()` 只认
+	// `tenant_admin` 这个**下划线**编码，而本文件的 IAM 列表用的是点号编码（`tenant.admin`），
+	// 两者不是同一套词表 —— 没有这条角色，`/scenario/simulator` 的自检账号只有 `lab:read`，
+	// 「写动作先读能力位」的正向分支就永远测不到。
+	{ id: "r_lab_tenant_admin", tenant_id: "t_default", name: "实验台管理员", code: "tenant_admin", description: "仿真网络读写（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T09:00:00+08:00", updated_at: "2026-11-16T09:00:00+08:00", deleted_at: null },
+	// 抓包授权（NMCPS-ADR-0022 W5）：`lab:sniffer` 必须单独授予，不能由 `tenant_admin` 推导；
+	// 自检账号额外挂这一条，才能在浏览器里走到「工具」菜单的启停 / 下载。
+	{ id: "r_lab_sniffer", tenant_id: "t_default", name: "实验台抓包", code: "lab_sniffer", description: "抓包启停与 pcap 下载（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T10:00:00+08:00", updated_at: "2026-11-16T10:00:00+08:00", deleted_at: null },
+	// 终端授权（NMCPS-ADR-0022 D6）：与抓包同一条纪律 —— 没有这条角色，自检账号的
+	// Network Tools 里只会有日志 / 监控两个标签页，Webshell 的正向分支永远测不到。
+	{ id: "r_lab_terminal", tenant_id: "t_default", name: "实验台终端", code: "lab_terminal", description: "Webshell 进入节点终端（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-17T10:00:00+08:00", updated_at: "2026-11-17T10:00:00+08:00", deleted_at: null },
+	// SNMP 凭据（NMCPS-ADR-0028 §6 D10）：`lab:snmp` 同样单独授予 —— 自检账号没有这条
+	// 角色时，SNMP 弹窗的写按钮永远不渲染，「已开通再开通回 409」这类分支测不到。
+	{ id: "r_lab_snmp", tenant_id: "t_default", name: "实验台 SNMP", code: "lab_snmp", description: "SNMP 凭据开通 / 轮换 / 吊销（NMCPS-ADR-0028 D10）", enabled: true, is_system: false, created_at: "2026-11-26T10:00:00+08:00", updated_at: "2026-11-26T10:00:00+08:00", deleted_at: null }
+];
+
+/**
+ * 关系假数据（`GET /iam/role-policies`、`GET /iam/subject-roles`）：
+ *   - `rp-orphan` 指向不存在的策略、`sr-orphan` 指向已删用户 —— 两页都要按存在性过滤（UP-RBAC-10）；
+ *   - 重复挂载回 `SQLSTATE 23505`、摘除幂等，与实测一致。
+ */
+export const IAM_ROLE_POLICY_SEED = [
+	{ id: "rp-platform", role_id: "r_platform_admin", policy_id: "pol_platform_full", created_at: "2026-11-03T18:59:06+08:00" },
+	{ id: "rp-tenant-reader", role_id: "r_tenant_admin", policy_id: "pol_tenant_reader", created_at: "2026-11-04T09:00:00+08:00" },
+	{ id: "rp-orphan", role_id: "r_tenant_admin", policy_id: "pol_deleted_elsewhere", created_at: "2026-11-04T09:05:00+08:00" }
+];
+
+export const IAM_SUBJECT_ROLE_SEED = [
+	{ id: "sr-alice", subject_type: "user", subject_id: "u_alice", role_id: "r_tenant_admin", created_at: "2026-11-04T09:00:00+08:00" },
+	// `/scenario/simulator` 的写路径自查用：给 alice 一条 `tenant_admin`（下划线编码）角色
+	{ id: "sr-alice-lab", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_tenant_admin", created_at: "2026-11-16T09:00:00+08:00" },
+	// 抓包单独授权（W5）：与上一行分开，正是要证明 `lab:sniffer` 不由 `tenant_admin` 推导
+	{ id: "sr-alice-sniffer", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_sniffer", created_at: "2026-11-16T10:00:00+08:00" },
+	// 终端单独授权（D6）：同上，`lab:terminal` 也不由 `tenant_admin` 推导
+	{ id: "sr-alice-terminal", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_terminal", created_at: "2026-11-17T10:00:00+08:00" },
+	// SNMP 单独授权（D10）：`lab:snmp` 不由 `tenant_admin` 推导
+	{ id: "sr-alice-snmp", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_snmp", created_at: "2026-11-26T10:00:00+08:00" },
+	{ id: "sr-bob", subject_type: "user", subject_id: "u_bob", role_id: "r_tenant_admin", created_at: "2026-11-04T09:01:00+08:00" },
+	{ id: "sr-orphan", subject_type: "user", subject_id: "u_ghost", role_id: "r_tenant_admin", created_at: "2026-11-04T09:02:00+08:00" }
+];
+
 /**
  * 假上游：覆盖裸 JSON、已是信封、业务错误、慢响应、Header 回显、健康探针与 SSE 流。
  * `/auth/*` 模拟新建 iam 服务（信封为 `{ code, msg, data }`）：登录签发 `at-N` / `rt-N`，
@@ -812,58 +869,11 @@ export async function startUpstream(port) {
 	/** 精确匹配的字符串筛选（空串 = 不筛）：上游对枚举参数是精确匹配，这里照样板做 */
 	const matchesText = (value, expected) => expected === "" || String(value ?? "") === expected;
 
-	/**
-	 * 新代角色假数据（`GET /iam/roles`，2026-11-04 实测字段）：给 `/system/permission` 两栏自查用。
-	 * 三条硬要求，否则用例测不出真伪：
-	 *   - `keyword` 真的命中 name / code（`enabled` / `tenant_id` 传了被静默忽略，UP-RBAC-06）；
-	 *   - 分页字段是 `page_size`，`total` 要能分页；
-	 *   - 留一条「删除回 `200 {code:400}`」的样本（`r_tenant_viewer_isp_a`），把 UP-RBAC-05 的
-	 *     失败通道固定进假上游，否则「删除失败」分支永远测不到。
-	 */
-	const iamRoles = [
-		{ id: "r_platform_admin", tenant_id: null, name: "平台管理员", code: "platform.admin", description: "平台内置角色", enabled: true, is_system: true, created_at: "2026-11-03T18:59:06+08:00", updated_at: "2026-11-03T18:59:06+08:00", deleted_at: null },
-		{ id: "r_tenant_admin", tenant_id: "tnt_default", name: "租户管理员", code: "tenant.admin", description: "租户内置角色", enabled: true, is_system: true, created_at: "2026-11-03T19:00:00+08:00", updated_at: "2026-11-03T19:00:00+08:00", deleted_at: null },
-		{ id: "r_tenant_viewer_isp_a", tenant_id: "t_isp_a", name: "ISP-A 只读", code: "tenant.viewer", description: "删除会被上游拒绝（UP-RBAC-05）", enabled: true, is_system: false, created_at: "2026-11-04T09:20:00+08:00", updated_at: "2026-11-04T09:20:00+08:00", deleted_at: null },
-		// 实验台管理角色（NMCPS-ADR-0021 / NMCPS-ADR-0022）：`labPermissionsOf()` 只认
-		// `tenant_admin` 这个**下划线**编码，而本文件的 IAM 列表用的是点号编码（`tenant.admin`），
-		// 两者不是同一套词表 —— 没有这条角色，`/scenario/simulator` 的自检账号只有 `lab:read`，
-		// 「写动作先读能力位」的正向分支就永远测不到。
-		{ id: "r_lab_tenant_admin", tenant_id: "t_default", name: "实验台管理员", code: "tenant_admin", description: "仿真网络读写（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T09:00:00+08:00", updated_at: "2026-11-16T09:00:00+08:00", deleted_at: null },
-		// 抓包授权（NMCPS-ADR-0022 W5）：`lab:sniffer` 必须单独授予，不能由 `tenant_admin` 推导；
-		// 自检账号额外挂这一条，才能在浏览器里走到「工具」菜单的启停 / 下载。
-		{ id: "r_lab_sniffer", tenant_id: "t_default", name: "实验台抓包", code: "lab_sniffer", description: "抓包启停与 pcap 下载（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-16T10:00:00+08:00", updated_at: "2026-11-16T10:00:00+08:00", deleted_at: null },
-		// 终端授权（NMCPS-ADR-0022 D6）：与抓包同一条纪律 —— 没有这条角色，自检账号的
-		// Network Tools 里只会有日志 / 监控两个标签页，Webshell 的正向分支永远测不到。
-		{ id: "r_lab_terminal", tenant_id: "t_default", name: "实验台终端", code: "lab_terminal", description: "Webshell 进入节点终端（NMCPS-ADR-0021 D3）", enabled: true, is_system: false, created_at: "2026-11-17T10:00:00+08:00", updated_at: "2026-11-17T10:00:00+08:00", deleted_at: null },
-		// SNMP 凭据（NMCPS-ADR-0028 §6 D10）：`lab:snmp` 同样单独授予 —— 自检账号没有这条
-		// 角色时，SNMP 弹窗的写按钮永远不渲染，「已开通再开通回 409」这类分支测不到。
-		{ id: "r_lab_snmp", tenant_id: "t_default", name: "实验台 SNMP", code: "lab_snmp", description: "SNMP 凭据开通 / 轮换 / 吊销（NMCPS-ADR-0028 D10）", enabled: true, is_system: false, created_at: "2026-11-26T10:00:00+08:00", updated_at: "2026-11-26T10:00:00+08:00", deleted_at: null }
-	];
-
-	/**
-	 * 关系假数据（`GET /iam/role-policies`、`GET /iam/subject-roles`）：
-	 *   - `rp-orphan` 指向不存在的策略、`sr-orphan` 指向已删用户 —— 两页都要按存在性过滤（UP-RBAC-10）；
-	 *   - 重复挂载回 `SQLSTATE 23505`、摘除幂等，与实测一致。
-	 */
-	const iamRolePolicies = [
-		{ id: "rp-platform", role_id: "r_platform_admin", policy_id: "pol_platform_full", created_at: "2026-11-03T18:59:06+08:00" },
-		{ id: "rp-tenant-reader", role_id: "r_tenant_admin", policy_id: "pol_tenant_reader", created_at: "2026-11-04T09:00:00+08:00" },
-		{ id: "rp-orphan", role_id: "r_tenant_admin", policy_id: "pol_deleted_elsewhere", created_at: "2026-11-04T09:05:00+08:00" }
-	];
-
-	const iamSubjectRoles = [
-		{ id: "sr-alice", subject_type: "user", subject_id: "u_alice", role_id: "r_tenant_admin", created_at: "2026-11-04T09:00:00+08:00" },
-		// `/scenario/simulator` 的写路径自查用：给 alice 一条 `tenant_admin`（下划线编码）角色
-		{ id: "sr-alice-lab", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_tenant_admin", created_at: "2026-11-16T09:00:00+08:00" },
-		// 抓包单独授权（W5）：与上一行分开，正是要证明 `lab:sniffer` 不由 `tenant_admin` 推导
-		{ id: "sr-alice-sniffer", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_sniffer", created_at: "2026-11-16T10:00:00+08:00" },
-		// 终端单独授权（D6）：同上，`lab:terminal` 也不由 `tenant_admin` 推导
-		{ id: "sr-alice-terminal", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_terminal", created_at: "2026-11-17T10:00:00+08:00" },
-		// SNMP 单独授权（D10）：`lab:snmp` 不由 `tenant_admin` 推导
-		{ id: "sr-alice-snmp", subject_type: "user", subject_id: "u_alice", role_id: "r_lab_snmp", created_at: "2026-11-26T10:00:00+08:00" },
-		{ id: "sr-bob", subject_type: "user", subject_id: "u_bob", role_id: "r_tenant_admin", created_at: "2026-11-04T09:01:00+08:00" },
-		{ id: "sr-orphan", subject_type: "user", subject_id: "u_ghost", role_id: "r_tenant_admin", created_at: "2026-11-04T09:02:00+08:00" }
-	];
+	// 夹具种子在模块级导出（`IAM_ROLE_SEED` / `IAM_ROLE_POLICY_SEED` / `IAM_SUBJECT_ROLE_SEED`），
+	// 这里每次深拷贝一份：写端点会 push / splice，共用一个数组会让多次 `startUpstream()` 互相污染。
+	const iamRoles = IAM_ROLE_SEED.map((item) => ({ ...item }));
+	const iamRolePolicies = IAM_ROLE_POLICY_SEED.map((item) => ({ ...item }));
+	const iamSubjectRoles = IAM_SUBJECT_ROLE_SEED.map((item) => ({ ...item }));
 
 	/**
 	 * 新代策略假数据（`GET /iam/policies`，2026-11-04 实测字段）：给 `/system/policy` 两栏自查用。

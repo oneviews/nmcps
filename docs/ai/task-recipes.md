@@ -15,9 +15,9 @@
 ## 改假上游夹具（`scripts/lib/bff-harness.mjs`）
 
 1. 写端点要真改状态（开通 / 轮换 / 吊销、流表、`full_reset`），否则页面「写完重读看得见变化」只能测到空口成功；成败码照抄上游（已开通再开通 409、未开通轮换 404）。
-2. IAM 夹具（`roles` / `subjectRoles`）每加一条，`scripts/check-bff.mjs` 里两个把总数写死的断言（`iam/roles` 的 `enabled` 被忽略、`iam/subject-roles` 的透传）就会红：它们断言的是「过滤参数被忽略 / 关系行原样透传」，总数只是夹具的影子。2026-11-26 加 `lab_snmp` 时就是这样让 CI 的 `Gateway contract checks` 变成 105/107。
+2. IAM 夹具（模块级导出的 `IAM_ROLE_SEED` / `IAM_ROLE_POLICY_SEED` / `IAM_SUBJECT_ROLE_SEED`）加一条就直接生效：`startUpstream()` 每次深拷贝一份，`scripts/check-bff.mjs` 的两条 iam 断言按 `.length` 走，不再写死总数（2026-11-26 加 `lab_snmp` 时正因写死 6 让 CI 的 `Gateway contract checks` 变成 105/107）。
 3. 所以两头都要跑：`pnpm check:bff`（107 项，含上面两条计数）与 `pnpm check:lab-bff`（168 项，能力位 / 白名单 / 审计面）。只跑后者会漏掉前者，而 CI 是它先红。
-4. 报错文案（`❌ … — total=7`）直接给出实际值：把它和夹具数组对一遍，再决定是改断言还是改夹具，别顺手把断言放宽成 `>= 6`。
+4. 页面 / 自查若还要「总数 = N」的断言（例如按角色反查的关系行条数），跟着种子的过滤结果走，别写死字面量 —— 报错文案里的 `— total=… expect=…` 就是给你对夹具用的。
 
 ## 新增 Lab 页面
 
