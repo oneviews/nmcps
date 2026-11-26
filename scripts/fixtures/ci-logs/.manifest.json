@@ -1,38 +1,38 @@
 {
 	"bff": {
-		"sha256": "72fbdff6638e1588a26073345a94f36c991016e52565c3c552709f3c6b5fb2d0",
-		"source": "CI run 45295921703 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-24 回填）"
+		"sha256": "450dbb1e58228505c1bcfff68d6f2928894f02f84ee758724fe0c08529532e37",
+		"source": "CI run 45734309550 步骤 \"Gateway contract checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-bff.log 尾部（2026-11-26 回填）"
 	},
 	"governance": {
-		"sha256": "8f919a66a0df9ef351b817c40f46d3e2cb1f91a9a60e4709f81118943499121b",
-		"source": "CI run 45295921703 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-24 回填）"
+		"sha256": "e6edc216812d6c20a5ac9e67919e2a36c1218ca28ab684922065e6b24d975ee0",
+		"source": "CI run 45734309550 步骤 \"Governance guard\"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-26 回填）"
 	},
 	"i18n": {
-		"sha256": "8f4ab51bae37f7c5417c6bd67136a68bb2a14fd18789a0c3e9a13f97a3f6898e",
-		"source": "CI run 45295921703 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-24 回填）"
+		"sha256": "075634d7db97bd1b3be05feb1bcfd22a37cfd68e5f686494dbf8d4722bc6c59b",
+		"source": "CI run 45734309550 步骤 \"Text (i18n) guard\"（job: lint / typecheck / governance）产物 check-logs-quality/i18n.log 尾部（2026-11-26 回填）"
 	},
 	"lab-api": {
-		"sha256": "d6339d4f44a0d82245857694063f7f32dd02b43f6584d562dadf13fb49d5eeb2",
-		"source": "CI run 45295921703 步骤 \"Mininet API source guard\"（job: lint / typecheck / governance）产物 check-logs-quality/lab-api.log 尾部（2026-11-24 回填）"
+		"sha256": "3b718fc202680b3305ad9e1cc5c558f321cfc0f8448341d6c7c683b08430e125",
+		"source": "CI run 45734309550 步骤 \"Mininet API source guard\"（job: lint / typecheck / governance）产物 check-logs-quality/lab-api.log 尾部（2026-11-26 回填）"
 	},
 	"lab-terminal": {
-		"sha256": "f375ba03f87f92e4872eef2b3d96e474b71e388310e1f95bf7138769fccb51c9",
-		"source": "CI run 45295921703 步骤 \"Lab terminal PTY checks\"（job: BFF contract / page UI）产物 check-logs-runtime/lab-terminal.log 尾部（2026-11-24 回填）"
+		"sha256": "aadf3a54c2b46a01a7cf7d25122982dbbcbbcdd4b1883c13878716bd42d64955",
+		"source": "CI run 45734309550 步骤 \"Lab terminal PTY checks\"（job: BFF contract / page UI）产物 check-logs-runtime/lab-terminal.log 尾部（2026-11-26 回填）"
 	},
 	"lint": {
-		"sha256": "a58f23e70b88ac73f5d98754f6da6418a2b6977e04ed79afabe66a66a6a2bb1a",
-		"source": "CI run 45295921703 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-24 回填）"
+		"sha256": "16ca6fa8dd81402f5e366216df3e5bec2dd559b827a72312ee8e2499dcade9ac",
+		"source": "CI run 45734309550 步骤 \"Lint\"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-26 回填）"
 	},
 	"snmp": {
-		"sha256": "6b3e50ece7a827eb9490415f9e58caeeb99be639a562748a7fa1b9a0161f9f03",
-		"source": "本地 `python3 scripts/check-snmp.py` 真实输出尾部（2026-11-26 重采）"
+		"sha256": "aa5eb5356a01c02dabf94b1d1ac94822cd27f422b68fad749ec561684a8f5aed",
+		"source": "CI run 45734309550 步骤 \"SNMP agent self-check\"（job: lint / typecheck / governance）产物 check-logs-quality/snmp.log 尾部（2026-11-26 回填）"
 	},
 	"typecheck": {
-		"sha256": "1d3d49b4362cf9fe26fe12ae6f5b24422430a821f0791064b5359c58445034ec",
-		"source": "CI run 45295921703 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-24 回填）"
+		"sha256": "4516b103e855d89a3f259e42ef37954a7d9e88791d6d1361d87aa20a48cca100",
+		"source": "CI run 45734309550 步骤 \"Typecheck\"（job: lint / typecheck / governance）产物 check-logs-quality/typecheck.log 尾部（2026-11-26 回填）"
 	},
 	"ui": {
-		"sha256": "82b3924ae3a8ae04d9000392417e56bd087acf02030a7f5932b113f601580990",
-		"source": "CI run 45295921703 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-24 回填）"
+		"sha256": "42460d9ee713c4ac6a56e707c4f8446d39e0cae596ae929b38d7c91f9319762b",
+		"source": "CI run 45734309550 步骤 \"Page UI checks\"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-26 回填）"
 	}
 }

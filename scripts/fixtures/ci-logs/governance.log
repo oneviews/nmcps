@@ -1,7 +1,7 @@
 # key: governance
-# source: CI run 45295921703 步骤 "Governance guard"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-24 回填）
+# source: CI run 45734309550 步骤 "Governance guard"（job: lint / typecheck / governance）产物 check-logs-quality/governance.log 尾部（2026-11-26 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
-结果：1187 通过 / 0 失败 / 0 告警
+结果：1291 通过 / 0 失败 / 0 告警
 文档体系自测 4/4 通过
   ✅ 命中：--expect 找到「结果：967 通过」
 步骤摘要自测 23/23 通过

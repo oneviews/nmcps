@@ -1,4 +1,4 @@
 # key: lint
-# source: CI run 45295921703 步骤 "Lint"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-24 回填）
+# source: CI run 45734309550 步骤 "Lint"（job: lint / typecheck / governance）产物 check-logs-quality/lint.log 尾部（2026-11-26 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 $ eslint .

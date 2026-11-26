@@ -1,5 +1,5 @@
 # key: ui
-# source: CI run 45295921703 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-24 回填）
+# source: CI run 45734309550 步骤 "Page UI checks"（job: BFF contract / page UI）产物 check-logs-runtime/check-ui.log 尾部（2026-11-26 回填）
 # 更新方式：node scripts/check-ci-summary.mjs --from-ci [run-id]
 ✅ 11.14 控制器详情只读：没有保存按钮，且弹窗写明「只改台账、不重启控制器」 — 只读说明=只读控制器与 NAT 只能看：上游改控制器只改台账、不重启控制器，改了也不会生效。 保存按钮=0
 ✅ 11.9 只读会话（实验台操作员）：右栏只剩 日志 / 监控 / 网络，Webshell 与连通都不出现 — tabs=["日志","监控","网络"] 连通字样=false
@@ -8,4 +8,4 @@
 ✅ 11.6b 缺 lab:delete 时「台账对账」禁用（客户端能力位与 BFF 守卫同源） — 菜单项=[{"label":"导入拓扑（JSON）…","disabled":true},{"label":"导出 JSON","disabled":false},{"label":"导出 Python 脚本","disabled":false},{"label":"导出拓扑 PNG","disabled":false},{"label":"导出地址规划（JSON）","disabled":false},{"label":"台账对账…","disabled":true},{"label":"设置…","disabled":false}]
 ✅ Tauri 宿主侧栏出现「平台能力」分组 — 已显示
 ✅ 「平台能力」分组含 5 个探针入口 — /os /file /store /notifications /webview
-299/299 项通过
+297/297 项通过
