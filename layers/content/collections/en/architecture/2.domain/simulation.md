@@ -13,7 +13,7 @@ authority: normative
 scope:
   - domain.simulation
 status: baseline
-version: 0.1.1
+version: 0.1.2
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -22,7 +22,7 @@ dependsOn:
   - NMCPS-ARCH-001
   - NMCPS-DESIGN-006
 createdAt: "2026-11-25"
-updatedAt: "2026-11-26"
+updatedAt: "2026-11-27"
 icon: "carbon:network-4"
 tags:
   - "Domain"
@@ -94,7 +94,7 @@ A node is a **unified model**, not five per-type tables:
 | Single projection | The projection lives only in `unified_nodes()` in `engines/wired.py`; the session-side `list_nodes()` checks the session binding first and then reuses that same function |
 | 1.x read | `GET /api/mininet/nodes` is the "default session" read and does **not** check a session binding, so a session holding only `lab:read` can still load the topology |
 | Node types | `host` / `router` / `switch` / `controller` / `nat` (`ap` / `station` are already in `NODE_TYPES`; canvas support arrives with M3) |
-| Updates | The "update" semantics of the unified model are not frozen, and the `Engine` protocol deliberately has **no** `update_node`; position / IP / default route / OpenFlow / flows / stats still go through the 1.x per-type endpoints |
+| Updates | Semantics frozen by `NMCPS-ADR-0029` (M1.2): only through `PATCH /sessions/{id}/nodes/{node_id}` and `PATCH /sessions/{id}/links/{link_id}`, whose body is a partial update of the unified model (`x` / `y` / `attributes` / `options`), with per-type field names accepted only inside `attributes`; the `Engine` protocol therefore gains `update_node` / `update_link`. Flows / stats / link state are runtime commands and stay on 1.x (revisited in M1.3) |
 
 The per-type tables survive only as legacy compatibility views (`GET /hosts` and friends); their existence does not fork the write path.
 
@@ -109,6 +109,7 @@ The browser only reaches same-origin BFF paths `<prefix>/**` and `<prefix>-ws/*`
 | Session reads | `GET /sessions`, `/sessions/{id}`, `/sessions/{id}/{nodes,links}` | `lab:read` |
 | Session creation | `POST /sessions`, `POST /sessions/{id}/nodes`, `POST /sessions/{id}/links` | `lab:create` |
 | Start / stop / unlink | `POST /sessions/{id}/start` (`lab:create`), `/stop` (`lab:operate`), `DELETE /sessions/{id}/links/{link_id}` (`lab:operate`) | per row |
+| Session updates | `PATCH /sessions/{id}/nodes/{node_id}`, `PATCH /sessions/{id}/links/{link_id}` | `lab:operate` (`NMCPS-ADR-0029` D6) |
 | Destroy / node removal | `DELETE /sessions/{id}`, `DELETE /sessions/{id}/nodes/{node_id}` | `lab:delete` |
 | Terminal / capture | `<prefix>-ws/{terminal,logs,monitor,sniffer}` | `lab:terminal` / `lab:sniffer`, never derived from `lab:read` / `lab:operate` |
 
@@ -128,10 +129,11 @@ Adding or removing nodes / links, flows, `pingall` / `iperf` do **not** touch th
 
 ## 7. Phases and acceptance
 
-| Phase | Scope | Exit criteria | Status (2026-11-26) |
+| Phase | Scope | Exit criteria | Status (2026-11-27) |
 | :--- | :--- | :--- | :--- |
 | M0 | Engine registry, session layer, BFF remote access (token + handshake), engine layering and the static guard | Contracts generated + BFF self-check; the root-free `dryrun` engine drives the whole chain in CI | Closed |
 | M1 | Unified node / link CRUD, session paths in the whitelist, ledger `session_id` ownership, unified read path | Self-check counts plus a real-host regression (start/stop, bandwidth edit, real iperf) | Closed (including the M1.1 unified read path) |
+| M1.2 | Updates enter the session channel (node position / attributes, link options) | `NMCPS-ADR-0029` D1–D7: `dryrun` walks "create → update → read the projection back", `applied` follows the runtime state; a real host reads back the changed IP / bandwidth | Semantics frozen, not implemented (the page still uses 1.x) |
 | M2 | SNMP surface (topology projection, onboarding credentials) | An external `snmpwalk` returns matching OIDs | Collection side closed (`NMCPS-ADR-0028`); the credential side `snmp/onboard` has not started and needs `lab:snmp` first (`NMCPS-ADR-0027` D5) |
 | M3 | Wireless + spectrum (hwsim / `hostapd` / radio read-write) | Change a channel → read back the same value → the conflict disappears (requires root) | Not started (`ap` / `station` creation still answers 501) |
 | M4 | Transmission (link tc, link actions, weak network) | The htb class `rate` equals the requested value (requires root) | Partial: bandwidth edits through `PUT /links` work and were verified on a real host; link actions and weak-network shaping are not done |
@@ -144,7 +146,7 @@ Dependency order: M0 → M1 → (M2 ∥ M3) → M4 → M5. M3 must not precede M
 ## 8. Out of scope
 
 - **The P2 items of the reference `:8001` are not reproduced**: arbitrary command execution inside a node (`execute`), headless browser scraping (`browser/*`), VictoriaMetrics agent management (`nms/*`), integrity patrols (`integrity/*`), and subnet scanning (`scan-subnets`).
-- **No double-writing**: one action, one entry point. The page has already collapsed its read path onto the unified node read; writes and updates still use the 1.x endpoints, and the page does not call the session channel directly.
+- **No double-writing**: one action, one entry point. The page has already collapsed its read path onto the unified node read; the update semantics are frozen by `NMCPS-ADR-0029`, but until that lands the page still uses 1.x, and the switch proceeds upstream → BFF → page one place at a time, never writing two paths for one action.
 - **No session persistence**: a session is a runtime fact and dies with the process; what needs to last is the ledger and the audit trail, not the session table.
 - **No concurrent multi-tenancy**: on a single-instance host multi-tenancy only works as "one tenant, one host"; isolating concurrent multi-user operation is outside this document.
 
@@ -156,3 +158,4 @@ Dependency order: M0 → M1 → (M2 ∥ M3) → M4 → M5. M3 must not precede M
 | :--- | :--- | :--- |
 | 2026-11-25 | 0.1.0 | First version: the simulation engine surface baseline (session as resource root, engine abstraction, unified node projection, outward channel and capability bits, ledger runtime state, phase boundaries). Covers the landed M0 / M1 / M1.1 and the entry points of the remaining phases. |
 | 2026-11-26 | 0.1.1 | §7 gains a "Status" column: M0 / M1 closed, M2 collection side closed (`NMCPS-ADR-0028`) while the credential side `snmp/onboard` has not started (needs `lab:snmp`), M3 not started, M4 limited to working bandwidth edits, M5 not started. |
+| 2026-11-27 | 0.1.2 | §4 "Updates" now records the frozen semantics from `NMCPS-ADR-0029` (M1.2): two session PATCHes whose body is a partial update of the unified model, and the `Engine` protocol gains `update_node` / `update_link`; §5 gains a "Session updates" row (`lab:operate`); §7 gains an M1.2 phase row (semantics frozen, not implemented); §8 "No double-writing" states the upstream → BFF → page switch order. |

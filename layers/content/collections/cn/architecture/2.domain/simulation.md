@@ -14,7 +14,7 @@ authority: normative
 scope:
   - domain.simulation
 status: baseline
-version: 0.1.1
+version: 0.1.2
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
@@ -23,7 +23,7 @@ dependsOn:
   - NMCPS-ARCH-001
   - NMCPS-DESIGN-006
 createdAt: "2026-11-25"
-updatedAt: "2026-11-26"
+updatedAt: "2026-11-27"
 icon: "carbon:network-4"
 tags:
   - "领域基准"
@@ -95,7 +95,7 @@ tags:
 | 唯一投影 | 投影只写在 `engines/wired.py` 的 `unified_nodes()` 一处；会话侧 `list_nodes()` 先校验会话绑定，再复用同一函数 |
 | 1.x 读 | `GET /api/mininet/nodes` 是「默认会话」读，**不判会话绑定**，因此只有 `lab:read` 的会话也能加载拓扑 |
 | 类型集合 | `host` / `router` / `switch` / `controller` / `nat`（`ap` / `station` 已进 `NODE_TYPES`，画布支持要到 M3） |
-| 更新 | 统一模型的「更新」语义未冻结，`Engine` 协议**刻意没有** `update_node`；位置 / IP / 默认路由 / OpenFlow / 流表 / 统计仍走 1.x 的分表端点 |
+| 更新 | 语义由 `NMCPS-ADR-0029` 冻结（M1.2）：只经 `PATCH /sessions/{id}/nodes/{node_id}` 与 `PATCH /sessions/{id}/links/{link_id}`，请求体是统一模型的部分更新（`x` / `y` / `attributes` / `options`），分表字段名只允许出现在 `attributes` 内；`Engine` 协议随之新增 `update_node` / `update_link`。流表 / 统计 / 链路通断仍是运行态命令，留在 1.x（M1.3 再议） |
 
 分表只作为 legacy 兼容视图存在（`GET /hosts` 等形式），写路径不因分表存在而分叉。
 
@@ -110,6 +110,7 @@ tags:
 | 会话读 | `GET /sessions`、`/sessions/{id}`、`/sessions/{id}/{nodes,links}` | `lab:read` |
 | 会话建 | `POST /sessions`、`POST /sessions/{id}/nodes`、`POST /sessions/{id}/links` | `lab:create` |
 | 起停 / 删链路 | `POST /sessions/{id}/start`（`lab:create`）、`/stop`（`lab:operate`）、`DELETE /sessions/{id}/links/{link_id}`（`lab:operate`） | 逐条登记 |
+| 会话更新 | `PATCH /sessions/{id}/nodes/{node_id}`、`PATCH /sessions/{id}/links/{link_id}` | `lab:operate`（`NMCPS-ADR-0029` D6） |
 | 销毁 / 删节点 | `DELETE /sessions/{id}`、`DELETE /sessions/{id}/nodes/{node_id}` | `lab:delete` |
 | 终端 / 抓包 | `<prefix>-ws/{terminal,logs,monitor,sniffer}` | `lab:terminal` / `lab:sniffer`，**不得**由 `lab:read` / `lab:operate` 推导 |
 
@@ -129,10 +130,11 @@ tags:
 
 ## 七、阶段与验收
 
-| 阶段 | 范围 | 出口验收 | 现状（2026-11-26） |
+| 阶段 | 范围 | 出口验收 | 现状（2026-11-27） |
 | :--- | :--- | :--- | :--- |
 | M0 | 引擎注册表、会话层、BFF 远程化（token + 握手）、引擎分层与静态守卫 | 契约生成 + BFF 自检；无 root 的 `dryrun` 让 CI 跑通全链路 | 已闭环 |
 | M1 | 统一节点 / 链路 CRUD、会话路径进白名单、台账 `session_id` 归属、统一读路径 | 自检计数与真机回归（起停、改带宽、真 iperf） | 已闭环（含 M1.1 统一读路径） |
+| M1.2 | 更新类进会话通道（节点位置 / 属性、链路属性） | `NMCPS-ADR-0029` 的 D1–D7：`dryrun` 走通「建 → 改 → 读回投影」，`applied` 随运行态变化；真机改 IP / 改带宽回读一致 | 语义已冻结，未落地（页面仍走 1.x） |
 | M2 | SNMP 面（拓扑投影、开通凭据） | 外部 `snmpwalk` 取到一致 OID | 采集侧已闭环（`NMCPS-ADR-0028`）；凭据侧 `snmp/onboard` 未开工，前置是 `lab:snmp`（`NMCPS-ADR-0027` D5） |
 | M3 | 无线 + 频谱（hwsim / `hostapd` / radio 读写） | 改信道 → 回读一致 → 冲突消失（需 root） | 未开工（`ap` / `station` 建节点仍回 501） |
 | M4 | 传输（链路 tc、链路动作、弱网） | tc 类 `rate` 与请求值一致（需 root） | 部分：`PUT /links` 改带宽已通并真机验过；链路动作与弱网未做 |
@@ -145,7 +147,7 @@ tags:
 ## 八、不承载
 
 - **不做参考侧 `:8001` 的 P2 项**：节点内任意命令执行（`execute`）、无头浏览器抓取（`browser/*`）、VictoriaMetrics agent 管理（`nms/*`）、完整性巡检（`integrity/*`）、子网扫描（`scan-subnets`）。
-- **不做双写**：同一动作只有一个入口。页面已收敛读路径到统一节点读，写与更新类仍走 1.x，会话通道不被页面直接调用。
+- **不做双写**：同一动作只有一个入口。页面已收敛读路径到统一节点读；更新类语义已由 `NMCPS-ADR-0029` 冻结，但落地前页面仍走 1.x，切换按「上游 → BFF → 页面」逐处进行，同一动作不写两条路径。
 - **不做会话持久化**：会话是运行态事实，重启即失效；需要长期留存的是台账与审计，不是会话表。
 - **不做多租户并发**：单实例宿主上多租户只能靠「一租户一宿主」；多用户并发操作的隔离不在本文范围。
 
@@ -157,3 +159,4 @@ tags:
 | :--- | :--- | :--- |
 | 2026-11-25 | 0.1.0 | 首版：固化仿真引擎面领域基准（会话为资源根、引擎抽象、统一节点投影、对外通道与能力位、台账运行态、阶段边界）。对应已落地的 M0 / M1 / M1.1 与其余阶段入口。 |
 | 2026-11-26 | 0.1.1 | §七阶段表增加「现状」列：标注 M0 / M1 已闭环、M2 采集侧已闭环（`NMCPS-ADR-0028`）而凭据侧 `snmp/onboard` 未开工（前置 `lab:snmp`）、M3 未开工、M4 仅链路改带宽已通、M5 未开工。 |
+| 2026-11-27 | 0.1.2 | §四「更新」行改写为已冻结：更新类语义由 `NMCPS-ADR-0029`（M1.2）定案，只经两条会话 PATCH、请求体是统一模型的部分更新，`Engine` 协议随之新增 `update_node` / `update_link`；§五通道表补「会话更新」行（`lab:operate`）；§七新增 M1.2 阶段行（语义已冻结、未落地）；§八「不做双写」补上切换顺序。 |

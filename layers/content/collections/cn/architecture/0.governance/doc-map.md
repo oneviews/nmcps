@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.63.0
+version: 0.64.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-25"
+updatedAt: "2026-11-27"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -126,6 +126,7 @@ tags:
 | NMCPS-ADR-0026 | 长时操作的出站预算与台账运行态对账 | 5 | informative | rec.adr.0026 | baseline | records/adr/adr-0026.md |
 | NMCPS-ADR-0027 | 引擎面定位与不复刻清单 | 5 | informative | rec.adr.0027 | baseline | records/adr/adr-0027.md |
 | NMCPS-ADR-0028 | SNMP 采集面的最小形态（M2 首增量） | 5 | informative | rec.adr.0028 | baseline | records/adr/adr-0028.md |
+| NMCPS-ADR-0029 | 会话通道的更新类语义（M1.2 冻结） | 5 | informative | rec.adr.0029 | baseline | records/adr/adr-0029.md |
 | NMCPS-REC-001 | 上游 auth 缺陷清单 | 5 | informative | rec.defects.auth | superseded | records/defects/auth-upstream-defects.md |
 | NMCPS-REC-002 | 上游 account 缺陷清单 | 5 | informative | rec.defects.account | superseded | records/defects/account-upstream-defects.md |
 | NMCPS-REC-003 | 上游 policy 缺陷清单 | 5 | informative | rec.defects.policy | superseded | records/defects/policy-upstream-defects.md |
@@ -265,3 +266,5 @@ tags:
 | 2026-11-25 | 0.62.0 | 登记记录层：`NMCPS-ADR-0027`「引擎面定位与不复刻清单」（`rec.adr.0027`，Tier 5，informative）。**D1–D7 冻结引擎面定位**：唯一引擎面是本仓 `services/mininet-api`，参考侧 `:8001` 退役为只读参考（`_reference/netsim` 只取行为，不复用代码/契约）；统一 `NodeSpec{type}`（七种 type，五张分表只做兼容只读视图，统一投影只有 `engines/wired.py` 的 `unified_nodes()` 一份）；会话是资源根（否决 parity §4.1 的 S-B 隐式会话双路径）；引擎注册表未登记即 `EngineNotFound`、不回落，`dryrun` 保留为无 root CI 的唯一验证路径；能力位不随参考侧 131 个端点扩张（SNMP 写面要新开 `lab:snmp`，不由 `lab:operate` 推导）；一宿主一实例、租户→实例注册表 fail closed；移植门禁（不复制参考侧代码与 21 个 MIB 文本）。**R1–R8 固化退役与不复刻清单**：R1–R7 与 `shared/constants/simulatorRoutes.ts` 的 `SIMULATOR_EXCLUDED_PREFIXES` 七条按序逐条对应（节点内任意命令 `execute`、无头浏览器 `browser`、完整性巡检 `integrity/watch`、设备库 `devices/clear`、`test/*`、`snmp/onboard` 改为 M2 以 `lab:snmp` 重建、`nms/vmagent`），R8 是 `/api/sim/**` 直通 `:8001` 的通道退役；同时写明现状面（23 条白名单含 18 条写、生产拓扑监控页仍消费 `/api/sim/**`）、「读 → 写 → 能力位 → 删」的迁移顺序与完成判据（`grep -rn "/api/sim"` 无命中、`check-bff` ⑨-6 退场、`simulator` 配置段消失）。闭合 `docs/ai/simulation-parity.md` §七第 1 条的待登记项；`services/mininet-api/mininet_gui_backend/engines/base.py` 对 `NMCPS-ADR-0027 D2` 的前向引用从此有效。 |
 
 | 2026-11-25 | 0.63.0 | 登记记录层：`NMCPS-ADR-0028`「SNMP 采集面的最小形态（M2 首增量）」（`rec.adr.0028`，Tier 5，informative）。**D1–D7 冻结 M2 首增量**：自写 stdlib agent（`mininet_gui_backend/snmp/` 的 BER / MIB / UDP，不复制参考侧代码与 21 份 MIB 文本、不依赖 net-snmp）；agent 按节点 `nsenter -t <pid> -n` 进各自 netns 绑 `:161`，因此不抢宿主 `snmpd` 也不做根 netns 代理；只读 v2c（GET / GETNEXT），社区串 `LAB_SNMP_COMMUNITY`、端口 `LAB_SNMP_PORT` 都是部署配置，写面（onboard / rotate / revoke）留给 `lab:snmp` 与 IAM `lab_snmp`；生命周期挂 `start` / `stop` / `reset` / `full_reset` 且默认关闭（`LAB_SNMP_ENABLED=1`），采集失败不得让起网失败；MIB 子集只有 system / `ifTable` / `ipAddrTable` 与企业类型 `sysObjectID`（`1.3.6.1.4.1.99999.<type>`），计数器首版恒 0；邻接不从 LLDP 读（`NMCPS-ADR-0027` R8），改由 `GET /api/mininet/snmp/topology` 台账投影给 NMS 做 seed；首增量不含凭据编排 / exporter / `snmp/tools`。同时收口 `NMCPS-ARCH-007` §七「SNMP `:161` 与宿主 `snmpd` 冲突」：节点面不冲突，冲突形态已被 D2 否决。 |
+
+| 2026-11-27 | 0.64.0 | 登记记录层：`NMCPS-ADR-0029`「会话通道的更新类语义（M1.2 冻结）」（`rec.adr.0029`，Tier 5，informative）。**D1–D7 冻结 M1.2**：更新只经两条会话 PATCH（`/sessions/{id}/nodes/{node_id}`、`/sessions/{id}/links/{link_id}`），位置并入节点 PATCH，分表字段名只允许出现在 `attributes` 并按类型白名单校验；生效语义只分 `layout` / `deferred` / `live` 三档，响应带 `applied` 布尔，`live` 在未运行时回 `409 engine_conflict`；`id` / `type` / `mac` / `name` 不可变（400），未登记属性键同样 400；`Engine` 协议新增 `update_node` / `update_link`，`wired` 只映射到既有 apply 函数、不重写建网；权限位不变（`lab:operate`）；流表 / 统计 / 链路通断留在 1.x（M1.3 再议）。同一次改动给 `NMCPS-DESIGN-008` §4 补上「更新语义已由 ADR-0029 冻结」、§8 补上切换顺序，并在 §7 阶段表新增 M1.2 行。 |
