@@ -577,6 +577,28 @@ async function startMininet(port) {
 		// SNMP 凭据面（NMCPS-ADR-0028 §6 D11/D12）：形状与真实后端一致 ——
 		// 开通 / 轮换回**一次性**社区串 + 版本号，重复开通 409、未开通轮换 / 吊销 404。
 		// 「写盘 → 重启 agent」由上游负责；BFF 只转发并透传状态码，因此这里只需状态机。
+		//
+		// 读端点（D9）与 `runtime.status()` 同口径：未开通回**部署默认串**
+		// （`community_source: deployment`），开通后 `community: null`。⑰ 据此断言 BFF
+		// 只是原样转发，没有从开通响应里另建一条能取到密文的读路径。
+		if (path === "/api/mininet/snmp/state" && req.method === "GET") {
+			return send(200, {
+				enabled: true,
+				running: true,
+				port: 161,
+				community: snmp.onboarded ? null : "public",
+				community_source: snmp.onboarded ? "credential" : "deployment",
+				onboarded: snmp.onboarded,
+				credential_version: snmp.onboarded ? 2 : null,
+				credential_created_at: null,
+				credential_rotated_at: null,
+				credential_error: null,
+				started_at: null,
+				error: null,
+				nodes: []
+			});
+		}
+
 		if (path === "/api/mininet/snmp/onboard" && req.method === "POST") {
 			if (snmp.onboarded)
 				return send(409, { detail: "snmp credentials already exist" });
@@ -1976,7 +1998,8 @@ try {
 	// ⑰ SNMP 凭据面（`NMCPS-ADR-0028` §6 D8–D12）：三个写端点只认 `lab:snmp`，
 	// 能力位独立授权（不由 operate / create 推导），租户管理员一律 403 且不触达上游。
 	//
-	// 假上游只维护「已开通 / 版本号」状态机：断言的是 BFF 的权限位分档与状态码透传，
+	// 假上游只维护「已开通 / 版本号」状态机：断言的是 BFF 的权限位分档、状态码透传，
+	// 以及读端点只转发元数据（开通前是部署默认串、开通后是 null，正文里没有一次性密文）。
 	// 真后端的写盘 / 0600 权限 / agent 重启由 `pnpm check:snmp` 覆盖。
 	const snmpLedgerFile = `.data/check-lab-bff-snmp-${process.pid}.json`;
 	rmSync(snmpLedgerFile, { force: true });
@@ -2029,6 +2052,18 @@ try {
 			`${denied.status} ${describe(denied.json?.message)} upstream=${adminTouched}`
 		);
 
+		// 读端点（D9）对 `lab:read` 开放：未开通时它回的是**部署默认串**，页面据此显示
+		// 「当前用的是部署默认凭据」——这条同时证明 BFF 没有把这枚读数也筛成 null。
+		const stateBefore = await request(port, "/api/mininet/snmp/state", { cookie: snmpUser.cookie });
+		log(
+			"⑰ 开通前读 /snmp/state：community 直通部署默认串（community_source=deployment）",
+			stateBefore.status === 200
+			&& stateBefore.json?.data?.community === "public"
+			&& stateBefore.json?.data?.community_source === "deployment"
+			&& stateBefore.json?.data?.onboarded === false,
+			`${stateBefore.status} community=${describe(stateBefore.json?.data?.community)} source=${describe(stateBefore.json?.data?.community_source)}`
+		);
+
 		const before = mininet.log.length;
 		const onboarded = await request(port, "/api/mininet/snmp/onboard", {
 			cookie: snmpUser.cookie,
@@ -2040,6 +2075,26 @@ try {
 			"⑰ lab:snmp 开通 → 200，出站 POST /api/mininet/snmp/onboard 且回一次性社区串",
 			onboarded.status === 200 && onboarded.json?.data?.community === "community-1" && onboardHit.length === 1,
 			`${onboarded.status} community=${describe(onboarded.json?.data?.community)} hits=${onboardHit.length}`
+		);
+
+		// D9 的 BFF 侧守卫：同一个人用同一张 cookie 再读一次状态，回包里**没有**刚才那枚
+		// 一次性社区串 —— BFF 不缓存开通 / 轮换响应，也不拿它拼第二条可显示的读路径。
+		// 同时要求这次读真的打到了上游（`null` 是上游说的，不是 BFF 编的）。
+		const stateLogStart = mininet.log.length;
+		const stateAfter = await request(port, "/api/mininet/snmp/state", { cookie: snmpUser.cookie });
+		const stateHit = mininet.log.slice(stateLogStart).filter((entry) => entry.method === "GET" && entry.path === "/api/mininet/snmp/state");
+		const onboardSecret = onboarded.json?.data?.community;
+		log(
+			"⑰ 开通后读 /snmp/state：community=null 且正文不含刚回的一次性社区串",
+			stateAfter.status === 200
+			&& stateAfter.json?.data?.community === null
+			&& stateAfter.json?.data?.community_source === "credential"
+			&& stateAfter.json?.data?.onboarded === true
+			&& stateHit.length === 1
+			&& typeof onboardSecret === "string"
+			&& onboardSecret.length > 0
+			&& !stateAfter.text.includes(onboardSecret),
+			`${stateAfter.status} community=${describe(stateAfter.json?.data?.community)} hits=${stateHit.length} leaked=${typeof onboardSecret === "string" && stateAfter.text.includes(onboardSecret)}`
 		);
 
 		// 上一条 403 若曾摸到上游，这里会是 409（已存在）——所以「重复开通回 409」同时证明 403 真的没出站
