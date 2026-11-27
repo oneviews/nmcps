@@ -21,7 +21,7 @@
 #   ui          → `305/305 项通过`
 #   lab-terminal → `6/6 项通过（真实 bash + PTY）`
 #   lab-api     → `源码守卫 4/4 组通过`（`--source-only`，无 Mininet 依赖）
-#   snmp        → `结果：28 通过 / 0 失败`（`check:snmp` 的小结；条数随用例增减变化，不写死）
+#   snmp        → `结果：41 通过 / 0 失败`（`check:snmp` 的小结；条数随用例增减变化，不写死）
 set -eu
 
 KEYS='lint typecheck i18n governance bff ui lab-terminal lab-api snmp'
