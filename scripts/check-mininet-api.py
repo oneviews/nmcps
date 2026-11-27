@@ -196,7 +196,49 @@ def check_snmp_hooks(source_of) -> None:
             "_start_snmp_collection() 没有 try/except 包住 start_for_net()："
             "采集面起不来会让整张网的 start 失败（NMCPS-ADR-0028 D4）"
         )
-    _pass("SNMP 采集面挂点", "采集面只挂起网 / 停网 / 全量重建 / 进程退出，且失败不影响起网（NMCPS-ADR-0028 D4）")
+
+    # NMCPS-ADR-0028 §6 D9 / §7：两个读端点的 community 只能来自 `runtime.status()`。
+    # `status()` 已经算好「未开通 → 部署默认串 / 开通后 → null」，路由再包一层
+    # `{"community": …}` 就等于给密文开了第二条读路径；`pnpm check:snmp` 只测
+    # runtime、不测路由，所以这一层只能在源码里钉住（`--source-only` 同样覆盖）。
+    state_src = source_of("get_snmp_state")
+    if state_src.count("return ") != 1 or "return snmp_runtime.runtime.status()" not in state_src:
+        raise SystemExit(
+            "get_snmp_state() 不再直接 return snmp_runtime.runtime.status()："
+            "读端点自己拼装响应就绕过了「密文只出示一次」（NMCPS-ADR-0028 D9）"
+        )
+    if "community" in state_src:
+        raise SystemExit(
+            "get_snmp_state() 里出现了 community：状态读端点的 community 只能由 runtime.status() "
+            "决定（未开通 = 部署默认串、开通后 = null），路由层不得另取（NMCPS-ADR-0028 D9）"
+        )
+    topology_src = source_of("get_snmp_topology")
+    if "community" in topology_src or "snmp_runtime.runtime.status()" not in topology_src:
+        raise SystemExit(
+            "get_snmp_topology() 要么自己拼 community、要么不再复用 runtime.status()："
+            "台账投影的 community 必须与状态读数同源（NMCPS-ADR-0028 D6 / D9）"
+        )
+
+    # 三个写端点必须共用 `_snmp_credential_write()`：只有它同时拿到「落盘结果」与
+    # 「重启后状态」，谁绕过它就等于自己拼一份响应（密文 / nodes 都可能对不上）。
+    write_src = source_of("_snmp_credential_write")
+    if '"community"' in write_src:
+        raise SystemExit(
+            "_snmp_credential_write() 自己拼了 community 键：密文只应来自 store 的返回值"
+            "（D9 的 show-once），不得在 helper 里再取一次（NMCPS-ADR-0028 D9）"
+        )
+    for route in ("snmp_onboard", "snmp_rotate", "snmp_revoke"):
+        route_src = source_of(route)
+        if "_snmp_credential_write(" not in route_src:
+            raise SystemExit(
+                f"{route}() 没走 _snmp_credential_write()：落盘 / 重启 / 响应拼装的三段顺序只剩一份实现，"
+                "绕过它就会写出与 nodes 读数不一致的响应（NMCPS-ADR-0028 D12）"
+            )
+    _pass(
+        "SNMP 采集面挂点",
+        "采集面只挂起网 / 停网 / 全量重建 / 进程退出，失败不影响起网（D4）；读端点直通 runtime.status()、"
+        "写端点共用同一段落盘 + 重启 + 拼装（D9 / D12）",
+    )
 
 
 # `--source-only`：不 import 后端（CI 没有 fastapi / starlette / mininet），只读 `api.py` 文本。
