@@ -70,7 +70,7 @@ export function isLongOperationRoute(route: Pick<MininetRoute, "method" | "templ
 }
 
 /**
- * 白名单本体（24 条查询 + 40 条写端点，其中 12 条是 2.0 会话入口）。
+ * 白名单本体（24 条查询 + 42 条写端点，其中 14 条是 2.0 会话入口）。
  *
  * 刻意**不登记**：
  * - `export_json` / `export_script` / `sniffer/export`：响应是文本 / pcap 二进制，
@@ -174,8 +174,12 @@ export const MININET_ROUTES: readonly MininetRoute[] = [
 	{ method: "GET", template: "/sessions/{session_id}/nodes", upstream: "/api/simulation/sessions/{session_id}/nodes", permissions: ["lab:read"] },
 	{ method: "POST", template: "/sessions/{session_id}/nodes", upstream: "/api/simulation/sessions/{session_id}/nodes", permissions: ["lab:create"] },
 	{ method: "DELETE", template: "/sessions/{session_id}/nodes/{node_id}", upstream: "/api/simulation/sessions/{session_id}/nodes/{node_id}", permissions: ["lab:delete"] },
+	// 更新类（`NMCPS-ADR-0029` D1 / D6）：统一节点 / 链路部分更新，只要 `lab:operate` ——
+	// 更新不是破坏性动作，不给它加 `lab:delete`；位置（x / y）并入节点 PATCH，不再走 `/node_position`。
+	{ method: "PATCH", template: "/sessions/{session_id}/nodes/{node_id}", upstream: "/api/simulation/sessions/{session_id}/nodes/{node_id}", permissions: ["lab:operate"] },
 	{ method: "GET", template: "/sessions/{session_id}/links", upstream: "/api/simulation/sessions/{session_id}/links", permissions: ["lab:read"] },
 	{ method: "POST", template: "/sessions/{session_id}/links", upstream: "/api/simulation/sessions/{session_id}/links", permissions: ["lab:create"] },
+	{ method: "PATCH", template: "/sessions/{session_id}/links/{link_id}", upstream: "/api/simulation/sessions/{session_id}/links/{link_id}", permissions: ["lab:operate"] },
 	{ method: "DELETE", template: "/sessions/{session_id}/links/{link_id}", upstream: "/api/simulation/sessions/{session_id}/links/{link_id}", permissions: ["lab:operate"] }
 ] as const;
 

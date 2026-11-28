@@ -3,6 +3,7 @@ import type { MininetChannelInfo } from "#layers/scenario/shared/types/mininet";
 import { defineEventHandler, setResponseHeader, setResponseStatus } from "h3";
 import { LAB_PERMISSIONS, labPermissionsOf } from "~~/shared/constants/labPermissions";
 import { authorizeLab } from "#layers/scenario/server/utils/bff/labGuard";
+import { getActiveLabNetwork } from "#layers/scenario/server/utils/bff/labLedger";
 import { getMininetConfig } from "#layers/scenario/server/utils/bff/mininetConfig";
 import { MININET_ROUTES } from "#layers/scenario/shared/constants/mininetRoutes";
 
@@ -13,6 +14,10 @@ import { MININET_ROUTES } from "#layers/scenario/shared/constants/mininetRoutes"
  * 1. 只回能力位，**不回 baseUrl**：实验后端地址属服务端配置；
  * 2. 通道未启用时仍回 200 + `configured: false`：这是“没开”，不是错误；
  * 3. 静态路由优先于 `server/api/mininet/[...slug].ts`，本身不触达上游。
+ *
+ * `sessionId` 是唯一一条来自台账的字段（`NMCPS-ADR-0029` M1.2）：2.0 的更新类动作
+ * （位置 / 主机与路由器属性 / 链路属性）要拼 `/sessions/{id}/...`，页面必须能读到它。
+ * 台账是本机 JSON，读它不算触达上游，第 3 条仍然成立。
  */
 export default defineEventHandler(async (event): Promise<ApiResponse<MininetChannelInfo> | ApiResponse<never>> => {
 	const authorization = await authorizeLab(event, LAB_PERMISSIONS.READ);
@@ -21,6 +26,7 @@ export default defineEventHandler(async (event): Promise<ApiResponse<MininetChan
 	}
 
 	const config = getMininetConfig(event, authorization.principal.tenantId ?? "");
+	const network = await getActiveLabNetwork(event, authorization.principal, "mininet");
 	const granted = labPermissionsOf(authorization.principal);
 	const capabilities = {
 		read: granted.has(LAB_PERMISSIONS.READ),
@@ -48,7 +54,8 @@ export default defineEventHandler(async (event): Promise<ApiResponse<MininetChan
 			capabilities,
 			endpointCount: MININET_ROUTES.length,
 			timeoutMs: config.timeoutMs,
-			readinessPath: "/api/health"
+			readinessPath: "/api/health",
+			sessionId: network?.session_id ?? null
 		},
 		timestamp: new Date().toISOString()
 	};

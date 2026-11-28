@@ -25,6 +25,14 @@ export interface MininetChannelInfo {
 	timeoutMs: number
 	/** 就绪探针路径（拼在 baseUrl 之后；仅供排查，不回 baseUrl） */
 	readinessPath: string
+	/**
+	 * 台账里已绑定的 2.0 会话 id（`NMCPS-ADR-0029` M1.2）；`null` = 还没有会话。
+	 *
+	 * 页面拿它拼 `/api/mininet/sessions/{id}/nodes|links`。只由 `POST /api/mininet/sessions`
+	 * 落库（BFF 写回台账 `session_id`），1.x 入口不产生会话 —— 所以 `null` 只说明「这一层
+	 * 还没建」，不代表网络不可见：上游的会话只是给现有全局 `app.net` 起个名字。
+	 */
+	sessionId: string | null
 }
 
 /** 能力位分组：字段名是动作语义，值来自 `labPermissionsOf()` 的计算结果 */
