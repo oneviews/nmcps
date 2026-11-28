@@ -257,8 +257,9 @@
 
 **M0 的已知边界（不是缺陷，是后续阶段的入口）**
 
-- ~~会话路径还没进 BFF 白名单~~ → **M1 已接（见下）**：`/api/mininet/sessions/**` 12 条端点登记进白名单，
-  权限位、台账归属与审计齐备；页面仍走 `/api/mininet/**`（M1.1 迁），两条通道共享同一套台账与锁。
+- ~~会话路径还没进 BFF 白名单~~ → **M1 已接（见下）**：`/api/mininet/sessions/**` 最初 12 条端点登记进白名单，
+  M1.2 再补两条更新 PATCH（共 14 条），权限位、台账归属与审计齐备；页面仍走 `/api/mininet/**`（M1.1 迁），
+  两条通道共享同一套台账与锁。
 - ~~`wired` 引擎只接管 `start` / `stop`~~ → **M1 已接管统一节点 / 链路**（见下）。
 - 非 root 时 `app.net = None`：`Mininet()` 会 `ensureRoot() → exit(1)`，所以后端在无 root 机器上只跑 `dryrun`；
   `LAB_SKIP_STARTUP_CLEANUP=1` 跳过启动 / 关闭的 `mn -c`（非 root 会对别人的进程无限 `pkill` 失败并卡住启动）。
@@ -269,18 +270,17 @@
 | 项 | 位置 | 验收 |
 |---|---|---|
 | 统一节点 / 链路 | `engines/wired.py`：`list_nodes` / `add_node` / `remove_node` / `list_links` / `add_link` / `remove_link` 全部接管；模型类从 `api` 模块按名取（`api.Host`），建网逻辑仍走 legacy `create_*`，错误按 `status_code` 归一成 `EngineInvalidRequest` / `EngineResourceNotFound` | `pnpm check:engines` 7/7（第 7 条跑 `scripts/check-wired-adapter.py`：桩 `api`，无 root / 无 mininet / 无 fastapi） |
-| 会话入口 | 白名单新增 12 条 `/sessions/**` → `/api/simulation/**`（`mininetRoutes.ts`，靠 `isSimulationRoute()` 与 1.x 区分）；查询 4 + 写 8，M1 时总计 **22 查询 + 36 写 = 58**（会话侧全是 `/sessions/**`；M1.2 之后写端点为 **37**、总计 **59**） | `pnpm check:lab-bff` ⑯ 十条 + ⓪ 计数断言 |
+| 会话入口 | 白名单新增 12 条 `/sessions/**` → `/api/simulation/**`（`mininetRoutes.ts`，靠 `isSimulationRoute()` 与 1.x 区分）；查询 4 + 写 8。**M1.2 再补两条更新 PATCH**（`PATCH /sessions/{id}/nodes/{node_id}`、`PATCH /sessions/{id}/links/{link_id}`，均 `lab:operate`），会话侧共 **14 条**，白名单总计 **24 查询 + 42 写 = 66** | `pnpm check:lab-bff` ⑯ 十一条 + ⓪ 计数断言（24 / 42） |
 | 归属 | 台账新增 `session_id`（`shared/types/lab.ts` / `labLedger.parseRecord`）；`POST /sessions` 成功即写回、`DELETE` 解绑（`bindLabNetworkSession()`）；会话路径与台账不一致一律 404（与「不存在」同口径），已绑定时再建 → 409 `lab_session_exists` 且不触达上游 | ⑯「写回台账」「已绑定 409」「未绑定路径 404 零上游请求」 |
 | 写路径复用 | 会话写与 1.x 写共用 `handleWrite()`：审计先行、同网络在途写 409、成功后清单收敛与 `state` 写回（`start` → running、`stop` / 删会话 → stopped） | ⑯「清单收敛」「start → running」「审计 allowed + succeeded」 |
 | 会话归属由 BFF 写 | `sessionCreateBodyOf()`：客户端只能选 `engine` / `name`，`metadata`（`network_id` / `tenant_id` / `actor_id`）由 BFF 填，客户端伪造无效 | ⑯「metadata 由 BFF 写」 |
 
 **M1 明确不做（不是遗漏）**
 
-- **更新类操作仍走 1.x**：拖动落点、改 IP / 默认路由、OpenFlow 版本、流表、统计、抓包、导出都在
-  `/api/mininet/**`。统一模型的「更新」语义（哪些 `attributes` 可写、位置能否与属性同请求改）还没冻结，
-  先不发明一套；`Engine` 协议里也刻意没有 `update_node`。
-- ~~**前端未迁移**~~ → **M1.1 已收敛读路径**（见下）：页面拓扑只读 `GET /api/mininet/nodes` + `/links`，
-  不再并发拉五张分表；会话通道仍未被页面使用（更新类动作仍走 1.x，一个动作只有一个入口，不做双写）。
+- ~~**更新类操作仍走 1.x**~~ → **M1.2 已冻结并落地**（见下）：两条统一 PATCH + `layout` / `deferred` / `live`
+  三档 + `applied` 布尔（`NMCPS-ADR-0029`）。流表、统计、链路通断仍留在 1.x（D7），页面切换是最后一步。
+- ~~**前端未迁移**~~ → **M1.1 已收敛读路径、M1.2 已切更新路径**（见下）：页面拓扑只读 `GET /api/mininet/nodes` + `/links`，
+  不再并发拉五张分表；拖动与详情保存改打会话 PATCH，1.x 更新端点命中数为 0（不做双写）。
 - **`ap` / `station`**：`NODE_TYPES` 已收，但 `wired` 建它们回 501；无线在 M3。
 - **`check:engines` / `check:simulation` 仍未进 `ci.yml`**（要同步 `ci-summary` 期望表与 ⑱/⑳ 断言）。
 
@@ -316,6 +316,28 @@
 - **`disable` / `power`**：参考侧与 `up` / `down` 语义重叠（都落到接口状态），2.0 只复刻三个动作，
   多余动作不出现在页面上，也不另开端点。
 - **页面切换**：M1.3 已落地（见下）；原本记作「R8 最后一个前置」的 **LLDP 面已撤销**（见 §五之三）。
+
+**M1.2 更新类语义已落地（统一节点 / 链路 PATCH，`NMCPS-ADR-0029`，2026-11-28）**
+
+与会话通道其余动作不同，更新类的语义先由 `NMCPS-ADR-0029` 冻结再落码：只有一条路径、三档生效语义、
+响应带 `applied`。上面那节 M1.2 是链路**运行态**（`PATCH /links/{src}/{dst}/state`），两者互不覆盖 ——
+一条改「模型属性」（停网重建后仍生效），一条改「此刻通不通」。
+
+| 项 | 位置 | 验收 |
+|---|---|---|
+| 引擎 | `engines/base.py` 的 `update_node` / `update_link`（抽象）+ 白名单 / 不可变字段 / 生效分档的唯一一份校验；`dryrun` 全量实现（停网 `live` 档也回 409，语义与真后端一致）；`wired` 只做映射（运行中调 `update_host` / `update_router` / `update_controller` / `update_link`，停网只写台账）；`wireless` 一律 501 | `pnpm check:engines` 7/7（④ 走「建节点 → 改位置 → 改属性 → 起网再改」；⑤ 桩 `api` 断言 `applied` 随 `is_started` 翻转、纯布局补丁不触达 legacy） |
+| 上游端点 | `PATCH /api/simulation/sessions/{session_id}/nodes/{node_id}`（`{x?, y?, attributes?}`）与 `.../links/{link_id}`（`{options?}`），回 `{node|link, applied}`；`SessionNodeUpdate` / `SessionLinkUpdate` 用 `extra="allow"` 让不可变字段到达引擎再 400 | `pnpm check:simulation` 21/21（新增四条：位置 `applied:true`、停网改属性 `applied:false`、不可变字段 400、链路 `options` 投影）；`pnpm lab:check` 45 条 HTTP 路径；`pnpm contracts:gen` |
+| 台账 | 主机默认路由新增 `app.host_routes`（`Host` 模型没有这个字段）：停网改路由先记台账，`start_network()` 起网后兑现，删节点一并摘除 | `check:engines` ⑤「停网时默认路由没记进台账」守卫；`check-wired-adapter.py` 同断言 |
+| BFF | `mininetRoutes.ts` 两条 PATCH（`lab:operate`），写 40 → **42**、总计 **66**，会话侧 12 → **14**；`GET /api/mininet/channel` 补 `sessionId`（台账 `session_id`，无会话为 `null`） | `pnpm check:lab-bff` 173/173（⑯ 静态分档含两条 PATCH；新增「PATCH 节点 → 200 `{node, applied}` 且出站会话路径」；① / ⑯ 各新增一条 `sessionId` 断言） |
+| 页面 | `simulator.vue`：拖动 → 会话节点 PATCH `{x, y}`；主机 / 路由器详情保存 → `{attributes}`（`labHostAttributesOf()` / `labRouterAttributesOf()`，主机默认路由仍按 `via <ip>` / 设备名两形态）；链路详情保存 → `{options}`（`labLinkOptionsOf()`，id 取 `src--dst` 字典序）；`applied:false` 的 toast 写「已排队」。台账 `sessionId` 为 `null` 且有 `lab:create` 时自动 `POST /sessions` 一次，失败保持更新动作不可用并留上游原话；`max_queue_size` / `use_htb` 只读展示（会话 PATCH 不接收） | `check:ui` 11.3b（补建恰好一条会话）/ 11.4 拖动 / 11.12 / 11.13（会话路径 + 请求体）/ 11.13b（1.x 更新端点命中 0） |
+
+**M1.2（更新类）明确不做**
+
+- **流表 / 统计 / 链路通断**：D7 留给 M1.3 之后再议，不塞进 `PATCH nodes|links`。
+- ~~**页面切换**~~ → **已落地（2026-11-28，见上表「页面」行）**：`simulator.vue` 按「拖动 → 节点详情 → 链路详情」
+  切完，1.x 的 `node_position` / `PATCH hosts` / `PATCH routers` / `PUT links` 不再被页面调用
+  （`check:ui` 11.13b 断命中 0），同一动作只留一个入口。
+- **删除 1.x 更新端点**：要另开裁决（ADR-0029 §6 第 4 条），页面切换不是删除它们的理由。
 
 **M1.3 已落地（拓扑监控页切读路径，2026-11-25，`NMCPS-ADR-0027` §8）**
 

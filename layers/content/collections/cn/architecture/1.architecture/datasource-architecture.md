@@ -14,14 +14,14 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.5.0
+version: 0.5.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-25"
+updatedAt: "2026-11-28"
 icon: "carbon:data-base"
 tags:
   - "架构"
@@ -123,7 +123,7 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 2. **只登记页面真正调用的条目**，按能力位（`lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`）逐条授权；新增条目须同批更新 `NMCPS-DESIGN-*` 的数据源表。
 3. **永久排除项需另立 ADR 才能解锁**：节点内任意命令执行（`execute`）、无头浏览器（`browser`）、完整性巡检（`integrity`）、设备库读写（`devices`）、独立探测工具（`test`）、SNMP 开通（`snmp/onboard`）、外部监控栈（`nms/vmagent`）。这些是 `NMCPS-ADR-0027` R1–R7 的裁决，不是「还没做」。
 
-白名单不是手抄常量：`check:lab-bff` ⓪ 按「24 条查询 + 40 条写 = 64」逐行对账，`check:engines` / `check:simulation` 守卫引擎面与外置后端；新增或改名端点必须同批改白名单与断言。
+白名单不是手抄常量：`check:lab-bff` ⓪ 按「24 条查询 + 42 条写 = 66」逐行对账，`check:engines` / `check:simulation` 守卫引擎面与外置后端；新增或改名端点必须同批改白名单与断言。
 
 ### 6.4 写能力位
 
@@ -159,3 +159,4 @@ BFF（Nitro）有且只有两条出站通道：主上游（`runtimeConfig.bff.up
 | 2026-11-05 | 0.3.0 | **落码前义务 4 已履行：⑨ 组守卫随 P1 代码落地（`pnpm check:bff` 127/127）**。① 新增 `scripts/fixtures/simulator-openapi.json`——上游 `/openapi.json` 的机械投影（113 条路径 → 动词列表 + `_meta.source/capturedAt`），刷新只有 `NUXT_SIMULATOR_BASE_URL=<上游> pnpm check:bff --refresh-simulator-snapshot` 一个入口，`capturedAt` 超 180 天只 `⚠️` 不判红；② `check:bff` 增第 ⑨ 组 21 个检查点，逐条对应 ⑨-1~⑨-6（见 §6.7 表），假仿真平台 `startSimulator()`（`scripts/lib/bff-harness.mjs`）在**上游侧**记录请求头，用于取证「出站不带 `authorization`、不把 `nmcps_at` 转 Bearer」；③ §6.1 路由行补 `server/api/sim/index.ts`：`/api/sim` 无路径段回 400 `bff_path_missing`，否则会落到主网关得 404，把「少写了路径」误报成「路径不允许」；④ §6.5 补 `SIMULATOR_MESSAGES` 词汇表；⑤ 反向验证：把白名单一条模板改成 `/api/network/stats-v2`，⑨-6 立刻点名该条变红。 |
 | 2026-11-06 | 0.4.0 | **写入口开通后写闸前移到页面**：§6.1 新增能力探针行 `server/api/sim/channel.get.ts`（静态路由优先于 catch-all 通道，只回 `configured` / `writeEnabled` / `timeoutMs` / `readinessPath`，**不回 `baseUrl`**）；§6.4 把「记一条结构化日志」升级为**单行 JSON 审计行** `{"event":"simulator.write",…}`（含 `path` / `requestId` / `clientIp`，仍不含请求体），并写明审计行不带操作者身份的原因与对齐方式（身份 cookie 作用域是 `/api/auth`，按 `requestId` 与网关访问日志对齐）；`allowWrite=false` 时页面零写请求，BFF 的 405 退化为「绕过前端」的第二道闸。`check:ui` 第 11 段随之扩到 `139/139`（新增 A9 与能力探针不泄露地址的断言）。 |
 | 2026-11-25 | 0.5.0 | **第二出站通道换人：8001 仿真平台退役，登记 Mininet 实验后端（`NMCPS-ADR-0027` R8 第 4 条）**。① §6 整章重写为 `/api/mininet/**`：配置（`runtimeConfig.mininet` 的 `baseUrl` / `instances`，租户未命中即 503 `tenant_runtime_unavailable`，不回退全局基址）、读配置（`layers/scenario/server/utils/bff/mininetConfig.ts`）、出站（`mininet.ts`，入口凭据只走 `x-lab-token`）、路由与白名单（`layers/scenario/server/api/mininet/[...slug].ts` + `mininetRoutes.ts`，未登记 404 / 动词不符 405 / 穿越 400）、能力探针（`GET /api/mininet/channel`，只回 `capabilities` 等位、不回 `baseUrl`）与 WebSocket（一次性票 + `/mininet-ws/*`）。② 写开关改成**能力位**：没有 `allowWrite` 布尔；页面按 `capabilities` 裁剪，BFF 403 是唯一权限边界；审计先行（写盘失败 503 `audit_unavailable`）、同网在途写 409。③ 就绪分离保留：实验后端不可达不让 `/ready` 变红；`disabled` / `empty` / `unreachable` 三态分别对应「没有实例」「还没有实验网络」「真读失败」。④ 守卫换组：`check:bff` 第 ⑨ 组（21 个检查点、`simulator-openapi.json` 快照、`--refresh-simulator-snapshot`）随 `/api/sim/**`、`simulatorRoutes.ts`、`simConfig.ts` / `simulator.ts`、`SIMULATOR_MESSAGES` 与 `nuxt.config.ts` 的 `simulator` 段一次删净；覆盖改由 `check:lab-bff` / `check:simulation` / `check:engines` / `check:ui` 分担。⑤ §二 分类行与 §五 流转说明同步改名。 |
+| 2026-11-28 | 0.5.1 | **`NMCPS-ADR-0029` M1.2 落地后白名单计数同步**：§6.3 的逐行对账口径由「24 条查询 + 40 条写 = 64」改为「24 条查询 + 42 条写 = 66」——新增会话侧两条更新 PATCH（`PATCH /sessions/{session_id}/nodes/{node_id}` / `.../links/{link_id}`，`lab:operate`），`GET /api/mininet/channel` 的 `endpointCount` 随之 66（`check:lab-bff` ⓪ / ① / ⑰、`check:ui` 能力探针断言同批改）。 |

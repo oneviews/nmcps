@@ -12,14 +12,14 @@ authority: normative
 scope:
   - arch.datasource
 status: baseline
-version: 0.5.0
+version: 0.5.1
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
   - NMCPS-GOV-003
 createdAt: "2026-10-25"
-updatedAt: "2026-11-25"
+updatedAt: "2026-11-28"
 icon: "carbon:data-base"
 tags:
   - "Architecture"
@@ -121,7 +121,7 @@ The BFF (Nitro) has exactly two egress channels: the primary upstream (`runtimeC
 2. **Only register what a page actually calls**, authorised entry by entry through capability bits (`lab:read` / `lab:create` / `lab:operate` / `lab:delete` / `lab:terminal` / `lab:sniffer`); adding an entry obliges a same-batch update of the matching `NMCPS-DESIGN-*` data-source table.
 3. **Permanently excluded entries need a new ADR to unlock**: in-node arbitrary command execution (`execute`), headless browser (`browser`), integrity inspection (`integrity`), device library (`devices`), standalone probes (`test`), SNMP onboarding (`snmp/onboard`), external monitoring stack (`nms/vmagent`). These are verdicts R1–R7 of `NMCPS-ADR-0027`, not "not done yet".
 
-The whitelist is not a hand-copied constant: `check:lab-bff` ⓪ reconciles it line by line as "24 queries + 40 writes = 64", while `check:engines` / `check:simulation` guard the engine face and the external backend; any added or renamed endpoint must change the whitelist and its assertions in the same batch.
+The whitelist is not a hand-copied constant: `check:lab-bff` ⓪ reconciles it line by line as "24 queries + 42 writes = 66", while `check:engines` / `check:simulation` guard the engine face and the external backend; any added or renamed endpoint must change the whitelist and its assertions in the same batch.
 
 ### 6.4 Write capability bits
 
@@ -158,3 +158,5 @@ After the retirement this channel is no longer covered by `check:bff` group ⑨ 
 | 2026-11-05 | 0.3.0 | **Pre-code obligation 4 is now fulfilled: the group ⑨ guards ship with the P1 code (`pnpm check:bff` 127/127).** ① `scripts/fixtures/simulator-openapi.json` is new — a mechanical projection of the upstream `/openapi.json` (113 paths → verb lists plus `_meta.source/capturedAt`), refreshable only via `NUXT_SIMULATOR_BASE_URL=<upstream> pnpm check:bff --refresh-simulator-snapshot`, with a `capturedAt` older than 180 days merely warning. ② `check:bff` gained group ⑨ (21 checkpoints) mapped one-to-one onto ⑨-1~⑨-6 (table in §6.7); the fake simulator `startSimulator()` (`scripts/lib/bff-harness.mjs`) records request headers **on the upstream side**, which is what proves the egress carries no `authorization` and never trades the `nmcps_at` cookie for a Bearer. ③ The §6.1 route row now names `server/api/sim/index.ts`: a path-less `/api/sim` answers 400 `bff_path_missing` instead of falling through to the primary gateway and reporting "path not allowed" for what was really a missing path. ④ §6.5 gained the `SIMULATOR_MESSAGES` vocabulary. ⑤ Reverse-checked: changing one whitelist template to `/api/network/stats-v2` reddens ⑨-6 and names that entry. |
 | 2026-11-06 | 0.4.0 | **With write entries open, the write gate moved forward to the page**: §6.1 gained the capability-probe row `server/api/sim/channel.get.ts` (a static route ahead of the catch-all channel; returns `configured` / `writeEnabled` / `timeoutMs` / `readinessPath` and **never `baseUrl`**); §6.4 upgraded "one structured log line" into a **single-line JSON audit record** `{"event":"simulator.write",…}` (with `path` / `requestId` / `clientIp`, still no body) and documented why the record carries no actor identity and how to join it instead (the identity cookie is scoped to `/api/auth`, so join on `requestId` against the gateway access log); with `allowWrite=false` the page sends zero write requests and the BFF's 405 becomes the second gate for bypassing the front end. `check:ui` section 11 grew to `139/139` (new A9 plus the assertion that the probe leaks no address). |
 | 2026-11-25 | 0.5.0 | **The second egress channel changes hands: the 8001 simulator is retired and the Mininet lab backend is registered (`NMCPS-ADR-0027` R8 step 4).** ① §6 was rewritten for `/api/mininet/**`: config (`runtimeConfig.mininet` with `baseUrl` / `instances`; an unmatched tenant gets 503 `tenant_runtime_unavailable`, never a fallback to the global base URL), config reader (`layers/scenario/server/utils/bff/mininetConfig.ts`), egress (`mininet.ts`, entry credential only via `x-lab-token`), route and whitelist (`layers/scenario/server/api/mininet/[...slug].ts` + `mininetRoutes.ts`; unknown path 404 / wrong verb 405 / traversal 400), capability probe (`GET /api/mininet/channel`, capability bits only, never `baseUrl`) and WebSocket (single-use ticket + `/mininet-ws/*`). ② The write switch became **capability bits**: no `allowWrite` boolean; the page trims by `capabilities`, the BFF's 403 is the only permission boundary, audit is written first (a failed write answers 503 `audit_unavailable`), and one in-flight write per network (409). ③ Readiness separation stays: an unreachable lab backend never reddens `/ready`, and `disabled` / `empty` / `unreachable` mean "no instance" / "no lab network yet" / "a real read failure". ④ The guards moved: `check:bff` group ⑨ (21 checkpoints, the `simulator-openapi.json` snapshot, `--refresh-simulator-snapshot`) was deleted together with `/api/sim/**`, `simulatorRoutes.ts`, `simConfig.ts` / `simulator.ts`, `SIMULATOR_MESSAGES` and the `simulator` block in `nuxt.config.ts`; coverage now comes from `check:lab-bff` / `check:simulation` / `check:engines` / `check:ui`. ⑤ The §2 classification row and the §5 data-flow note were renamed to match. |
+| 2026-11-28 | 0.5.1 | **Whitelist counts synced after `NMCPS-ADR-0029` M1.2 landed**: the §6.3 reconciliation wording moves from "24 queries + 40 writes = 64" to "24 queries + 42 writes = 66" — two session-side update PATCHes were added (`PATCH /sessions/{session_id}/nodes/{node_id}` / `.../links/{link_id}`, `lab:operate`), and `GET /api/mininet/channel` now reports `endpointCount` 66 (`check:lab-bff` ⓪ / ① / ⑰ and the `check:ui` capability probe assertion changed in the same batch). |
+

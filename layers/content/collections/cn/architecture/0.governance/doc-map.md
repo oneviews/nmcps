@@ -15,13 +15,13 @@ authority: normative
 scope:
   - gov.doc-index
 status: baseline
-version: 0.64.0
+version: 0.65.0
 owner: "NMCPS Team"
 reviewBy: "2027-03-31"
 dependsOn:
   - NMCPS-GOV-001
 createdAt: "2026-10-24"
-updatedAt: "2026-11-27"
+updatedAt: "2026-11-28"
 icon: "carbon:list"
 tags:
   - "文档体系"
@@ -268,3 +268,5 @@ tags:
 | 2026-11-25 | 0.63.0 | 登记记录层：`NMCPS-ADR-0028`「SNMP 采集面的最小形态（M2 首增量）」（`rec.adr.0028`，Tier 5，informative）。**D1–D7 冻结 M2 首增量**：自写 stdlib agent（`mininet_gui_backend/snmp/` 的 BER / MIB / UDP，不复制参考侧代码与 21 份 MIB 文本、不依赖 net-snmp）；agent 按节点 `nsenter -t <pid> -n` 进各自 netns 绑 `:161`，因此不抢宿主 `snmpd` 也不做根 netns 代理；只读 v2c（GET / GETNEXT），社区串 `LAB_SNMP_COMMUNITY`、端口 `LAB_SNMP_PORT` 都是部署配置，写面（onboard / rotate / revoke）留给 `lab:snmp` 与 IAM `lab_snmp`；生命周期挂 `start` / `stop` / `reset` / `full_reset` 且默认关闭（`LAB_SNMP_ENABLED=1`），采集失败不得让起网失败；MIB 子集只有 system / `ifTable` / `ipAddrTable` 与企业类型 `sysObjectID`（`1.3.6.1.4.1.99999.<type>`），计数器首版恒 0；邻接不从 LLDP 读（`NMCPS-ADR-0027` R8），改由 `GET /api/mininet/snmp/topology` 台账投影给 NMS 做 seed；首增量不含凭据编排 / exporter / `snmp/tools`。同时收口 `NMCPS-ARCH-007` §七「SNMP `:161` 与宿主 `snmpd` 冲突」：节点面不冲突，冲突形态已被 D2 否决。 |
 
 | 2026-11-27 | 0.64.0 | 登记记录层：`NMCPS-ADR-0029`「会话通道的更新类语义（M1.2 冻结）」（`rec.adr.0029`，Tier 5，informative）。**D1–D7 冻结 M1.2**：更新只经两条会话 PATCH（`/sessions/{id}/nodes/{node_id}`、`/sessions/{id}/links/{link_id}`），位置并入节点 PATCH，分表字段名只允许出现在 `attributes` 并按类型白名单校验；生效语义只分 `layout` / `deferred` / `live` 三档，响应带 `applied` 布尔，`live` 在未运行时回 `409 engine_conflict`；`id` / `type` / `mac` / `name` 不可变（400），未登记属性键同样 400；`Engine` 协议新增 `update_node` / `update_link`，`wired` 只映射到既有 apply 函数、不重写建网；权限位不变（`lab:operate`）；流表 / 统计 / 链路通断留在 1.x（M1.3 再议）。同一次改动给 `NMCPS-DESIGN-008` §4 补上「更新语义已由 ADR-0029 冻结」、§8 补上切换顺序，并在 §7 阶段表新增 M1.2 行。 |
+| 2026-11-28 | 0.65.0 | **`NMCPS-ADR-0029` M1.2 落码（上游引擎 + 会话端点 + BFF 白名单）**。① 引擎：`engines/base.py` 新增 `update_node` / `update_link`（抽象）与唯一一份校验（不可变字段 `id`/`type`/`mac`/`name`、按类型白名单的 `attributes`、`layout` / `deferred` / `live` 分档、链路 `options` 白名单），`dryrun` 全量实现（停网 `live` 档同样 409），`wired` 只映射到既有 `update_host` / `update_router` / `update_controller` / `update_link`（停网只写台账），`wireless` 一律 501；主机默认路由因 `Host` 模型没有该字段而新增 `app.host_routes` 台账，`start_network()` 兑现、删节点摘除。② 上游：`api.py` 两条 PATCH（`/api/simulation/sessions/{session_id}/nodes/{node_id}`、`.../links/{link_id}`）回 `{node|link, applied}` 投影，`SessionNodeUpdate` / `SessionLinkUpdate` 用 `extra="allow"` 让不可变字段到达引擎再 400；`sessions.py` 转发。③ BFF：`mininetRoutes.ts` 两条（`lab:operate`），白名单 64 → **66**（24 查询 + 42 写，会话 12 → 14），`endpointCount` 断言 64 → 66。④ 自检：`check:engines` ④ 扩「改位置 / 改属性 / 起网再改」并给标签补「更新」，⑤ 桩 `api` 加 `applied` 翻转与「纯布局不触达 legacy」；`check:simulation` 17 → 21 条；`check:lab-bff` 168 → 171 条。⑤ 计数同步：`NMCPS-ARCH-002` → 0.5.1（§6.3 对账口径 66；中英同步）、`docs/ai/{lab-boundary,repo-map,simulation-parity}.md`、`layers/scenario/README.md`、`.clinerules/{10-mininet-api,11-lab-ui}.md`。页面切换（拖动 → 节点详情 → 链路详情）仍是下一步，未改页面。 |
+

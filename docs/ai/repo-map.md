@@ -87,7 +87,13 @@ BFF 与上游**前缀同形**（`NMCPS-ADR-0022` D11）：同一串 `/api/minine
   `GET /api/mininet/version` 握手。自检：`pnpm check:engines`（零依赖）、`pnpm check:simulation`（无 root，dryrun）。
 - M1 已落地：`wired` 引擎接管统一节点 / 链路 CRUD（适配 legacy `api.Host` 等模型与 `create_*`，不重写建网），
   BFF 白名单新增 12 条 `/api/mininet/sessions/**` → `/api/simulation/**`（权限位 + 台账 `session_id` 归属 + 审计）。
-  更新类操作（位置 / IP / 默认路由 / OpenFlow / 流表 / 统计 / 抓包 / 导出）仍在 1.x；页面尚未切换，见 M1.1。
+- M1.2 已落地（`NMCPS-ADR-0029`，上游 + BFF + 页面）：`Engine.update_node` / `update_link` 两条统一 PATCH
+  （`PATCH /api/simulation/sessions/{id}/nodes/{node_id}` / `.../links/{link_id}`，回 `{node|link, applied}`），
+  白名单因此 **66 条**（24 查询 + 42 写，会话 14 条）。页面切完：拖动落点、主机 / 路由器属性、链路属性
+  全部走会话 PATCH，1.x 的 `node_position` / `PATCH hosts|routers` / `PUT links` 不再被页面调用
+  （`check:ui` 11.13b 钉命中 0）；会话 id 由 `GET /api/mininet/channel` 的 `sessionId` 给出，`null` 时页面
+  自动补建一条（`lab:create`）。**流表、统计、链路通断、OpenFlow 与抓包仍在 1.x**（ADR-0029 D7）。
+- M1.1 读路径已收敛：`GET /api/mininet/nodes` 是五类分表的统一投影，与 `/sessions/{id}/nodes` 同形。
 - M2 首增量（SNMP 采集面，`NMCPS-ADR-0028`）：`services/mininet-api/mininet_gui_backend/snmp/**`（自写 stdlib
   只读 v2c agent，每节点 netns 一份）+ 两个台账投影 GET（`/api/mininet/snmp/{state,topology}`，BFF 同名、
   `lab:read`）。自检：`pnpm check:snmp`（零依赖、无 root；CI 里是独立步骤 `SNMP agent self-check`，结论键

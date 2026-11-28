@@ -25,7 +25,7 @@ paths:
   `engine_resource_not_found` / `engine_conflict` / `engine_unavailable`）。建网实现不改写：
   `TCLink` / OVS 端口 / `switch_fail_mode()` 仍只在 `api.py` 里。`ap` / `station` 建节点回 501（M3）。
   更新类操作（位置 / IP / 默认路由 / OpenFlow / 流表 / 统计）仍是 1.x，`Engine` 协议没有 `update_node`。
-- BFF 会话通道：`/api/mininet/sessions/**`（12 条）→ `/api/simulation/**`，与 1.x 共用 `handleWrite()`
+- BFF 会话通道：`/api/mininet/sessions/**`（14 条）→ `/api/simulation/**`，与 1.x 共用 `handleWrite()`
   （审计先行、同网络在途写 409、成功后清单 / `state` 收敛）。归属靠台账 `session_id`：
   `POST /sessions` 成功后写回（`bindLabNetworkSession()`）、路径里的会话与台账不一致一律 404
   （与「不存在」同口径）、已绑定时再建回 409 `lab_session_exists` 且不触达上游。`metadata`
