@@ -5,8 +5,10 @@
 // - 零 IO / 零 Vue：页面与自检脚本都直接调这里，组件不自己拼一份请求体。
 // - 只拦「确定错」的输入（IP 形状、延迟单位、丢包区间），语义合法性仍归上游 ——
 //   表单不复制一份上游规则，否则两边迟早不一致（与 `labNodes.ts` 同一口径）。
-// - 「不发请求」是一个显式结果：链路属性全空时 `labLinkUpdatePayload()` 回 `undefined`，
+// - 「不发请求」是一个显式结果：链路属性全空时 `labLinkOptionsOf()` 回 `undefined`，
 //   上游对空 `options` 只清台账、不回收已生效的 tc，给一个看起来生效的按钮更糟。
+// - 请求体形状由 `NMCPS-ADR-0029`（`records/adr/adr-0029.md`）冻结：节点 / 链路属性都走会话 PATCH 的
+//   `attributes` / `options`，键名用页面侧驼峰名（上游 `NODE_ATTRIBUTE_FIELDS` 归一）。
 
 /** 就地报错的键后缀：`pages.scenario-simulator.nodeDetail.errors.<key>` */
 export type LabDetailFieldError
@@ -17,8 +19,7 @@ export type LabDetailFieldError
 		| "bwInvalid"
 		| "delayInvalid"
 		| "jitterInvalid"
-		| "lossInvalid"
-		| "queueInvalid";
+		| "lossInvalid";
 
 type RawRecord = Record<string, unknown>;
 
@@ -49,7 +50,7 @@ function isIpv4WithPrefix(value: string): boolean {
 	return prefix === undefined || (/^\d{1,2}$/.test(prefix) && Number(prefix) <= 32);
 }
 
-/* ── 主机（PATCH /hosts/{host_id}）────────────────────────────────────── */
+/* ── 主机（PATCH /sessions/{id}/nodes/{node_id} 的 attributes）────────── */
 
 export interface LabHostDraft {
 	ip: string
@@ -84,18 +85,22 @@ export function labHostUpdateError(draft: LabHostDraft): LabDetailFieldError | u
 	return /^[\w.:-]+$/.test(route) ? undefined : "routeInvalid";
 }
 
-/** 请求体只带改过的字段：路由留空时**不**碰默认路由（上游对空值会 `ip route del default`） */
-export function labHostUpdatePayload(draft: LabHostDraft): RawRecord {
-	const payload: RawRecord = { ip: draft.ip.trim() };
+/**
+ * 会话 PATCH 的 `attributes`（`NMCPS-ADR-0029` D1）：请求键用页面侧的驼峰名，
+ * 上游按 `NODE_ATTRIBUTE_FIELDS` 归一成台账键。路由留空时**不**碰默认路由
+ * （空串在台账里是「删除默认路由」，与「没改」是两件事）。
+ */
+export function labHostAttributesOf(draft: LabHostDraft): RawRecord {
+	const attributes: RawRecord = { ip: draft.ip.trim() };
 	const route = draft.routeValue.trim();
 	if (!route)
-		return payload;
-	if (draft.routeType === "ip")
-		return { ...payload, default_route_type: "ip", default_route_ip: route };
-	return { ...payload, default_route_type: "dev", default_route_dev: route };
+		return attributes;
+	// 上游 `setDefaultRoute()` 吃的是一整条路由参数：走网关要带 `via`，走设备直接给接口名
+	attributes.defaultRoute = draft.routeType === "ip" ? `via ${route}` : route;
+	return attributes;
 }
 
-/* ── 路由器（PATCH /routers/{router_id}）──────────────────────────────── */
+/* ── 路由器（PATCH /sessions/{id}/nodes/{node_id} 的 attributes）────────── */
 
 export interface LabRouterDraft {
 	ip: string
@@ -159,42 +164,45 @@ export function labRouterUpdateError(draft: LabRouterDraft): LabDetailFieldError
 	return undefined;
 }
 
-export function labRouterUpdatePayload(draft: LabRouterDraft): RawRecord {
-	const payload: RawRecord = {
+/** 路由器：会话 `attributes`（键名与 `labHostAttributesOf` 同口径） */
+export function labRouterAttributesOf(draft: LabRouterDraft): RawRecord {
+	const attributes: RawRecord = {
 		routes: routeLinesOf(draft.routes),
-		proxy_arp: draft.proxyArp,
-		ip_forward: draft.ipForward
+		proxyArp: draft.proxyArp,
+		ipForward: draft.ipForward
 	};
 	const ip = draft.ip.trim();
 	if (ip)
-		payload.ip = ip;
+		attributes.ip = ip;
 	const entries = interfaceLinesOf(draft.interfaceIps);
 	// 接口 IP 为空 = 不改：上游对未启动的网络会回 404，没必要为了「没改」去撞它
 	if (entries?.length)
-		payload.interface_ips = Object.fromEntries(entries);
-	return payload;
+		attributes.interfaceIps = Object.fromEntries(entries);
+	return attributes;
 }
 
-/* ── 链路（PUT /links）───────────────────────────────────────────────── */
+/* ── 链路（PATCH /sessions/{id}/links/{link_id} 的 options）─────────────── */
 
 export interface LabLinkDraft {
 	bw: string
 	delay: string
 	jitter: string
 	loss: string
-	queue: string
-	useHtb: boolean
 }
 
+/**
+ * 只认 `NMCPS-ADR-0029` §3 的四个可更新键。
+ *
+ * `max_queue_size` / `use_htb` 是 1.x 专用参数（会话 PATCH 对它俩回 400），因此不进草稿 ——
+ * 弹窗只把台账里已有的值当**只读事实**展示，不给一个按下去必然失败的输入框。
+ */
 export function labLinkDraftOf(options: RawRecord | null | undefined): LabLinkDraft {
 	const source = asRecord(options) ?? {};
 	return {
 		bw: textOf(source.bw),
 		delay: textOf(source.delay),
 		jitter: textOf(source.jitter),
-		loss: textOf(source.loss),
-		queue: textOf(source.max_queue_size),
-		useHtb: source.use_htb === true
+		loss: textOf(source.loss)
 	};
 }
 
@@ -220,20 +228,16 @@ export function labLinkUpdateError(draft: LabLinkDraft): LabDetailFieldError | u
 		if (loss === undefined || loss < 0 || loss > 100)
 			return "lossInvalid";
 	}
-	if (draft.queue.trim()) {
-		const queue = numberOf(draft.queue);
-		if (queue === undefined || queue < 0 || !Number.isInteger(queue))
-			return "queueInvalid";
-	}
 	return undefined;
 }
 
 /**
- * 请求体：只带填过的属性；全空回 `undefined`（调用方因此不发请求）。
+ * 会话链路 PATCH 的 `options`：只带填过的属性；全空回 `undefined`（调用方因此不发请求）。
  *
- * `use_htb` 是布尔值，「没改」与「关掉」必须分开：只有和初始草稿不同才发。
+ * 显式 `{}` 与「没改」是两件事：前者会清空台账属性且不回收已下发的 tc
+ * （`NMCPS-ADR-0029` §5），所以清空不从这里发。
  */
-export function labLinkUpdatePayload(draft: LabLinkDraft, initial: LabLinkDraft = labLinkDraftOf(null)): RawRecord | undefined {
+export function labLinkOptionsOf(draft: LabLinkDraft): RawRecord | undefined {
 	const options: RawRecord = {};
 	const bw = numberOf(draft.bw);
 	if (draft.bw.trim() && bw !== undefined)
@@ -247,11 +251,6 @@ export function labLinkUpdatePayload(draft: LabLinkDraft, initial: LabLinkDraft 
 	const loss = numberOf(draft.loss);
 	if (draft.loss.trim() && loss !== undefined)
 		options.loss = loss;
-	const queue = numberOf(draft.queue);
-	if (draft.queue.trim() && queue !== undefined)
-		options.max_queue_size = queue;
-	if (draft.useHtb !== initial.useHtb)
-		options.use_htb = draft.useHtb;
 
 	return Object.keys(options).length ? options : undefined;
 }

@@ -1026,6 +1026,7 @@
 				"close": "关闭",
 				"save": "保存",
 				"saved": "节点已更新",
+				"savedDeferred": "已排队：网络下次启动时生效",
 				"failed": "更新节点失败",
 				"errors": {
 					"ipInvalid": "IP 形如 10.0.0.2 或 10.0.0.2/24",
@@ -1036,7 +1037,7 @@
 			},
 			"linkDetail": {
 				"title": "链路详情：{from} ↔ {to}",
-				"hint": "tx/rx 是接口计数器的累计字节；属性改动经 PUT /links 落到 tc。",
+				"hint": "tx/rx 是接口计数器的累计字节；属性改动经会话 PATCH 落到 tc。",
 				"stats": "读数",
 				"statsLoading": "正在读取接口计数…",
 				"statsUnavailable": "读不到链路计数：{message}",
@@ -1046,22 +1047,24 @@
 				"delay": "延迟（10ms / 1s / 10）",
 				"jitter": "抖动",
 				"loss": "丢包率（%）",
-				"queue": "队列长度",
-				"useHtb": "use_htb",
+				"legacyOnly": "台账里还有 1.x 专用参数（会话通道不接收、这里只读）：{values}",
 				"clearHint": "全部留空 = 不提交：上游只清台账、不回收已生效的 tc，要撤规则请重建链路。",
 				"readOnly": "只读",
 				"readOnlySession": "当前会话只有 lab:read：能看 tx/rx 读数，改链路属性要 lab:operate。",
 				"close": "关闭",
 				"save": "保存",
 				"saved": "链路已更新",
+				"savedDeferred": "已排队：网络下次启动时生效",
 				"failed": "更新链路失败",
 				"errors": {
 					"bwInvalid": "带宽要是正数",
 					"delayInvalid": "延迟形如 10ms、1s 或 10（默认 ms）",
 					"jitterInvalid": "抖动形如 5ms 或 5（默认 ms）",
-					"lossInvalid": "丢包率是 0–100 的数字",
-					"queueInvalid": "队列长度是非负整数"
+					"lossInvalid": "丢包率是 0–100 的数字"
 				}
+			},
+			"session": {
+				"missing": "这张网还没有 2.0 会话，改动无法保存；刷新页面会自动补建（需要 lab:create）。"
 			},
 			"kinds": {
 				"host": "主机",

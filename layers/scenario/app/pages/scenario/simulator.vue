@@ -1082,6 +1082,54 @@
 	const canSnmp = computed(() => capabilities.value?.snmp === true);
 
 	/**
+	 * 台账里绑定的 2.0 会话 id（`GET /api/mininet/channel` 的 `sessionId`，
+	 * `NMCPS-ADR-0029` M1.2）：更新类动作（拖动落点、节点 / 链路详情保存）全部拼
+	 * `/api/mininet/sessions/{id}/...`。`null` = 这张网还没有会话。
+	 */
+	const sessionId = ref<string | null>(null);
+	/** 会话创建只尝试一次：失败多半是上游不可用，每次 `load()` 重试只会刷日志 */
+	let sessionCreateTried = false;
+
+	/** 写失败的原话（`ensureSession()` 也在用，所以先于它声明） */
+	const actionError = ref<string>();
+
+	/**
+	 * 会话 PATCH 的完整路径；还没有会话时回 `null` —— 调用方据此给就地说明，
+	 * **不**回退到 1.x（同一动作只保留一个入口，`NMCPS-ADR-0029` §6）。
+	 */
+	function sessionWritePath(suffix: string): string | null {
+		return sessionId.value
+			? `/api/mininet/sessions/${encodeURIComponent(sessionId.value)}${suffix}`
+			: null;
+	}
+
+	/**
+	 * 进入实验台时补一次会话（`NMCPS-ADR-0029` M1.2）：台账 `session_id` 只由
+	 * `POST /api/mininet/sessions` 写入，1.x 入口从不产生会话，所以切到会话通道后
+	 * 新台账 / 新种子天然是 `null`。上游的会话只是给现有全局 `app.net` 起个名字，
+	 * 后建会话照样看得见 1.x 建的节点，因此这里补建是安全的、也不重建网络。
+	 *
+	 * 没有 `lab:create` 的会话不建（BFF 会 403）：那种会话本来就只能读，
+	 * 更新动作用不到会话路径。
+	 */
+	async function ensureSession(): Promise<void> {
+		if (sessionId.value || sessionCreateTried || !canCreate.value)
+			return;
+		sessionCreateTried = true;
+		try {
+			const created = await api.post<{ id?: unknown }>("/api/mininet/sessions", { engine: "wired" });
+			const id = typeof created?.id === "string" ? created.id.trim() : "";
+			sessionId.value = id || null;
+		} catch (caught) {
+			// 另一张标签页可能刚建过（409 lab_session_exists）：以台账为准，重读一次通道
+			const reread = await api.get<MininetChannelInfo>("/api/mininet/channel").catch(() => null);
+			sessionId.value = reread?.sessionId ?? null;
+			if (!sessionId.value)
+				actionError.value = messageOf(caught);
+		}
+	}
+
+	/**
 	 * 左侧设备栏（NMCPS-ADR-0022 W10）：类型图标要 `create`，栏顶的运行按钮要 `create` /
 	 * `operate`（启动归 `create`，停止 / 重启归 `operate`）。两者都没有时整列不出现 ——
 	 * 只读会话不该多出一根空栏。
@@ -1125,9 +1173,8 @@
 		label: node.positioned.label || node.positioned.id
 	})));
 
-	/** 正在进行的写操作（按钮 loading / 弹窗不可关闭）与失败原话 */
+	/** 正在进行的写操作（按钮 loading / 弹窗不可关闭） */
 	const acting = ref(false);
-	const actionError = ref<string>();
 
 	/** 新增节点弹窗：`createKind` 为空时不挂载组件，草稿因此不会跨类型串味 */
 	const createOpen = ref(false);
@@ -2064,6 +2111,8 @@
 			]);
 
 			capabilities.value = channelResult.status === "fulfilled" ? channelResult.value.capabilities : null;
+			// 会话 id 同样来自通道探针；读不到通道就当没有会话（更新动作会就地说明缺什么）
+			sessionId.value = channelResult.status === "fulfilled" ? channelResult.value.sessionId ?? null : null;
 			// 运行态读不到就是「未知」（null），不假设没启动 —— 见 runState 的注释
 			runState.value = runResult.status === "fulfilled" ? labRunStateOf(runResult.value) : null;
 
@@ -2088,6 +2137,10 @@
 				resetGraph();
 				return;
 			}
+
+			// 会话补建必须在拓扑读之前：更新类动作（拖动 / 详情保存）拿不到会话就只能报错，
+			// 而建会话本身不碰网络（上游只是给现有 `app.net` 起名字），不会与读冲突
+			await ensureSession();
 
 			// 拓扑只打两条读（M1.1）：统一节点投影 + 链路。此前是五张分表并发 ——
 			// 页面多四次往返，且五张表并不来自同一时刻；统一投影与 2.0 会话侧同形。
@@ -2187,18 +2240,33 @@
 		void nextTick(() => networkToolsRef.value?.openTerminalFor?.(id));
 	}
 
-	/** 主机 / 路由器保存：成功后关弹窗并重读台账（不本地改一份「应该长什么样」） */
-	async function saveNodeDetail(kind: "host" | "router", payload: Record<string, unknown>): Promise<void> {
+	/**
+	 * 主机 / 路由器保存：走会话 PATCH 的 `attributes`（`NMCPS-ADR-0029` M1.2）。
+	 *
+	 * 成功后关弹窗并重读台账（不本地改一份「应该长什么样」）。`applied: false` 是
+	 * `deferred` 档的机器可读表达（停网时只落台账），toast 必须写明「已排队」而不是「已生效」。
+	 */
+	async function saveNodeDetail(attributes: Record<string, unknown>): Promise<void> {
 		const id = nodeDetailId.value;
 		if (!id || !canOperate.value)
 			return;
+		const path = sessionWritePath(`/nodes/${encodeURIComponent(id)}`);
+		if (!path) {
+			detailError.value = t("pages.scenario-simulator.session.missing");
+			return;
+		}
 		detailSubmitting.value = true;
 		detailError.value = undefined;
 		try {
-			const collection = kind === "host" ? "hosts" : "routers";
-			await api.patch<unknown>(`/api/mininet/${collection}/${encodeURIComponent(id)}`, payload);
+			const result = await api.patch<{ applied?: unknown }>(path, { attributes });
+			const applied = result?.applied !== false;
 			nodeDetailOpen.value = false;
-			toast.add({ title: t("pages.scenario-simulator.nodeDetail.saved"), color: "success" });
+			toast.add({
+				title: t(applied
+					? "pages.scenario-simulator.nodeDetail.saved"
+					: "pages.scenario-simulator.nodeDetail.savedDeferred"),
+				color: applied ? "success" : "warning"
+			});
 			await load();
 		} catch (caught) {
 			detailError.value = messageOf(caught);
@@ -2207,16 +2275,31 @@
 		}
 	}
 
-	/** 链路保存：`PUT /links` 只带填过的属性（全空时组件根本不发） */
+	/**
+	 * 链路保存：会话链路 PATCH 的 `options`（只带填过的属性，全空时组件根本不发）。
+	 * 链路 id 是上游的 `src--dst`（按字典序归一，`engines/wired.py` 的 `_link_id()`）。
+	 */
 	async function saveLinkDetail(payload: { src: string, dst: string, options: Record<string, unknown> }): Promise<void> {
 		if (!canOperate.value)
 			return;
+		const linkId = [payload.src, payload.dst].sort().join("--");
+		const path = sessionWritePath(`/links/${encodeURIComponent(linkId)}`);
+		if (!path) {
+			detailError.value = t("pages.scenario-simulator.session.missing");
+			return;
+		}
 		detailSubmitting.value = true;
 		detailError.value = undefined;
 		try {
-			await api.put<unknown>("/api/mininet/links", payload);
+			const result = await api.patch<{ applied?: unknown }>(path, { options: payload.options });
+			const applied = result?.applied !== false;
 			linkDetailOpen.value = false;
-			toast.add({ title: t("pages.scenario-simulator.linkDetail.saved"), color: "success" });
+			toast.add({
+				title: t(applied
+					? "pages.scenario-simulator.linkDetail.saved"
+					: "pages.scenario-simulator.linkDetail.savedDeferred"),
+				color: applied ? "success" : "warning"
+			});
 			await load();
 		} catch (caught) {
 			detailError.value = messageOf(caught);
@@ -2582,15 +2665,22 @@
 	}
 
 	/**
-	 * 拖动落点（`POST /api/mininet/node_position`）。
+	 * 拖动落点：会话节点 PATCH 的 `x` / `y`（`NMCPS-ADR-0029` D2 的 `layout` 档，
+	 * 任何运行状态都可写，不会重启网络）。
 	 *
-	 * 画布给的是**相对几何坐标的累计增量**，上游存的是绝对值：把增量加回 `raw.x` / `raw.y`
+	 * 画布给的是**相对几何坐标的累计增量**，台账存的是绝对值：把增量加回 `raw.x` / `raw.y`
 	 * 即可。画布展示坐标做过「减去 minX + 80」的平移，那是常量偏移，对增量不产生影响。
 	 */
 	async function onNodeMoved(id: string, offset: { dx: number, dy: number }): Promise<void> {
 		const node = nodes.value.find((item) => item.positioned.id === id);
 		if (!node || !canOperate.value || acting.value)
 			return;
+
+		const path = sessionWritePath(`/nodes/${encodeURIComponent(id)}`);
+		if (!path) {
+			actionError.value = t("pages.scenario-simulator.session.missing");
+			return;
+		}
 
 		const x = Math.round(coordinate(node.raw.x, node.positioned.x) + offset.dx);
 		const y = Math.round(coordinate(node.raw.y, node.positioned.y) + offset.dy);
@@ -2599,7 +2689,7 @@
 		actionError.value = undefined;
 
 		try {
-			await api.post("/api/mininet/node_position", { node_id: id, position: [x, y] });
+			await api.patch<unknown>(path, { x, y });
 			await load();
 		} catch (caught) {
 			actionError.value = messageOf(caught);

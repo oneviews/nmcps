@@ -3,8 +3,9 @@
 		链路详情 / 编辑（NMCPS-ADR-0022 W13，复刻旧 `LinkStats.vue` 的双击入口）。
 
 		事实 = 页面台账里的 `options`（`GET /links` 原样）+ `GET /api/mininet/links/stats/{src}/{dst}` 的
-		双向 tx/rx；读数读不到只降级那一块。编辑是 `PUT /links`（`lab:operate`），属性全空时**不发请求**
-		—— 上游对空 `options` 只清台账、不回收已生效的 tc，弹窗里写明这一点。
+		双向 tx/rx；读数读不到只降级那一块。编辑走会话 PATCH（`lab:operate`，
+		`NMCPS-ADR-0029` M1.2），属性全空时**不发请求** —— 上游对空 `options` 只清台账、
+		不回收已生效的 tc，弹窗里写明这一点。
 	-->
 	<UModal
 		v-model:open="open"
@@ -96,16 +97,18 @@
 						>
 							<UInput v-model="draft.loss" data-testid="lab-link-detail-loss" size="sm" class="w-full" />
 						</UFormField>
-						<UFormField
-							:label="t('pages.scenario-simulator.linkDetail.queue')"
-							:error="fieldError === 'queueInvalid' ? t('pages.scenario-simulator.linkDetail.errors.queueInvalid') : undefined"
-						>
-							<UInput v-model="draft.queue" data-testid="lab-link-detail-queue" size="sm" class="w-full" />
-						</UFormField>
-						<div class="flex items-end pb-1">
-							<USwitch v-model="draft.useHtb" :label="t('pages.scenario-simulator.linkDetail.useHtb')" />
-						</div>
 					</div>
+					<!--
+						`max_queue_size` / `use_htb` 只有 1.x 通道能改（会话 PATCH 对它们回 400，
+						`NMCPS-ADR-0029` §3）：台账里有值就原样展示，不给必然失败的输入框。
+					-->
+					<p
+						v-if="legacyOptions"
+						data-testid="lab-link-detail-legacy"
+						class="text-[11px] text-(--ui-text-muted)"
+					>
+						{{ t("pages.scenario-simulator.linkDetail.legacyOnly", { values: legacyOptions }) }}
+					</p>
 					<p class="text-[11px] text-(--ui-text-muted)">
 						{{ t("pages.scenario-simulator.linkDetail.clearHint") }}
 					</p>
@@ -152,16 +155,17 @@
 	} from "#layers/scenario/shared/types/labDetails";
 	import {
 		labLinkDraftOf,
+		labLinkOptionsOf,
 		labLinkStatsOf,
-		labLinkUpdateError,
-		labLinkUpdatePayload
+		labLinkUpdateError
 	} from "#layers/scenario/shared/types/labDetails";
 
 	/**
-	 * 链路详情弹窗（`NMCPS-ADR-0022` W13）。
+	 * 链路详情弹窗（`NMCPS-ADR-0022` W13 / `NMCPS-ADR-0029` M1.2）。
 	 *
-	 * 请求体由 `labLinkUpdatePayload()` 组装：只带填过的属性，全空回 `undefined` → 这里不发请求。
-	 * 上游对空 `options` 只清台账、不回收 tc，所以「清空」不是一个可承诺的动作，页面只写提示。
+	 * 编辑只覆盖会话通道的四个可更新键（`bw` / `delay` / `jitter` / `loss`），请求体由
+	 * `labLinkOptionsOf()` 组装：只带填过的属性，全空回 `undefined` → 这里不发请求。
+	 * `max_queue_size` / `use_htb` 是 1.x 专用参数，只按台账原样展示。
 	 */
 	const props = defineProps<{
 		link: { source: string, target: string, options: Record<string, unknown> } | null
@@ -178,7 +182,6 @@
 	const { t } = useI18n();
 
 	const draft = ref<LabLinkDraft>(labLinkDraftOf(null));
-	const initial = ref<LabLinkDraft>(labLinkDraftOf(null));
 	const fieldError = ref<LabDetailFieldError>();
 	const stats = ref<LabLinkLiveStats>(labLinkStatsOf(null));
 	const statsError = ref<string>();
@@ -186,13 +189,22 @@
 
 	const linkKey = computed(() => (props.link ? `${props.link.source}|${props.link.target}` : ""));
 
+	/** 台账里仍留着的 1.x 专用参数（只读展示，会话通道不接收） */
+	const legacyOptions = computed(() => {
+		const source = props.link?.options ?? {};
+		const parts: string[] = [];
+		if (source.max_queue_size !== undefined)
+			parts.push(`max_queue_size=${String(source.max_queue_size)}`);
+		if (source.use_htb !== undefined)
+			parts.push(`use_htb=${String(source.use_htb)}`);
+		return parts.join(", ");
+	});
+
 	/** 每次打开（或换了链路）都重新起草稿，并读一次 tx/rx */
 	watch([open, linkKey], ([value]) => {
 		if (!value || !props.link)
 			return;
-		const baseline = labLinkDraftOf(props.link.options);
-		initial.value = baseline;
-		draft.value = { ...baseline };
+		draft.value = labLinkDraftOf(props.link.options);
 		fieldError.value = undefined;
 		void loadStats();
 	}, { immediate: true });
@@ -229,7 +241,7 @@
 		fieldError.value = failure;
 		if (failure)
 			return;
-		const options = labLinkUpdatePayload(draft.value, initial.value);
+		const options = labLinkOptionsOf(draft.value);
 		// 全空 = 没改：不发一个只会清台账的请求（调用方也就不会出现「成功」的假象）
 		if (!options)
 			return;

@@ -1026,6 +1026,7 @@
 				"close": "Close",
 				"save": "Save",
 				"saved": "Node updated",
+				"savedDeferred": "Queued: applies the next time the network starts",
 				"failed": "Could not update the node",
 				"errors": {
 					"ipInvalid": "An IP looks like 10.0.0.2 or 10.0.0.2/24",
@@ -1036,7 +1037,7 @@
 			},
 			"linkDetail": {
 				"title": "Link details: {from} ↔ {to}",
-				"hint": "tx/rx are cumulative interface counters; attribute changes reach tc through PUT /links.",
+				"hint": "tx/rx are cumulative interface counters; attribute changes reach tc through the session PATCH.",
 				"stats": "Readout",
 				"statsLoading": "Reading interface counters…",
 				"statsUnavailable": "Link counters unavailable: {message}",
@@ -1046,22 +1047,24 @@
 				"delay": "Delay (10ms / 1s / 10)",
 				"jitter": "Jitter",
 				"loss": "Loss (%)",
-				"queue": "Queue length",
-				"useHtb": "use_htb",
+				"legacyOnly": "The ledger still carries 1.x-only options (the session channel does not accept them, shown read-only): {values}",
 				"clearHint": "Leaving everything empty submits nothing: upstream clears the ledger but keeps the live tc rules — rebuild the link to drop them.",
 				"readOnly": "Read only",
 				"readOnlySession": "This session only has lab:read: tx/rx readouts are visible, changing link attributes needs lab:operate.",
 				"close": "Close",
 				"save": "Save",
 				"saved": "Link updated",
+				"savedDeferred": "Queued: applies the next time the network starts",
 				"failed": "Could not update the link",
 				"errors": {
 					"bwInvalid": "Bandwidth must be a positive number",
 					"delayInvalid": "Delay looks like 10ms, 1s or 10 (ms by default)",
 					"jitterInvalid": "Jitter looks like 5ms or 5 (ms by default)",
-					"lossInvalid": "Loss must be a number between 0 and 100",
-					"queueInvalid": "Queue length must be a non-negative integer"
+					"lossInvalid": "Loss must be a number between 0 and 100"
 				}
+			},
+			"session": {
+				"missing": "This network has no 2.0 session yet, so changes cannot be saved; reloading the page creates one (needs lab:create)."
 			},
 			"kinds": {
 				"host": "host",

@@ -2,9 +2,9 @@
 	<!--
 		节点详情 / 编辑（NMCPS-ADR-0022 W13，复刻旧 `NodeStats.vue` 的双击入口）。
 
-		「事实」来自页面手里的台账原样字段（`GET /hosts|switches|...`），不为了看一眼再发一遍读请求；
+		「事实」来自页面手里的台账原样字段（`GET /api/mininet/nodes` 的统一投影），不为了看一眼再发一遍读请求；
 		只有主机 / 路由器的默认路由、接口与 ARP 额外读 `GET /api/mininet/stats/{id}`，读不到只降级那一块。
-		编辑按能力位：主机 `PATCH /hosts/{id}`、路由器 `PATCH /routers/{id}`，校验与请求体在
+		编辑按能力位，统一走会话节点 PATCH 的 `attributes`（`NMCPS-ADR-0029` D1 / M1.2），校验与请求体在
 		`labDetails.ts` 的纯函数里 —— 组件只渲染与显示报错。
 	-->
 	<UModal
@@ -213,21 +213,22 @@
 		LabRouterDraft
 	} from "#layers/scenario/shared/types/labDetails";
 	import {
+		labHostAttributesOf,
 		labHostDraftOf,
 		labHostUpdateError,
-		labHostUpdatePayload,
 		labNodeStatsOf,
+		labRouterAttributesOf,
 		labRouterDraftOf,
-		labRouterUpdateError,
-		labRouterUpdatePayload
+		labRouterUpdateError
 	} from "#layers/scenario/shared/types/labDetails";
 
 	/**
-	 * 节点详情弹窗（`NMCPS-ADR-0022` W13）。
+	 * 节点详情弹窗（`NMCPS-ADR-0022` W13 / `NMCPS-ADR-0029` M1.2）。
 	 *
 	 * 只做「主机 / 路由器」两类编辑：交换机那边的 OpenFlow 与流表入口在右栏，
 	 * 控制器与 NAT 没有可验证的生效路径（上游 `PUT /controllers/{id}` 不重启控制器），
-	 * 一律只读 —— 见 ADR 的 W13 段。
+	 * 一律只读 —— 见 ADR 的 W13 段。保存发的是会话 PATCH 的 `attributes`
+	 * （`labHostAttributesOf()` / `labRouterAttributesOf()`），不是 1.x 的分表字段名。
 	 */
 	const props = defineProps<{
 		node: { id: string, kind: string, label: string, raw: Record<string, unknown> } | null
@@ -237,7 +238,7 @@
 		error?: string
 	}>();
 
-	const emit = defineEmits<{ submit: [kind: "host" | "router", payload: Record<string, unknown>] }>();
+	const emit = defineEmits<{ submit: [attributes: Record<string, unknown>] }>();
 
 	const open = defineModel<boolean>("open", { required: true });
 	const api = useApi();
@@ -353,13 +354,13 @@
 			fieldError.value = failure;
 			if (failure)
 				return;
-			emit("submit", "host", labHostUpdatePayload(hostDraft.value));
+			emit("submit", labHostAttributesOf(hostDraft.value));
 			return;
 		}
 		const failure = labRouterUpdateError(routerDraft.value);
 		fieldError.value = failure;
 		if (failure)
 			return;
-		emit("submit", "router", labRouterUpdatePayload(routerDraft.value));
+		emit("submit", labRouterAttributesOf(routerDraft.value));
 	}
 </script>
