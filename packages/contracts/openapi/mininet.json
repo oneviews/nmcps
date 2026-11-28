@@ -982,6 +982,26 @@
         "title": "SessionLinkCreate",
         "type": "object"
       },
+      "SessionLinkUpdate": {
+        "additionalProperties": true,
+        "description": "统一链路部分更新：只有 `options`（显式 `{}` 与「不传」是两件事，D2 / §3）。",
+        "properties": {
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          }
+        },
+        "title": "SessionLinkUpdate",
+        "type": "object"
+      },
       "SessionNodeCreate": {
         "properties": {
           "attributes": {
@@ -1031,6 +1051,48 @@
           "type"
         ],
         "title": "SessionNodeCreate",
+        "type": "object"
+      },
+      "SessionNodeUpdate": {
+        "additionalProperties": true,
+        "description": "统一节点部分更新（`NMCPS-ADR-0029` D1 / D3）。\n\n`extra=\"allow\"`：`id` / `type` / `mac` / `name` 这些**不可变字段**必须能到达引擎才会\n被显式 400（D3）。若在这里静默丢掉未知键，页面会以为改名 / 换类型成功了。",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
+          }
+        },
+        "title": "SessionNodeUpdate",
         "type": "object"
       },
       "SnmpCredentialRequest": {
@@ -3004,6 +3066,61 @@
           }
         },
         "summary": "Delete Simulation Link"
+      },
+      "patch": {
+        "description": "统一链路部分更新（`NMCPS-ADR-0029` D1）：回 `{link, applied}` 投影。",
+        "operationId": "update_simulation_link_api_simulation_sessions__session_id__links__link_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "link_id",
+            "required": true,
+            "schema": {
+              "title": "Link Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionLinkUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Simulation Link"
       }
     },
     "/api/simulation/sessions/{session_id}/nodes": {
@@ -3132,6 +3249,61 @@
           }
         },
         "summary": "Delete Simulation Node"
+      },
+      "patch": {
+        "description": "统一节点部分更新（`NMCPS-ADR-0029` D1）：回 `{node, applied}` 投影。\n\n`exclude_unset` 只保留请求里**真的出现过**的键 —— 显式 `attributes: {}` 与「没传」\n是两件事，前者按空补丁 400。",
+        "operationId": "update_simulation_node_api_simulation_sessions__session_id__nodes__node_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionNodeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Simulation Node"
       }
     },
     "/api/simulation/sessions/{session_id}/start": {

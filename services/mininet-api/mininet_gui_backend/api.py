@@ -40,7 +40,7 @@ from mininet.node import RemoteController, Controller as ReferenceController, NO
 from mininet_gui_backend.nodes import Ryu
 from mininet.link import TCLink
 from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect, Body
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import PlainTextResponse, Response
 
 from mininet_gui_backend.export import build_addressing_plan, export_net_to_script, export_net_to_json
@@ -219,6 +219,10 @@ async def lifespan(app: FastAPI):
     app.routers = dict()
     app.links = dict()
     app.link_attrs = dict()
+    # 主机默认路由的台账（`NMCPS-ADR-0029` D2 的 `deferred` 档）：`Host` 模型里没有这个字段，
+    # 1.x 只把它写进运行中的节点。会话通道改路由时先记这里，`start_network()` 起网后兑现，
+    # 否则「停网改路由」会在重建网络后静默丢掉。
+    app.host_routes = dict()
     # 链路 ifconfig 状态（`up` / `down`）：**运行态**而不是配置，键与 `app.links` 同口径。
     # 网络没起来时一律按 `unknown` 读（见 `_link_status()`）—— 停网后回 `up` 等于替上游宣称
     # 「这条线通着」，而此刻两端命名空间根本不在了。
@@ -560,6 +564,24 @@ def _apply_router_configuration(router: Router) -> None:
 def _apply_all_router_configurations() -> None:
     for router in app.routers.values():
         _apply_router_configuration(router)
+
+
+def _apply_host_default_routes() -> None:
+    """起网时兑现主机默认路由台账（`NMCPS-ADR-0029` D2 的 `deferred` 档）。
+
+    只在这里兑现：1.x 的 `PATCH /hosts/{id}` 在运行中直接下发、不写台账，所以台账里
+    没有记录的主机不受影响；空串表示「没有默认路由」，起网后不应凭空补一条。
+    """
+    for node_id, route in list((getattr(app, "host_routes", None) or {}).items()):
+        if not route:
+            continue
+        node = app.net.nameToNode.get(node_id)
+        if node is None or getattr(node, "type", None) != "host":
+            continue
+        try:
+            node.setDefaultRoute(route)
+        except Exception as exc:  # pragma: no cover - 单个主机失败不该拖住起网
+            debug(f"failed to restore default route for {node_id}", exc)
 
 
 def add_nat_to_net(nat: Nat):
@@ -1103,6 +1125,7 @@ def start_network():
             switch.start([])
     app.net.is_started = True
     _apply_all_router_configurations()
+    _apply_host_default_routes()
     _start_snmp_collection()
     return {"status": "ok"}
 
@@ -1192,6 +1215,7 @@ async def full_reset_network():
     app.routers = dict()
     app.links = dict()
     app.link_attrs = dict()
+    app.host_routes = dict()
     app.link_states = dict()
     app.terminals = dict()
     app.sniffers = dict()
@@ -1638,6 +1662,10 @@ def delete_node(node_id: str):
         app.link_attrs.pop(key, None)
         _link_states().pop(key, None)
     app.net.delNode(node)
+    # 节点没了，它那条默认路由台账也不能留着（重建同名节点会凭空带上旧路由）
+    routes = getattr(app, "host_routes", None)
+    if routes is not None:
+        routes.pop(node_id, None)
     if node.type == "sw":
         del app.switches[node_id]
     elif node.type == "host":
@@ -2484,6 +2512,28 @@ class SessionLinkCreate(BaseModel):
     options: Optional[Dict[str, Any]] = None
 
 
+class SessionNodeUpdate(BaseModel):
+    """统一节点部分更新（`NMCPS-ADR-0029` D1 / D3）。
+
+    `extra="allow"`：`id` / `type` / `mac` / `name` 这些**不可变字段**必须能到达引擎才会
+    被显式 400（D3）。若在这里静默丢掉未知键，页面会以为改名 / 换类型成功了。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    x: Optional[float] = None
+    y: Optional[float] = None
+    attributes: Optional[Dict[str, Any]] = None
+
+
+class SessionLinkUpdate(BaseModel):
+    """统一链路部分更新：只有 `options`（显式 `{}` 与「不传」是两件事，D2 / §3）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    options: Optional[Dict[str, Any]] = None
+
+
 @app.get("/api/simulation/engines")
 def list_simulation_engines():
     return {"engines": engine_catalog()}
@@ -2561,6 +2611,30 @@ def create_simulation_node(session_id: str, payload: SessionNodeCreate):
     )
     try:
         return app.sessions.add_node(session_id, node)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.patch("/api/simulation/sessions/{session_id}/nodes/{node_id}")
+def update_simulation_node(session_id: str, node_id: str, payload: SessionNodeUpdate):
+    """统一节点部分更新（`NMCPS-ADR-0029` D1）：回 `{node, applied}` 投影。
+
+    `exclude_unset` 只保留请求里**真的出现过**的键 —— 显式 `attributes: {}` 与「没传」
+    是两件事，前者按空补丁 400。
+    """
+    patch = payload.model_dump(exclude_unset=True)
+    try:
+        return app.sessions.update_node(session_id, node_id, patch)
+    except EngineError as exc:
+        raise _engine_http_error(exc) from exc
+
+
+@app.patch("/api/simulation/sessions/{session_id}/links/{link_id}")
+def update_simulation_link(session_id: str, link_id: str, payload: SessionLinkUpdate):
+    """统一链路部分更新（`NMCPS-ADR-0029` D1）：回 `{link, applied}` 投影。"""
+    patch = payload.model_dump(exclude_unset=True)
+    try:
+        return app.sessions.update_link(session_id, link_id, patch)
     except EngineError as exc:
         raise _engine_http_error(exc) from exc
 

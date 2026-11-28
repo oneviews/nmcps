@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from mininet_gui_backend.engines.base import (
     Engine,
@@ -80,3 +80,9 @@ class WirelessEngine(Engine):
 
     def remove_link(self, session_id: str, link_id: str) -> None:
         raise self._unsupported("remove_link")
+
+    def update_node(self, session_id: str, node_id: str, patch: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        raise self._unsupported("update_node")
+
+    def update_link(self, session_id: str, link_id: str, patch: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        raise self._unsupported("update_link")

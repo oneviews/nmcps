@@ -8,18 +8,21 @@
 - 因此引擎层不 import pydantic / mininet：模型类从 `api` 模块按名字取（`api.Host`），
   这样 `pnpm check:engines` 能在没有 fastapi / mininet 的机器上用桩模块跑通适配逻辑。
 
-仍留在 legacy、M1.1 再迁：拖动落点（`node_position`）、改 IP / 默认路由、OpenFlow 版本、
-流表、统计、抓包、导出。它们不是节点集合的增删，统一模型还没冻结「更新」的语义
-（`Engine` 协议里没有 `update_node`），先不发明一套。
+更新类（M1.2，`NMCPS-ADR-0029`）：`update_node` / `update_link` 只做映射与错误归一 ——
+`deferred` 档在运行中调 `update_host` / `update_router` / `update_controller` / `update_link`
+（它们内部才有 `setIP` / `_apply_router_configuration()` / `intf.config()`），停网时只写台账；
+`live` 档（交换机 OpenFlow 版本）停网直接 409。仍留在 legacy：流表、统计、链路通断、
+抓包、导出（ADR-0029 D7）。
 """
 
 from __future__ import annotations
 
 import importlib.util
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from mininet_gui_backend.engines.base import (
+    NODE_LIVE_FIELDS,
     Engine,
     EngineAvailability,
     EngineConflict,
@@ -31,6 +34,8 @@ from mininet_gui_backend.engines.base import (
     LinkSpec,
     NodeSpec,
     SessionNotFound,
+    split_link_patch,
+    split_node_patch,
 )
 
 #: 主机上跑 Mininet 的常规前提（缺一不可，逐条报告而不是一句话「不可用」）
@@ -175,6 +180,134 @@ def _link_id(source: str, target: str) -> str:
     """统一链路 id：`src--dst`（无向，按字典序归一，与台账的链路键同口径）。"""
     left, right = sorted((source, target))
     return f"{left}--{right}"
+
+
+def _node_model(api: Any, node_id: str) -> Tuple[str, Any, str]:
+    """按统一 id 找 legacy 台账行：返回 `(统一类型, 模型实例, 台账键)`。
+
+    台账键是 `model.name`（`create_host()` 就这么存），统一 id 是 `model.id`；两者在
+    1.0 里通常相同，但导入的历史拓扑里可能只有一个对得上，所以两个都比。
+    """
+    for node_type, registry in NODE_REGISTRY_NAMES:
+        table = getattr(api.app, registry, None) or {}
+        model = table.get(node_id)
+        if model is not None:
+            return node_type, model, node_id
+        for key, candidate in table.items():
+            if str(getattr(candidate, "id", key)) == node_id:
+                return node_type, candidate, key
+    raise EngineResourceNotFound(f"node {node_id!r} not found", engine="wired")
+
+
+def _projection_of(api: Any, node_id: str) -> Dict[str, Any]:
+    """更新后的读回：复用 `unified_nodes()` 的唯一投影，不在更新路径另拼一份。"""
+    for projection in unified_nodes():
+        if projection["id"] == node_id:
+            return projection
+    raise EngineResourceNotFound(f"node {node_id!r} not found after update", engine="wired")
+
+
+def _is_running(api: Any) -> bool:
+    """`deferred` / `live` 档的分界线（ADR-0029 D2）：只看 `app.net.is_started`。"""
+    net = getattr(api.app, "net", None)
+    return bool(getattr(net, "is_started", False))
+
+
+def _live_node(api: Any, node_id: str) -> Any:
+    """运行中的 Mininet 节点；没起来时返回 `None`（停网时节点对象还在，但接口不存在）。"""
+    net = getattr(api.app, "net", None)
+    return (getattr(net, "nameToNode", None) or {}).get(node_id)
+
+
+def _host_ip_cidr(value: str, fallback: str) -> str:
+    """把主机地址归一成 `addr/prefix`：停网时不能靠 `setIP()` 补前缀，只能自己算。
+
+    fallback 规则与 `api.update_host()` 同口径（沿用台账里已有的前缀，没有就 `/8`）。
+    """
+    text = value.strip()
+    if "/" in text:
+        return text
+    if fallback and "/" in fallback:
+        return f"{text}/{fallback.split('/', 1)[1]}"
+    return f"{text}/8"
+
+
+def _apply_layout(api: Any, model: Any, registry_key: str, layout: Dict[str, float]) -> None:
+    """位置只写台账（`layout` 档）：1.x `node_position` 也同时改运行中的节点属性。"""
+    for key, value in layout.items():
+        setattr(model, key, value)
+    node = _live_node(api, str(getattr(model, "id", registry_key)))
+    for key, value in layout.items():
+        if node is not None:
+            setattr(node, key, value)
+
+
+def _apply_host_attributes(api: Any, model: Any, registry_key: str, attributes: Dict[str, Any], running: bool) -> None:
+    node_id = str(getattr(model, "id", registry_key))
+    if running:
+        # running 走 legacy：它负责解析前缀、调 `node.setIP()` / `setDefaultRoute()` 并回写台账
+        api.update_host(node_id, api.HostUpdate(**attributes))
+    elif "ip" in attributes:
+        model.ip = _host_ip_cidr(attributes["ip"], getattr(model, "ip", "") or "")
+
+    if "default_route" in attributes:
+        # 主机默认路由不在 `Host` 模型里（1.x 只存在运行中的节点上），M1.2 单独记一份台账，
+        # 由 `api.start_network()` 在起网时兑现 —— 否则停网改路由会在重建网络后静默丢掉。
+        routes = getattr(api.app, "host_routes", None)
+        if routes is None:  # pragma: no cover - api 未升级时的防御
+            routes = {}
+            api.app.host_routes = routes
+        routes[registry_key] = attributes["default_route"]
+
+
+def _apply_router_attributes(api: Any, model: Any, registry_key: str, attributes: Dict[str, Any], running: bool) -> None:
+    node_id = str(getattr(model, "id", registry_key))
+    if running:
+        # legacy 已经包含「接口必须挂在这个路由器上」的校验与 `_apply_router_configuration()`
+        api.update_router(node_id, api.RouterUpdate(**attributes))
+        return
+
+    # 停网：只写台账（延迟到下一次 `start` 的 `_apply_all_router_configurations()`）。
+    # 这里仍做与 legacy 同口径的归一，避免 400 要等到起网才出现。
+    if "ip" in attributes:
+        model.ip = api._normalize_interface_ip(attributes["ip"])
+    if "interface_ips" in attributes:
+        for name in attributes["interface_ips"]:
+            if not api._INTERFACE_NAME_RE.fullmatch(str(name).strip()):
+                raise EngineInvalidRequest(f"invalid interface: {name}", engine="wired")
+        model.interface_ips = dict(attributes["interface_ips"])
+    if "routes" in attributes:
+        model.routes = [api._normalize_route(route) for route in attributes["routes"]]
+    if "proxy_arp" in attributes:
+        model.proxy_arp = attributes["proxy_arp"]
+    if "ip_forward" in attributes:
+        model.ip_forward = attributes["ip_forward"]
+
+
+def _apply_controller_attributes(api: Any, model: Any, registry_key: str, attributes: Dict[str, Any], running: bool) -> None:
+    # 控制器属性只改台账、不重启进程（ADR-0029 §5）：1.x 的 `PUT /controllers/{id}` 同口径
+    api.update_controller(str(getattr(model, "id", registry_key)), api.ControllerUpdate(**attributes))
+
+
+def _apply_switch_attributes(api: Any, model: Any, registry_key: str, attributes: Dict[str, Any], running: bool) -> None:
+    if "of_version" in attributes:
+        # `live` 档：调用方已经保证 running；legacy 会拒绝非 OVS 交换机（400）
+        api.update_switch_openflow_version(str(getattr(model, "id", registry_key)), api.SwitchUpdate(of_version=attributes["of_version"]))
+
+
+_ATTRIBUTE_APPLIERS = {
+    "host": _apply_host_attributes,
+    "router": _apply_router_attributes,
+    "controller": _apply_controller_attributes,
+    "switch": _apply_switch_attributes,
+}
+
+
+def _legacy_options(api: Any, options: Dict[str, Any]) -> Any:
+    """`options` → legacy `LinkOptions`；数值 delay / jitter 由 legacy 补 `ms`（ADR-0029 §3）。"""
+    if not options:
+        return None
+    return api.LinkOptions(**options)
 
 
 class WiredEngine(Engine):
@@ -372,3 +505,70 @@ class WiredEngine(Engine):
             api.delete_link(source, target)
         except Exception as exc:
             raise _legacy_error(exc) from exc
+
+    # —— 部分更新（NMCPS-ADR-0029 M1.2）：只做映射与错误归一，应用仍交给 legacy ——
+
+    def update_node(self, session_id: str, node_id: str, patch: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        self._bound(session_id)
+        api = _legacy()
+        _require_net(api)
+
+        node_type, model, registry_key = _node_model(api, node_id)
+        layout, attributes = split_node_patch(node_type, patch)
+        running = _is_running(api)
+
+        # `live` 档（交换机 OpenFlow 版本）改的是 OVS 桥参数，停网时兑现不了 → 409（D2）
+        if any(key in NODE_LIVE_FIELDS for key in attributes) and not running:
+            raise EngineConflict("session is not running", engine=self.name)
+
+        applier = _ATTRIBUTE_APPLIERS.get(node_type)
+        if attributes and applier is None:
+            raise EngineUnsupported(f"wired engine cannot update node type {node_type!r}", engine=self.name)
+
+        try:
+            if layout:
+                _apply_layout(api, model, registry_key, layout)
+            if attributes:
+                applier(api, model, registry_key, attributes, running)
+        except EngineError:
+            raise
+        except Exception as exc:
+            raise _legacy_error(exc) from exc
+
+        # `layout` 恒生效；`deferred` 档在停网时只落台账（`applied: false`）
+        applied = True if not attributes else running
+        return _projection_of(api, node_id), applied
+
+    def update_link(self, session_id: str, link_id: str, patch: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        self._bound(session_id)
+        api = _legacy()
+        _require_net(api)
+
+        options = split_link_patch(patch)
+        source, _, target = link_id.partition("--")
+        if not source or not target:
+            raise EngineInvalidRequest(f"link id {link_id!r} is not '<src>--<dst>'", engine=self.name)
+
+        key = frozenset((source, target))
+        links = getattr(api.app, "links", None) or {}
+        if key not in links:
+            raise EngineResourceNotFound(f"link {link_id!r} not found", engine=self.name)
+
+        running = _is_running(api)
+        try:
+            if running:
+                # 运行中走 legacy：`intf.config()` 重新下发 tc，并写回 `app.link_attrs`
+                api.update_link(api.LinkUpdate(src=source, dst=target, options=_legacy_options(api, options)))
+            else:
+                # 停网：与 1.x 同口径只清 / 写台账（显式 `{}` 不回收已下发的 tc）
+                api.app.link_attrs[key] = dict(options)
+        except EngineError:
+            raise
+        except Exception as exc:
+            raise _legacy_error(exc) from exc
+
+        applied = True if not options else running
+        record = next((link for link in self.list_links(session_id) if link["id"] == _link_id(source, target)), None)
+        if record is None:  # pragma: no cover - 台账刚查过，防御式
+            raise EngineResourceNotFound(f"link {link_id!r} not found after update", engine=self.name)
+        return record, applied

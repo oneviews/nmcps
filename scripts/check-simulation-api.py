@@ -165,6 +165,60 @@ def main() -> int:
         )
         log("加链路 h1--s1（options 原样保留）→ 201", status == 201 and body.get("options", {}).get("bw") == 10, f"{status}")
 
+        # M1.2（`NMCPS-ADR-0029` D1–D4）：两条 PATCH 的运行时形状
+        status, body = call(
+            port,
+            f"/api/simulation/sessions/{session_id}/nodes/h1",
+            method="PATCH",
+            token=TOKEN,
+            body={"x": 120, "y": 80},
+        )
+        node = body.get("node") or {}
+        log(
+            "PATCH 节点位置 → 200 {node, applied:true}（layout 档恒生效）",
+            status == 200 and body.get("applied") is True and node.get("x") == 120.0 and set(node) == {"id", "type", "name", "x", "y", "attributes"},
+            f"{status} applied={body.get('applied')} node={node}",
+        )
+
+        status, body = call(
+            port,
+            f"/api/simulation/sessions/{session_id}/nodes/h1",
+            method="PATCH",
+            token=TOKEN,
+            body={"attributes": {"ip": "10.0.0.9/24"}},
+        )
+        log(
+            "停网 PATCH 节点属性 → applied:false（deferred 档排队，台账已写）",
+            status == 200 and body.get("applied") is False and body.get("node", {}).get("attributes", {}).get("ip") == "10.0.0.9/24",
+            f"{status} applied={body.get('applied')}",
+        )
+
+        status, body = call(
+            port,
+            f"/api/simulation/sessions/{session_id}/nodes/h1",
+            method="PATCH",
+            token=TOKEN,
+            body={"type": "switch"},
+        )
+        log(
+            "PATCH 不可变字段（type）→ 400 engine_invalid_request（不做静默忽略）",
+            status == 400 and "engine_invalid_request" in str(body.get("detail")),
+            f"{status} {body.get('detail')}",
+        )
+
+        status, body = call(
+            port,
+            f"/api/simulation/sessions/{session_id}/links/h1--s1",
+            method="PATCH",
+            token=TOKEN,
+            body={"options": {"bw": 25}},
+        )
+        log(
+            "停网 PATCH 链路属性 → applied:false 且投影带新 options",
+            status == 200 and body.get("applied") is False and body.get("link", {}).get("options", {}).get("bw") == 25,
+            f"{status} applied={body.get('applied')}",
+        )
+
         status, body = call(port, f"/api/simulation/sessions/{session_id}", token=TOKEN)
         live = body.get("live") or {}
         log(

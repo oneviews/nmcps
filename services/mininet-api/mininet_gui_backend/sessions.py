@@ -199,6 +199,12 @@ class SessionStore:
         record = self.get(session_id)
         self._engine(record).remove_node(session_id, node_id)
 
+    def update_node(self, session_id: str, node_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """统一节点部分更新（`NMCPS-ADR-0029` D1 / D4）：回 `{node, applied}`，不回 `status: ok`。"""
+        record = self.get(session_id)
+        node, applied = self._engine(record).update_node(session_id, node_id, patch)
+        return {"node": node, "applied": applied}
+
     def list_links(self, session_id: str) -> List[Dict[str, Any]]:
         record = self.get(session_id)
         return self._engine(record).list_links(session_id)
@@ -210,3 +216,9 @@ class SessionStore:
     def remove_link(self, session_id: str, link_id: str) -> None:
         record = self.get(session_id)
         self._engine(record).remove_link(session_id, link_id)
+
+    def update_link(self, session_id: str, link_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """统一链路部分更新（`NMCPS-ADR-0029` D1 / D4）：回 `{link, applied}`。"""
+        record = self.get(session_id)
+        link, applied = self._engine(record).update_link(session_id, link_id, patch)
+        return {"link": link, "applied": applied}

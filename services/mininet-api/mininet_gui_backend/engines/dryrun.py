@@ -8,16 +8,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from mininet_gui_backend.engines.base import (
+    NODE_LIVE_FIELDS,
     Engine,
     EngineAvailability,
     EngineConflict,
     EngineInvalidRequest,
+    EngineResourceNotFound,
     LinkSpec,
     NodeSpec,
     SessionNotFound,
+    split_link_patch,
+    split_node_patch,
 )
 
 
@@ -47,6 +51,19 @@ class DryRunEngine(Engine):
         if session is None:
             raise SessionNotFound(f"session {session_id!r} is not bound to engine {self.name}", engine=self.name)
         return session
+
+    @staticmethod
+    def _projection(record: Dict[str, Any]) -> Dict[str, Any]:
+        """统一节点投影的副本：调用方改返回值不能改到台账（`attributes` 要深一层）。"""
+        projection = dict(record)
+        projection["attributes"] = dict(record.get("attributes") or {})
+        return projection
+
+    @staticmethod
+    def _link_projection(record: Dict[str, Any]) -> Dict[str, Any]:
+        projection = dict(record)
+        projection["options"] = dict(record.get("options") or {})
+        return projection
 
     async def create_session(self, session_id: str, spec: Optional[Dict[str, Any]] = None) -> None:
         if session_id in self._sessions:
@@ -124,3 +141,37 @@ class DryRunEngine(Engine):
         if link_id not in session.links:
             raise EngineConflict(f"link {link_id!r} does not exist", engine=self.name)
         del session.links[link_id]
+
+    # —— 部分更新（NMCPS-ADR-0029 M1.2）——
+
+    def update_node(self, session_id: str, node_id: str, patch: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        session = self._session(session_id)
+        record = session.nodes.get(node_id)
+        if record is None:
+            raise EngineResourceNotFound(f"node {node_id!r} not found", engine=self.name)
+
+        layout, attributes = split_node_patch(str(record["type"]), patch)
+        # `live` 档改的是 OVS 桥参数：内存引擎没有桥，但**语义**要一致 ——
+        # 停网时也回 409，否则 dryrun 验收的语义与真后端不是同一个。
+        if attributes and any(key in NODE_LIVE_FIELDS for key in attributes) and not session.started:
+            raise EngineConflict("session is not running", engine=self.name)
+
+        if layout:
+            record.update(layout)
+        if attributes:
+            record["attributes"].update(attributes)
+
+        # `layout` 恒生效；其余属性只在 `started` 时「已生效」，否则是排队（D2）
+        applied = True if not attributes else session.started
+        return self._projection(record), applied
+
+    def update_link(self, session_id: str, link_id: str, patch: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        session = self._session(session_id)
+        record = session.links.get(link_id)
+        if record is None:
+            raise EngineResourceNotFound(f"link {link_id!r} not found", engine=self.name)
+
+        options = split_link_patch(patch)
+        record["options"] = dict(options)
+        applied = True if not options else session.started
+        return self._link_projection(record), applied

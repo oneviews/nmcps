@@ -100,7 +100,9 @@ sys.path.insert(0, "services/mininet-api")
 
 from mininet_gui_backend import auth
 from mininet_gui_backend.engines import (
+    EngineConflict,
     EngineError,
+    EngineInvalidRequest,
     EngineNotFound,
     LinkSpec,
     NodeSpec,
@@ -146,6 +148,46 @@ async def main():
     if store.status(record.id)["live"]["started"] is not False:
         raise AssertionError("stop 后 started 不是 False")
 
+    # M1.2（NMCPS-ADR-0029 D2 / D4）：部分更新的三档生效语义 + 投影响应
+    layout_node = store.update_node(record.id, "h1", {"x": 15, "y": 25})
+    if not layout_node["applied"] or layout_node["node"]["x"] != 15.0 or layout_node["node"]["y"] != 25.0:
+        raise AssertionError("改位置没恒生效 / 投影没带新坐标：" + str(layout_node))
+    if set(layout_node["node"]) != {"id", "type", "name", "x", "y", "attributes"}:
+        raise AssertionError("更新响应不是统一节点投影：" + str(layout_node))
+
+    queued = store.update_node(record.id, "h1", {"attributes": {"ip": "10.0.0.9/24"}})
+    if queued["applied"] or queued["node"]["attributes"].get("ip") != "10.0.0.9/24":
+        raise AssertionError("停网改属性应是 applied=false 且台账已写：" + str(queued))
+
+    try:
+        store.update_node(record.id, "s1", {"attributes": {"ofVersion": "OpenFlow13"}})
+    except EngineConflict:
+        pass
+    else:
+        raise AssertionError("停网改 OpenFlow 版本没有回 409（live 档兑现不了）")
+
+    for bad in ({"name": "h1x"}, {"attributes": {"mac": "00:00:00:00:00:09"}}, {"attributes": {"nope": 1}}):
+        try:
+            store.update_node(record.id, "h1", bad)
+        except EngineInvalidRequest:
+            pass
+        else:
+            raise AssertionError("不可变 / 未登记字段没有被拒绝：" + str(bad))
+
+    link_update = store.update_link(record.id, "h1--s1", {"options": {"bw": 25}})
+    if link_update["applied"] or link_update["link"]["options"].get("bw") != 25:
+        raise AssertionError("停网改链路应是 applied=false 且台账已写：" + str(link_update))
+
+    await store.start(record.id)
+    live_node = store.update_node(record.id, "h1", {"attributes": {"ip": "10.0.0.10/24"}})
+    if not live_node["applied"] or live_node["node"]["attributes"].get("ip") != "10.0.0.10/24":
+        raise AssertionError("运行中改属性应是 applied=true：" + str(live_node))
+
+    live_link = store.update_link(record.id, "h1--s1", {"options": {"bw": 30}})
+    if not live_link["applied"]:
+        raise AssertionError("运行中改链路应是 applied=true")
+    await store.stop(record.id)
+
     store.remove_node(record.id, "h1")
     if store.status(record.id)["live"]["link_count"] != 0:
         raise AssertionError("删节点后挂在上面的链路没有回收")
@@ -186,7 +228,7 @@ print("engine-self-test-ok")
 
 const selfTestRun = spawnSync("python3", ["-"], { input: selfTest, encoding: "utf8" });
 log(
-	"dryrun 会话链路（会话 / 节点 / 链路 / 起停 / 删除）+ 签名校验",
+	"dryrun 会话链路（会话 / 节点 / 链路 / 起停 / 删除 / 更新） + 签名校验",
 	selfTestRun.status === 0 && selfTestRun.stdout.includes("engine-self-test-ok"),
 	selfTestRun.status === 0
 		? "无 root、无 fastapi、无 mininet"
