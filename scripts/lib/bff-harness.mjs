@@ -629,6 +629,15 @@ export async function startUpstream(port) {
 		.find((bucket) => Object.hasOwn(mininetState[bucket], id));
 
 	/**
+	 * 2.0 会话（`NMCPS-DESIGN-008` M1 / `NMCPS-ADR-0029` M1.2）：假上游只维护 id 表。
+	 *
+	 * 页面进实验台时若台账 `session_id` 为空会 `POST /api/mininet/sessions`，
+	 * 之后拖动与详情保存都打 `/sessions/{id}/nodes|links`；自检据此断言
+	 * 「1.x 更新端点命中数为 0、会话路径命中数对得上」。
+	 */
+	const mininetSessions = { seq: 0, ids: [] };
+
+	/**
 	 * SNMP 凭据（`NMCPS-ADR-0028` §7）：假上游只保留**编排**的那一份。
 	 * `state` 里的 `community` 只在未开通时回部署默认串 —— 与上游 D9 同口径，
 	 * 已开通的密文仅在开通 / 轮换的响应里出现一次。
@@ -2229,6 +2238,126 @@ export async function startUpstream(port) {
 					total: 1
 				}
 			});
+		}
+
+		// ── 2.0 会话通道（`NMCPS-DESIGN-008` M1 / `NMCPS-ADR-0029` M1.2）──
+		// 真实的会话只是给现有全局 `app.net` 起个名字：这里同样复用同一份 `mininetState`，
+		// 建完会话再看得到 1.x 建的节点。写请求同样进 `mininetLog`（路径是上游那条），
+		// 自检据此断言页面「只剩会话路径」。
+		if (url.pathname.startsWith("/api/simulation/")) {
+			const segments = url.pathname.slice("/api/simulation/".length).split("/").filter(Boolean).map((part) => decodeURIComponent(part));
+
+			let body;
+			if (req.method !== "GET") {
+				const raw = await readRawBody(req);
+				body = (() => {
+					try {
+						return raw ? JSON.parse(raw) : undefined;
+					} catch {
+						return undefined;
+					}
+				})();
+				mininetLog.push({ method: req.method, path: url.pathname, body, raw, contentType: req.headers["content-type"] });
+			}
+
+			if (segments[0] !== "sessions")
+				return send(404, { detail: "not found" });
+
+			if (segments.length === 1 && req.method === "POST") {
+				const engine = typeof body?.engine === "string" ? body.engine : "wired";
+				if (engine !== "wired" && engine !== "dryrun")
+					return send(400, { detail: `engine ${engine} is not available` });
+				mininetSessions.seq += 1;
+				const id = `sim-${mininetSessions.seq}`;
+				mininetSessions.ids.push(id);
+				const now = new Date().toISOString();
+				return send(201, {
+					id,
+					engine,
+					name: typeof body?.name === "string" ? body.name : id,
+					state: "created",
+					created_at: now,
+					updated_at: now,
+					metadata: body?.metadata ?? {}
+				});
+			}
+
+			if (segments.length === 1 && req.method === "GET")
+				return send(200, { sessions: mininetSessions.ids.map((id) => ({ id, state: "created" })), total: mininetSessions.ids.length });
+
+			const sessionId = segments[1];
+			const kind = segments[2];
+			const targetId = segments[3];
+			if (!mininetSessions.ids.includes(sessionId))
+				return send(404, { detail: `session ${sessionId} not found` });
+
+			// 统一节点 PATCH：`x` / `y` 是 `layout`（任何状态可写），`attributes` 是 `deferred`
+			if (kind === "nodes" && targetId && req.method === "PATCH") {
+				const bucket = mininetBucketOf(targetId);
+				if (!bucket)
+					return send(404, { detail: `node ${targetId} not found` });
+				const node = mininetState[bucket][targetId];
+				if (typeof body?.x === "number")
+					node.x = Math.round(body.x);
+				if (typeof body?.y === "number")
+					node.y = Math.round(body.y);
+				const attributes = body?.attributes ?? {};
+				const keys = Object.keys(attributes);
+				if (keys.length) {
+					const mutable = new Set(["ip", "defaultRoute", "interfaceIps", "routes", "proxyArp", "ipForward"]);
+					const unknown = keys.find((key) => !mutable.has(key));
+					if (unknown)
+						return send(400, { detail: `unknown attribute ${unknown}` });
+					if (typeof attributes.ip === "string")
+						node.ip = attributes.ip.trim();
+					if (typeof attributes.defaultRoute === "string")
+						node.default_route = attributes.defaultRoute.trim();
+					if (attributes.interfaceIps && typeof attributes.interfaceIps === "object")
+						node.interface_ips = { ...attributes.interfaceIps };
+					if (Array.isArray(attributes.routes))
+						node.routes = [...attributes.routes];
+					if (typeof attributes.proxyArp === "boolean")
+						node.proxy_arp = attributes.proxyArp;
+					if (typeof attributes.ipForward === "boolean")
+						node.ip_forward = attributes.ipForward;
+				}
+				const { name, x, y, ...rest } = node;
+				return send(200, {
+					node: {
+						id: targetId,
+						type: { hosts: "host", switches: "switch", routers: "router", nats: "nat", controllers: "controller" }[bucket],
+						name: name ?? targetId,
+						x: x ?? 0,
+						y: y ?? 0,
+						attributes: rest
+					},
+					applied: keys.length ? mininetRun.started : true
+				});
+			}
+
+			// 统一链路 PATCH：`{ options }`（空对象是合法请求 = 清台账）
+			if (kind === "links" && targetId && req.method === "PATCH") {
+				// 链路 id 是上游 `src--dst`（两个端点，别按三段切）
+				const [source, target] = targetId.split("--");
+				const link = mininetState.links.find((entry) =>
+					(entry.from === source && entry.to === target) || (entry.from === target && entry.to === source));
+				if (!link)
+					return send(404, { detail: `link ${targetId} not found` });
+				if (!body || typeof body !== "object" || !("options" in body))
+					return send(400, { detail: "link patch needs 'options'" });
+				const options = body.options ?? {};
+				const allowed = new Set(["bw", "delay", "jitter", "loss"]);
+				const unknown = Object.keys(options).find((key) => !allowed.has(key));
+				if (unknown)
+					return send(400, { detail: `unknown link option ${unknown}` });
+				mininetLinkAttrs[`${link.from}|${link.to}`] = { ...options };
+				return send(200, {
+					link: { id: targetId, src: link.from, dst: link.to, options: { ...options } },
+					applied: Object.keys(options).length ? mininetRun.started : true
+				});
+			}
+
+			return send(405, { detail: "method not allowed" });
 		}
 
 		if (url.pathname.startsWith("/api/mininet/")) {

@@ -4767,7 +4767,7 @@ if (upstreamPort) {
 			channel?.status() === 200
 			&& channelJson?.data?.configured === true
 			&& channelJson?.data?.capabilities?.operate === true
-			&& channelJson?.data?.endpointCount === 64
+			&& channelJson?.data?.endpointCount === 66
 			&& !channelRaw.includes(String(upstreamPort)),
 			channel
 				? `${channel.status()} configured=${channelJson?.data?.configured} operate=${channelJson?.data?.capabilities?.operate} 端点=${channelJson?.data?.endpointCount} 泄露端口=${channelRaw.includes(String(upstreamPort))}`
@@ -5184,6 +5184,27 @@ if (upstreamPort) {
 			+ ` 状态=「${topologyProbe.network}」节点=「${topologyProbe.nodeStat}」链路=「${topologyProbe.linkStat}」`
 		);
 
+		// 11.3b 2.0 会话（`NMCPS-ADR-0029` M1.2）：台账 seed 没有 `session_id`，页面进来自动补建
+		// **恰好一条**会话；刷新不重复建（通道回读到绑定值后 `ensureSession()` 直接返回）。
+		const sessionPostCount = () => upstreamServer.mininetLog
+			.filter((entry) => entry.method === "POST" && entry.path === "/api/simulation/sessions")
+			.length;
+		log(
+			"11.3b 台账未绑定会话时，进入实验台自动补建恰好一条 2.0 会话",
+			sessionPostCount() === 1,
+			`POST /api/simulation/sessions = ${sessionPostCount()}`
+		);
+
+		// 刷新一遍：BFF 已把 `session_id` 写回台账，通道探针能回读到它，
+		// `ensureSession()` 因此直接返回 —— 再建一条就是「每次进页面都新建会话」的回归。
+		await labPage.reload({ waitUntil: "networkidle" });
+		await labPage.waitForTimeout(1200);
+		log(
+			"11.3b 刷新后回读到已绑定的会话，不再补建第二条",
+			sessionPostCount() === 1,
+			`POST /api/simulation/sessions = ${sessionPostCount()}`
+		);
+
 		await labPage.evaluate(() => {
 			document.querySelector("[data-testid='topology-node'][data-node-id='h1']")
 				?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -5415,13 +5436,15 @@ if (upstreamPort) {
 			await labPage.mouse.up();
 		}
 		await labPage.waitForTimeout(1200);
-		const movedWrite = upstreamServer.mininetLog.find((entry) => entry.method === "POST" && entry.path === "/api/mininet/node_position");
+		// 会话通道（NMCPS-ADR-0029 M1.2）：拖动落库改打 `PATCH /sessions/{id}/nodes/{node_id}`，
+		// 1.x 的 `POST /api/mininet/node_position` 命中数必须是 0（下方一起断言）。
+		const movedWrite = upstreamServer.mininetLog.find((entry) =>
+			entry.method === "PATCH" && /^\/api\/simulation\/sessions\/[^/]+\/nodes\/h1$/.test(entry.path));
 		log(
-			"11.4 拖动节点把增量落成绝对值（POST /api/mininet/node_position）",
+			"11.4 拖动节点把增量落成绝对值（PATCH /sessions/{id}/nodes/{node_id} 的 x/y）",
 			!!nodeBox
-			&& movedWrite?.body?.node_id === "h1"
-			&& Array.isArray(movedWrite.body.position)
-			&& movedWrite.body.position[0] > 80 && movedWrite.body.position[1] > 120,
+			&& movedWrite?.body?.x > 80 && movedWrite?.body?.y > 120
+			&& movedWrite?.body?.attributes === undefined,
 			movedWrite ? JSON.stringify(movedWrite.body) : (nodeBox ? "没有坐标写请求" : "没找到 h1 节点")
 		);
 
@@ -6812,7 +6835,8 @@ if (upstreamPort) {
 			+ ` 画布节点=${JSON.stringify(canvasNodeIds)} 菜单=${JSON.stringify(contextItems)} 空白菜单数=${blankMenuCount}`
 		);
 
-		// 11.12 双击主机 → 详情弹窗（台账事实 + 运行态读数），改 IP 走 PATCH /hosts/{id}。
+		// 11.12 双击主机 → 详情弹窗（台账事实 + 运行态读数），改 IP 走会话节点 PATCH 的
+		// `attributes`（`NMCPS-ADR-0029` M1.2），1.x 的 `PATCH /hosts/{id}` 不再被调用。
 		await detailNode.first().dblclick({ timeout: 5000 }).catch(() => {});
 		await labPage.waitForSelector("[data-testid='lab-node-detail-ip']", { timeout: 10000 }).catch(() => {});
 		await labPage.waitForTimeout(600);
@@ -6825,19 +6849,22 @@ if (upstreamPort) {
 		await labPage.locator("[data-testid='lab-node-detail-ip']").fill("10.0.0.77/8", { timeout: 5000 }).catch(() => {});
 		await labPage.locator("[data-testid='lab-node-detail-submit']").click({ timeout: 5000 }).catch(() => {});
 		await labPage.waitForTimeout(1200);
-		const hostWrite = upstreamServer.mininetLog.filter((entry) => entry.method === "PATCH" && entry.path === "/api/mininet/hosts/h_detail").at(-1);
+		const hostWrite = upstreamServer.mininetLog.filter((entry) =>
+			entry.method === "PATCH" && /^\/api\/simulation\/sessions\/[^/]+\/nodes\/h_detail$/.test(entry.path)).at(-1);
 		const nodeDetailClosed = await labPage.locator("[data-testid='lab-node-detail-ip']").count();
 		log(
-			"11.12 双击主机打开详情（台账事实 + 运行态读数），改 IP 走 PATCH /hosts/{id} 并重读台账",
+			"11.12 双击主机打开详情（台账事实 + 运行态读数），改 IP 走会话节点 PATCH 的 attributes 并重读台账",
 			nodeDetailProbe.open && nodeDetailProbe.live && nodeDetailProbe.arp
 			&& nodeDetailProbe.text.includes("h_detail") && nodeDetailProbe.text.includes("10.0.0.254")
-			&& hostWrite?.body?.ip === "10.0.0.77/8"
+			&& hostWrite?.body?.attributes?.ip === "10.0.0.77/8"
+			&& hostWrite && Object.keys(hostWrite.body).join() === "attributes"
 			&& upstreamServer.mininetState.hosts.h_detail?.ip === "10.0.0.77/8"
 			&& nodeDetailClosed === 0,
 			`弹窗=${nodeDetailProbe.open} 运行态=${nodeDetailProbe.live} 请求=${hostWrite ? JSON.stringify(hostWrite.body) : "无"} 台账IP=${upstreamServer.mininetState.hosts.h_detail?.ip}`
 		);
 
-		// 11.13 双击链路 → 详情弹窗（tx/rx 读数），改带宽走 PUT /links（只带填过的属性）。
+		// 11.13 双击链路 → 详情弹窗（tx/rx 读数），改带宽走会话链路 PATCH 的 `options`
+		// （只带填过的属性）；链路 id 是上游的 `src--dst`（字典序）。
 		// 画布上链路很多，按 aria-label 定位到刚铺的那条（`<source> ↔ <target>`），不赌顺序。
 		await labPage.locator("[data-testid='topology-link-hit'][aria-label*='h_detail']").first().dblclick({ force: true, timeout: 5000 }).catch(() => {});
 		await labPage.waitForSelector("[data-testid='lab-link-detail-bw']", { timeout: 10000 }).catch(() => {});
@@ -6846,15 +6873,33 @@ if (upstreamPort) {
 		await labPage.locator("[data-testid='lab-link-detail-bw']").fill("100", { timeout: 5000 }).catch(() => {});
 		await labPage.locator("[data-testid='lab-link-detail-submit']").click({ timeout: 5000 }).catch(() => {});
 		await labPage.waitForTimeout(1200);
-		const linkWrite = upstreamServer.mininetLog.filter((entry) => entry.method === "PUT" && entry.path === "/api/mininet/links").at(-1);
+		const detailLinkId = [detailSwitch, "h_detail"].sort().join("--");
+		const linkWrite = upstreamServer.mininetLog.filter((entry) =>
+			entry.method === "PATCH" && entry.path.endsWith(`/links/${detailLinkId}`)).at(-1);
 		const linkDetailClosed = await labPage.locator("[data-testid='lab-link-detail-bw']").count();
+		const linkOptionsStored = upstreamServer.mininetLinkAttrs[`h_detail|${detailSwitch}`]
+			?? upstreamServer.mininetLinkAttrs[`${detailSwitch}|h_detail`];
 		log(
-			"11.13 双击链路打开详情（tx/rx 读数），改带宽走 PUT /links 且请求体只带填过的属性",
+			"11.13 双击链路打开详情（tx/rx 读数），改带宽走会话链路 PATCH 且请求体只带填过的属性",
 			linkDetailText.includes("h_detail") && linkDetailText.includes("1024")
-			&& linkWrite?.body?.src !== undefined && linkWrite?.body?.dst !== undefined
-			&& linkWrite?.body?.options?.bw === 100 && Object.keys(linkWrite.body.options).length === 1
+			&& linkWrite?.body?.options?.bw === 100
+			&& linkWrite && Object.keys(linkWrite.body.options).length === 1
+			&& linkOptionsStored?.bw === 100
 			&& linkDetailClosed === 0,
-			`弹窗文本=${linkDetailText.slice(0, 60)} 请求=${linkWrite ? JSON.stringify(linkWrite.body) : "无"}`
+			`弹窗文本=${linkDetailText.slice(0, 60)} 请求=${linkWrite ? JSON.stringify(linkWrite.body) : "无"} 上游=${JSON.stringify(linkOptionsStored)}`
+		);
+
+		// 11.13b 页面切完会话通道的机器判据（`NMCPS-ADR-0029` §6 第 5 条）：
+		// 1.x 的四类更新端点命中数必须为 0，否则就是「同一动作两个入口」的双写。
+		const legacyUpdateHits = upstreamServer.mininetLog.filter((entry) =>
+			(entry.method === "POST" && entry.path === "/api/mininet/node_position")
+			|| (entry.method === "PATCH" && entry.path.startsWith("/api/mininet/hosts/"))
+			|| (entry.method === "PATCH" && entry.path.startsWith("/api/mininet/routers/"))
+			|| (entry.method === "PUT" && entry.path === "/api/mininet/links"));
+		log(
+			"11.13b 页面不再调用 1.x 更新端点（node_position / PATCH hosts|routers / PUT links 命中 0）",
+			legacyUpdateHits.length === 0,
+			legacyUpdateHits.length ? JSON.stringify(legacyUpdateHits.map((entry) => `${entry.method} ${entry.path}`)) : "0 次"
 		);
 
 		// 11.14 只读原因是可见事实（NMCPS-ADR-0022 W13 收尾）：控制器没有保存按钮，

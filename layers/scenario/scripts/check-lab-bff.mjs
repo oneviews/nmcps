@@ -478,6 +478,20 @@ async function startMininet(port) {
 					record.nodes.push(node);
 					return send(201, node);
 				}
+				if (req.method === "PATCH" && resourceId) {
+					const id = decodeURIComponent(resourceId);
+					const node = record.nodes.find((item) => item.id === id);
+					if (!node)
+						return send(404, { detail: `engine_resource_not_found: node '${id}' not found` });
+					const body = JSON.parse(raw || "{}");
+					if (body.x !== undefined)
+						node.x = body.x;
+					if (body.y !== undefined)
+						node.y = body.y;
+					if (body.attributes)
+						node.attributes = { ...node.attributes, ...body.attributes };
+					return send(200, { node, applied: record.state === "running" });
+				}
 				if (req.method === "DELETE" && resourceId) {
 					const id = decodeURIComponent(resourceId);
 					record.nodes = record.nodes.filter((item) => item.id !== id);
@@ -499,6 +513,16 @@ async function startMininet(port) {
 					};
 					record.links.push(link);
 					return send(201, link);
+				}
+				if (req.method === "PATCH" && resourceId) {
+					const id = decodeURIComponent(resourceId);
+					const link = record.links.find((item) => item.id === id);
+					if (!link)
+						return send(404, { detail: `engine_resource_not_found: link '${id}' not found` });
+					const body = JSON.parse(raw || "{}");
+					if (body.options)
+						link.options = body.options;
+					return send(200, { link, applied: record.state === "running" });
 				}
 				if (req.method === "DELETE" && resourceId) {
 					const id = decodeURIComponent(resourceId);
@@ -933,7 +957,7 @@ async function startIam(port) {
 
 	log("⓪ 白名单条目可从源码抽取（抽取为空即红）", whitelist.length > 0, `${whitelist.length} 条`);
 	log("⓪ 查询端点 24 条且权限位都是 lab:read", reads.length === 24 && readWithWritePermission.length === 0, `reads=${reads.length} 异常=${readWithWritePermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
-	log("⓪ 写端点 40 条且都带非读权限位", writes.length === 40 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
+	log("⓪ 写端点 42 条且都带非读权限位", writes.length === 42 && writeWithoutPermission.length === 0, `writes=${writes.length} 异常=${writeWithoutPermission.map((e) => `${e.method} ${e.template}`).join(", ") || "无"}`);
 	log("⓪ full_reset / import_json 为双权限（lab:delete + lab:create）", dual.length === 2 && dual.every((entry) => entry.permissions.includes("lab:delete") && entry.permissions.includes("lab:create")), dual.map((entry) => `${entry.template}[${entry.permissions.join("+")}]`).join(", ") || "无");
 	log("⓪ 白名单 ⊆ Mininet OpenAPI 快照（路径 + 动词逐条命中）", whitelist.length > 0 && missing.length === 0, missing.map((entry) => `${entry.method} ${entry.upstream}`).join(", ") || `${whitelist.length}/${whitelist.length}`);
 }
@@ -956,8 +980,13 @@ try {
 
 		const channel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
 		log("① 未配租户实例的 channel 仍 200 且 configured=false", channel.status === 200 && channel.json?.data?.configured === false, `${channel.status} ${describe(channel.json?.data?.configured)}`);
-		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包/SNMP 仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.capabilities?.snmp === false && channel.json?.data?.endpointCount === 64, describe(channel.json?.data));
+		log("① channel 按会话算能力位（租户管理员 writeEnabled=true，终端/抓包/SNMP 仍 false）", channel.json?.data?.readOnly === false && channel.json?.data?.writeEnabled === true && channel.json?.data?.capabilities?.create === true && channel.json?.data?.capabilities?.operate === true && channel.json?.data?.capabilities?.delete === true && channel.json?.data?.capabilities?.terminal === false && channel.json?.data?.capabilities?.sniffer === false && channel.json?.data?.capabilities?.snmp === false && channel.json?.data?.endpointCount === 66, describe(channel.json?.data));
 		log("① channel 不回传 baseUrl", !JSON.stringify(channel.json ?? {}).includes(mininetBase), describe(channel.json?.data));
+		log(
+			"① 台账未绑定时 channel 的 sessionId 为 null（页面据此决定是否补建会话）",
+			channel.json?.data?.sessionId === null,
+			describe(channel.json?.data?.sessionId)
+		);
 
 		const noPath = await request(port, "/api/mininet");
 		log("① /api/mininet 无路径段 → 400 bff_path_missing", noPath.status === 400 && noPath.json?.message === "bff_path_missing", `${noPath.status} ${describe(noPath.json?.message)}`);
@@ -1884,13 +1913,15 @@ try {
 	const sessionRoutes = whitelist.filter((entry) => entry.template === "/sessions" || entry.template.startsWith("/sessions/"));
 	const permissionOf = (method, template) => whitelist.find((entry) => entry.method === method && entry.template === template)?.permissions ?? [];
 	log(
-		"⑯ 12 条会话端点登记，权限位按写能力分档",
-		sessionRoutes.length === 12
+		"⑯ 14 条会话端点登记，权限位按写能力分档",
+		sessionRoutes.length === 14
 		&& permissionOf("POST", "/sessions").join() === "lab:create"
 		&& permissionOf("POST", "/sessions/{session_id}/nodes").join() === "lab:create"
 		&& permissionOf("DELETE", "/sessions/{session_id}/nodes/{node_id}").join() === "lab:delete"
 		&& permissionOf("POST", "/sessions/{session_id}/stop").join() === "lab:operate"
-		&& permissionOf("GET", "/sessions/{session_id}/links").join() === "lab:read",
+		&& permissionOf("GET", "/sessions/{session_id}/links").join() === "lab:read"
+		&& permissionOf("PATCH", "/sessions/{session_id}/nodes/{node_id}").join() === "lab:operate"
+		&& permissionOf("PATCH", "/sessions/{session_id}/links/{link_id}").join() === "lab:operate",
 		`count=${sessionRoutes.length}`
 	);
 
@@ -1937,6 +1968,13 @@ try {
 		const bound = ledgerRecordOf(sessionLedgerFile, "net_m1");
 		log("⑯ 会话 id 写回台账（session_id）", bound?.session_id === "sim_0001", `session_id=${describe(bound?.session_id)}`);
 
+		const boundChannel = await request(port, "/api/mininet/channel", { cookie: auth.cookie });
+		log(
+			"⑯ 绑定后 channel 回台账里的 sessionId（页面据此拼会话 PATCH）",
+			boundChannel.json?.data?.sessionId === "sim_0001",
+			describe(boundChannel.json?.data?.sessionId)
+		);
+
 		const again = await request(port, "/api/mininet/sessions", { cookie: auth.cookie, method: "POST", body: JSON.stringify({}) });
 		const creates = mininet.log.slice(before).filter((entry) => entry.method === "POST" && entry.path === "/api/simulation/sessions").length;
 		log(
@@ -1956,6 +1994,22 @@ try {
 			"⑯ 建节点走会话端点，且台账清单收敛（新节点不再被判成清单外）",
 			node.status === 201 && !!nodeHit && converged?.resources?.nodes?.includes("h9") === true,
 			`${node.status} nodes=${describe(converged?.resources?.nodes)}`
+		);
+
+		// 更新类（`NMCPS-ADR-0029` D1 / D4）：PATCH 只是又一条写端点，BFF 不解释 `applied`
+		const patched = await request(port, "/api/mininet/sessions/sim_0001/nodes/h9", {
+			cookie: auth.cookie,
+			method: "PATCH",
+			body: JSON.stringify({ x: 120, y: 80 })
+		});
+		const patchHit = mininet.log.slice(before).find((entry) => entry.method === "PATCH" && entry.path === "/api/simulation/sessions/sim_0001/nodes/h9");
+		log(
+			"⑯ PATCH 节点 → 200 {node, applied}，出站 /api/simulation/sessions/{id}/nodes/{node_id}",
+			patched.status === 200
+			&& patched.json?.data?.node?.x === 120
+			&& patched.json?.data?.applied === false
+			&& JSON.parse(patchHit?.body ?? "{}").y === 80,
+			`${patched.status} applied=${describe(patched.json?.data?.applied)} upstream=${patchHit?.path}`
 		);
 
 		const list = await request(port, "/api/mininet/sessions", { cookie: auth.cookie });
@@ -2034,7 +2088,7 @@ try {
 			&& bits.join() === "read,snmp"
 			&& snmpChannel.json?.data?.writeEnabled === true
 			&& snmpChannel.json?.data?.readOnly === false
-			&& snmpChannel.json?.data?.endpointCount === 64,
+			&& snmpChannel.json?.data?.endpointCount === 66,
 			`${snmpChannel.status} bits=${describe(bits)}`
 		);
 

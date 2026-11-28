@@ -41,7 +41,8 @@ const REAL_BASE = process.env.REAL_MININET_BASE ?? "http://127.0.0.1:8000";
 /** 本脚本自建自删的节点 / 租户 / 台账：租户名必须与假 IAM 给 alice 的租户一致 */
 const NODE_ID = "h1";
 /**
- * 第二台主机：W13 的链路编辑要真打 `PUT /links`，而 `intf.config(bw=…)` 只有 TCLink 才会去动 tc。
+ * 第二台主机：W13 的链路编辑要真打会话链路 PATCH（`NMCPS-ADR-0029` M1.2），而 `intf.config(bw=…)`
+ * 只有 TCLink 才会去动 tc。
  * 两台主机直连一条带 `bw` 的链路就够（上游限制「每台主机只能有一条链路」，所以不挂交换机）。
  */
 const NODE_ID_2 = "h2";
@@ -154,10 +155,11 @@ if (!created.ok) {
 }
 
 /*
- * 第二台主机 + 一条**带 `bw` 的**链路（W13 的前置）：上游 `PUT /links` 只有在链路对象
- * 有 `intf1` / `intf2` 且参数非空时才去 `intf.config(**opts)` —— 不带 options 建的普通
- * 链路改了属性只落台账、碰不到 tc，那就证明不了「真机上也生效」。所以起网前就用
- * `{ options: { bw } }` 建（上游据此用 TCLink 建链，需要 tc 权限）。
+ * 第二台主机 + 一条**带 `bw` 的**链路（W13 的前置）：上游只有在链路参数非空时才去
+ * `intf.config(**opts)` —— 不带 options 建的普通链路改了属性只落台账、碰不到 tc，那就
+ * 证明不了「真机上也生效」。所以起网前就用 `{ options: { bw } }` 建（上游据此用 TCLink
+ * 建链，需要 tc 权限）。后续改带宽由页面走会话链路 PATCH（`NMCPS-ADR-0029` M1.2）；
+ * 1.x 的 `PUT /links` 是同一件事的旧入口，页面已不再调用。
  */
 const peer = await call("POST", "/api/mininet/hosts", {
 	id: NODE_ID_2,
@@ -615,19 +617,25 @@ try {
 	log("收起右栏即断流：展开后没有会话标签、状态回到未连接", collapsed === 1 && sessionsWhileCollapsed === 0 && sessions === 0 && stateAfter.includes("未连接"), `收起态=${collapsed} 会话=${sessions} 状态=${stateAfter}`);
 
 	/*
-	 * W13 真机：双击链路 → 改带宽 → `PUT /links`。`check:ui` 11.13 用假上游只证明了请求体形状
-	 * （`{ src, dst, options }` 且只带填过的属性），这里补另一半 —— 同一批请求打到**真**后端：
+	 * W13 真机：双击链路 → 改带宽 → 会话链路 PATCH（`NMCPS-ADR-0029` M1.2；1.x 的 `PUT /links`
+	 * 页面已不再调用）。`check:ui` 11.13 用假上游只证明了请求体形状
+	 * （`{ options }` 且只带填过的属性），这里补另一半 —— 同一批请求打到**真**后端：
 	 * 属性落进 `app.link_attrs`（`GET /links` 回读）、`intf.config(bw=…)` 在真链路上被执行
 	 * （链路是带 `bw` 建的 TCLink，回读里有真接口名）、页面 `load()` 后输入框也是新值。
 	 *
 	 * tc 那一层要 CAP_NET_ADMIN 才看得见（`tc qdisc show`），所以只在脚本以 root 运行时断言
 	 * `tbf` 限速；普通用户跑就显式跳过并说明 —— 别把它悄悄算成通过。
+	 *
+	 * 2026-11-28 真机踩过：常驻 `:8000` 若是 M1.2 之前起的进程，两条会话 PATCH 根本没注册，
+	 * 请求回 `405 Method Not Allowed`，表现就是「带宽回读还是旧值、tc 也没变」—— 看着像代码
+	 * 回归，其实是后端没重启。改 `sessions.py` / 引擎后先重启后端（`curl` 打一条不存在的会话
+	 * 路径应回 `404 session_not_found` 而不是 405）再跑这一条。
 	 */
 	/*
 	 * 命中区不能按固定方向找：上游 `GET /links` 的 `from` / `to` 在 **stop → start** 之后会换个
 	 * 方向（2026-11-21 真机实测：建链时回 `h1→h2`，重启后回 `h2→h1`，`intfs` 也跟着换）。
 	 * 写成 `aria-label*='h1 ↔ h2'` 时，重启过的那一轮就「画布上没有这条链路」—— 双击落空、
-	 * `PUT /links` 根本没发，后面两条断言跟着一起假红。这里只要求「两个 id 都在这条连线的
+	 * 会话链路 PATCH 根本没发，后面两条断言跟着一起假红。这里只要求「两个 id 都在这条连线的
 	 * 无障碍名称里」，方向由上游决定；拿到它的 `data-link-hit-key` 再精确定位。
 	 */
 	const linkHitKey = await page.evaluate(([left, right]) => {
@@ -653,7 +661,7 @@ try {
 	const linkStats = await call("GET", `/api/mininet/links/stats/${NODE_ID}/${NODE_ID_2}`);
 	const detailClosed = await page.locator("[data-testid='lab-link-detail-bw']").count();
 	log(
-		"W13 双击链路改带宽：`PUT /links` 真打后端，属性回读一致且弹窗收起",
+		"W13 双击链路改带宽：会话链路 PATCH 真打后端，属性回读一致且弹窗收起",
 		linkOnCanvas && linkDetailText.includes(NODE_ID) && linkDetailText.includes(NODE_ID_2)
 		&& seededBwShown === String(SEED_BW)
 		&& writtenLink?.options?.bw === 10 && linkStats.json?.options?.bw === 10
@@ -690,7 +698,7 @@ try {
 			`${iface}@pid ${hostNode?.pid ?? "无"}：${hostClass.split("\n")[0]?.slice(0, 80) ?? "无输出"}`
 		);
 	} else {
-		console.log("⏭  跳过 tc 断言：脚本不是以 root 运行（接口在主机自己的 netns 里，`nsenter` 要 root）——`PUT /links` 的属性回读已证明写入链路，tc 那一层不算已验证；以 root 手验用 `nsenter -t <接口所属主机的 pid> -n tc class show dev <接口名>`");
+		console.log("⏭  跳过 tc 断言：脚本不是以 root 运行（接口在主机自己的 netns 里，`nsenter` 要 root）——链路 PATCH 的属性回读已证明写入链路，tc 那一层不算已验证；以 root 手验用 `nsenter -t <接口所属主机的 pid> -n tc class show dev <接口名>`");
 	}
 
 	// 保存后页面 `load()` 重读 `GET /links`：再双击一次，输入框里应是新值（不是本地乐观更新）
